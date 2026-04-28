@@ -419,6 +419,7 @@ Runtime behavior:
 | `proc.conversation.list` | Process DO | Lists open conversations by default. `includeClosed: true` includes closed conversations. Each record includes generation, status, title, message count, and timestamps. |
 | `proc.conversation.get` | Process DO | Returns one conversation record for `conversationId` or `default`; unknown conversations return `conversation: null`. |
 | `proc.conversation.close` | Process DO | Marks a conversation closed without deleting history. Future `proc.send` calls to that conversation fail until it is reopened. |
+| `proc.conversation.reset` | Process DO | Archives the selected conversation by default, clears its active messages and queued/runtime state, increments its generation, and reopens it. Other conversations are left intact. |
 | `proc.reset` | Process DO | Checkpoints workspace, clears active execution state and process media, archives existing messages to `/var/sessions/<username>/<pid>/...jsonl.gz`, then clears history. |
 | `proc.setidentity` | Process DO direct path | Kernel-only through public dispatch. Stores pid, identity, profile, and assignment context; `assignment.autoStart` can create a run immediately. |
 
@@ -515,6 +516,11 @@ type ProcessSyscalls = {
   "proc.conversation.close": {
     args: { pid?: string; conversationId: string };
     result: { ok: true; pid: string; conversationId: string; closed: boolean } | OperationError;
+  };
+
+  "proc.conversation.reset": {
+    args: { pid?: string; conversationId?: string; archive?: boolean };
+    result: { ok: true; pid: string; conversationId: string; generation: number; archivedMessages: number; archivedTo?: string } | OperationError;
   };
 
   "proc.reset": {

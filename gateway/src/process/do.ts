@@ -46,6 +46,8 @@ import type {
   ProcConversationGetResult,
   ProcConversationCloseArgs,
   ProcConversationCloseResult,
+  ProcConversationResetArgs,
+  ProcConversationResetResult,
   ProcResetResult,
   ProcKillResult,
   ProcSpawnAssignment,
@@ -392,22 +394,27 @@ export class Process extends Host<Env> {
           break;
         case "proc.conversation.open":
           data = this.handleConversationOpen(
-            frame.args as ProcConversationOpenArgs,
+            (frame.args ?? {}) as ProcConversationOpenArgs,
           );
           break;
         case "proc.conversation.list":
           data = this.handleConversationList(
-            frame.args as ProcConversationListArgs,
+            (frame.args ?? {}) as ProcConversationListArgs,
           );
           break;
         case "proc.conversation.get":
           data = this.handleConversationGet(
-            frame.args as ProcConversationGetArgs,
+            (frame.args ?? {}) as ProcConversationGetArgs,
           );
           break;
         case "proc.conversation.close":
           data = this.handleConversationClose(
-            frame.args as ProcConversationCloseArgs,
+            (frame.args ?? {}) as ProcConversationCloseArgs,
+          );
+          break;
+        case "proc.conversation.reset":
+          data = await this.handleConversationReset(
+            (frame.args ?? {}) as ProcConversationResetArgs,
           );
           break;
         case "proc.reset":
@@ -764,6 +771,9 @@ export class Process extends Host<Env> {
   }
 
   private handleConversationClose(args: ProcConversationCloseArgs): ProcConversationCloseResult {
+    if (typeof args.conversationId !== "string" || args.conversationId.trim().length === 0) {
+      return { ok: false, error: "proc.conversation.close requires conversationId" };
+    }
     const conversationId = normalizeConversationId(args.conversationId);
     const closed = this.store.closeConversation(conversationId);
     return {
@@ -771,6 +781,38 @@ export class Process extends Host<Env> {
       pid: this.pid,
       conversationId,
       closed,
+    };
+  }
+
+  private async handleConversationReset(
+    args: ProcConversationResetArgs,
+  ): Promise<ProcConversationResetResult> {
+    const pid = this.pid;
+    const conversationId = normalizeConversationId(args.conversationId);
+    this.store.ensureConversation(conversationId);
+    const archivedMessages = this.store.messageCount(conversationId);
+    let archivedTo: string | undefined;
+
+    if (args.archive !== false && archivedMessages > 0) {
+      const archiveId = crypto.randomUUID();
+      const key = await this.archiveConversationMessages(
+        pid,
+        conversationId,
+        archiveId,
+      );
+      archivedTo = key ? `/${key}` : undefined;
+    }
+
+    this.resetConversationExecutionState(conversationId);
+    const conversation = this.store.resetConversation(conversationId);
+
+    return {
+      ok: true,
+      pid,
+      conversationId,
+      generation: conversation.generation,
+      archivedMessages,
+      archivedTo,
     };
   }
 
@@ -784,6 +826,35 @@ export class Process extends Host<Env> {
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
     };
+  }
+
+  private resetConversationExecutionState(conversationId: string): void {
+    const normalizedConversationId = normalizeConversationId(conversationId);
+    const activeRun = this.currentRun;
+    const stoppedActiveRun = activeRun?.conversationId === normalizedConversationId;
+
+    if (stoppedActiveRun) {
+      this.rejectCodeModeWaiters(
+        activeRun.runId,
+        `Conversation was reset: ${normalizedConversationId}`,
+      );
+      if (this.activeRunPhase?.runId === activeRun.runId) {
+        this.activeRunPhase = null;
+      }
+      if (this.deferredAbortContinuationRunId === activeRun.runId) {
+        this.deferredAbortContinuationRunId = null;
+      }
+      this.currentRun = null;
+    }
+
+    this.store.clearPendingToolCalls(normalizedConversationId);
+    this.store.clearPendingHil(normalizedConversationId);
+    this.store.clearQueue(normalizedConversationId);
+    this.mediaCache.clear();
+
+    if (stoppedActiveRun) {
+      this.promoteNextQueuedRun();
+    }
   }
 
   private async handleProcReset(): Promise<ProcResetResult> {
@@ -1294,6 +1365,39 @@ export class Process extends Host<Env> {
       .join("\n");
 
     const key = `var/sessions/${this.identity.username}/${pid}/${archiveId}.jsonl.gz`;
+
+    const compressed = await gzip(jsonl);
+    const bucket = this.env.STORAGE;
+    await bucket.put(key, compressed, {
+      httpMetadata: { contentType: "application/gzip" },
+    });
+    return key;
+  }
+
+  private async archiveConversationMessages(
+    pid: string,
+    conversationId: string,
+    archiveId: string,
+  ): Promise<string | null> {
+    const normalizedConversationId = normalizeConversationId(conversationId);
+    const messages = this.store.allMessagesForArchive(normalizedConversationId);
+    if (messages.length === 0) return null;
+
+    const jsonl = messages
+      .map((m) =>
+        JSON.stringify(serializeArchivedMessage(m)),
+      )
+      .join("\n");
+
+    const key = [
+      "var",
+      "sessions",
+      this.identity.username,
+      pid,
+      "conversations",
+      encodeURIComponent(normalizedConversationId),
+      `${archiveId}.jsonl.gz`,
+    ].join("/");
 
     const compressed = await gzip(jsonl);
     const bucket = this.env.STORAGE;

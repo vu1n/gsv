@@ -369,6 +369,104 @@ describe("Process DO — mechanical", () => {
         "default",
       ]);
     });
+
+    it("resets one conversation without clearing another", async () => {
+      const pid = "mech-conversation-reset";
+      const stub = await initProcess(pid, ROOT_IDENTITY);
+
+      await runInDurableObject(stub, (instance: Process) => {
+        const store = (instance as any).store;
+        store.appendMessage("user", "default survives");
+        store.openConversation({ conversationId: "side", title: "Side" });
+        store.appendMessage("user", "side archive me", { conversationId: "side" });
+      });
+
+      const resetRes = (await stub.recvFrame(
+        makeReq("proc.conversation.reset", { conversationId: "side" }),
+      )) as ResponseOkFrame;
+      const resetData = resetRes.data as any;
+
+      expect(resetData).toMatchObject({
+        ok: true,
+        pid,
+        conversationId: "side",
+        generation: 2,
+        archivedMessages: 1,
+      });
+      expect(resetData.archivedTo).toContain(`/var/sessions/root/${pid}/conversations/side/`);
+
+      const archiveKey = resetData.archivedTo.replace(/^\//, "");
+      const obj = await env.STORAGE.get(archiveKey);
+      expect(obj).not.toBeNull();
+
+      await runInDurableObject(stub, (instance: Process) => {
+        const store = (instance as any).store;
+        expect(store.messageCount()).toBe(1);
+        expect(store.getMessages()[0].content).toBe("default survives");
+        expect(store.messageCount("side")).toBe(0);
+        expect(store.getConversation("side")).toMatchObject({
+          id: "side",
+          generation: 2,
+          status: "open",
+          title: "Side",
+        });
+      });
+    });
+
+    it("resets active conversation runtime and promotes queued work elsewhere", async () => {
+      const pid = "mech-conversation-reset-runtime";
+      const stub = await initProcess(pid, ROOT_IDENTITY);
+
+      await runInDurableObject(stub, (instance: Process) => {
+        const process = instance as any;
+        const store = process.store;
+        process.scheduleTick = () => {};
+        store.openConversation({ conversationId: "side" });
+        store.appendMessage("user", "side before reset", { conversationId: "side" });
+        store.register("call-side", "run-side", "fs.read", { path: "/tmp/side.txt" }, "side");
+        store.enqueue("run-side-next", "side queued", undefined, undefined, "side");
+        store.enqueue("run-default-next", "default queued");
+        process.currentRun = {
+          runId: "run-side",
+          queued: false,
+          conversationId: "side",
+        };
+      });
+
+      const resetRes = (await stub.recvFrame(
+        makeReq("proc.conversation.reset", {
+          conversationId: "side",
+          archive: false,
+        }),
+      )) as ResponseOkFrame;
+      expect(resetRes.data).toMatchObject({
+        ok: true,
+        pid,
+        conversationId: "side",
+        generation: 2,
+        archivedMessages: 1,
+      });
+      expect((resetRes.data as any).archivedTo).toBeUndefined();
+
+      await runInDurableObject(stub, (instance: Process) => {
+        const process = instance as any;
+        const store = process.store;
+        expect(store.messageCount("side")).toBe(0);
+        expect(store.queueSize("side")).toBe(0);
+        expect(store.getResults("run-side")).toHaveLength(0);
+        expect(process.currentRun).toMatchObject({
+          runId: "run-default-next",
+          conversationId: "default",
+        });
+        const defaultMessages = store.getMessages();
+        expect(defaultMessages[0]).toMatchObject({
+          role: "user",
+          content: "default queued",
+          generation: 1,
+        });
+        process.currentRun = null;
+      });
+    });
   });
 
   describe("proc.abort", () => {

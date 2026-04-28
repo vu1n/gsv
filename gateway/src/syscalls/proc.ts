@@ -204,6 +204,23 @@ export type ProcConversationCloseResult =
     }
   | { ok: false; error: string };
 
+export type ProcConversationResetArgs = {
+  pid?: string;
+  conversationId?: string;
+  archive?: boolean;
+};
+
+export type ProcConversationResetResult =
+  | {
+      ok: true;
+      pid: string;
+      conversationId: string;
+      generation: number;
+      archivedMessages: number;
+      archivedTo?: string;
+    }
+  | { ok: false; error: string };
+
 export type ProcResetArgs = {
   pid?: string;
 };

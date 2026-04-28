@@ -24,6 +24,7 @@ export const PROC_CONVERSATION_OPEN = "proc.conversation.open";
 export const PROC_CONVERSATION_LIST = "proc.conversation.list";
 export const PROC_CONVERSATION_GET = "proc.conversation.get";
 export const PROC_CONVERSATION_CLOSE = "proc.conversation.close";
+export const PROC_CONVERSATION_RESET = "proc.conversation.reset";
 export const PROC_RESET = "proc.reset";
 export const PROC_SETIDENTITY = "proc.setidentity";
 

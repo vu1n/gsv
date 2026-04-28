@@ -476,8 +476,12 @@ conversation lifecycle state.
 
 ### 5. Add conversation lifecycle operations
 
-Add explicit compaction, reset, checkpoint, and segmented history APIs. Preserve
-raw transcript archives and visible summary markers.
+Partially completed. `proc.conversation.reset` archives a selected conversation
+by default, clears its active messages and queued/runtime state, increments its
+generation, and leaves other conversations intact.
+
+Still pending: explicit compaction, checkpoint, and segmented history APIs.
+Preserve raw transcript archives and visible summary markers.
 
 ### 6. Add same-owner IPC
 

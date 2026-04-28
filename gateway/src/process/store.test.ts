@@ -68,6 +68,26 @@ describe("ProcessStore", () => {
         expect(store.closeConversation("missing")).toBe(false);
       });
     });
+
+    it("resets a conversation by clearing messages and incrementing generation", async () => {
+      const stub = await getProcessByPid("conversation-reset");
+      await runInDurableObject(stub, (instance: Process) => {
+        const store = (instance as any).store;
+        store.openConversation({ conversationId: "thread", title: "Work" });
+        store.appendMessage("user", "old thread message", { conversationId: "thread" });
+        store.closeConversation("thread");
+
+        const reset = store.resetConversation("thread");
+        expect(reset).toMatchObject({
+          id: "thread",
+          generation: 2,
+          status: "open",
+          title: "Work",
+        });
+        expect(store.messageCount("thread")).toBe(0);
+        expect(store.getConversation("thread").generation).toBe(2);
+      });
+    });
   });
 
   // ---------- Message CRUD ----------

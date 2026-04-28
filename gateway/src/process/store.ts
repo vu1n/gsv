@@ -373,6 +373,32 @@ export class ProcessStore {
     return true;
   }
 
+  resetConversation(conversationId: string): ProcessConversationRecord {
+    const id = normalizeConversationId(conversationId);
+    const existing = this.ensureConversation(id);
+    const nextGeneration = existing.generation + 1;
+    const now = Date.now();
+
+    this.clearMessages(id);
+    this.sql.exec(
+      `UPDATE conversations
+          SET generation = ?,
+              status = 'open',
+              updated_at = ?
+        WHERE id = ?`,
+      nextGeneration,
+      now,
+      id,
+    );
+
+    return {
+      ...existing,
+      generation: nextGeneration,
+      status: "open",
+      updatedAt: now,
+    };
+  }
+
   // --- Tool calls ---
 
   register(
@@ -462,8 +488,15 @@ export class ProcessStore {
     this.sql.exec("DELETE FROM pending_tool_calls WHERE run_id = ?", runId);
   }
 
-  clearPendingToolCalls(): void {
-    this.sql.exec("DELETE FROM pending_tool_calls");
+  clearPendingToolCalls(conversationId?: string): void {
+    if (conversationId === undefined) {
+      this.sql.exec("DELETE FROM pending_tool_calls");
+      return;
+    }
+    this.sql.exec(
+      "DELETE FROM pending_tool_calls WHERE conversation_id = ?",
+      normalizeConversationId(conversationId),
+    );
   }
 
   setPendingHil(record: PendingHilRecord): void {
@@ -530,8 +563,15 @@ export class ProcessStore {
     return record;
   }
 
-  clearPendingHil(): void {
-    this.sql.exec("DELETE FROM pending_hil");
+  clearPendingHil(conversationId?: string): void {
+    if (conversationId === undefined) {
+      this.sql.exec("DELETE FROM pending_hil");
+      return;
+    }
+    this.sql.exec(
+      "DELETE FROM pending_hil WHERE conversation_id = ?",
+      normalizeConversationId(conversationId),
+    );
   }
 
   appendMessage(
