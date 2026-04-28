@@ -9,6 +9,8 @@
 import type { ProcessIdentity } from "@gsv/protocol/syscalls/system";
 import type { AiContextProfile } from "./ai";
 import type { ProcMediaInput } from "@gsv/protocol/syscalls/proc";
+import type { ToolDefinition } from ".";
+import { PROC_IPC_SEND, SYSCALL_TOOL_NAMES } from "./constants";
 
 export type ProcWorkspaceKind = "thread" | "app" | "shared";
 
@@ -124,6 +126,67 @@ export type ProcHilResult =
 export type ProcSendResult =
   | { ok: true; status: "started"; runId: string; queued?: boolean }
   | { ok: false; error: string };
+
+export type ProcIpcMetadata = Record<string, unknown>;
+
+export type ProcIpcSendArgs = {
+  pid: string;
+  conversationId?: string;
+  message: string;
+  metadata?: ProcIpcMetadata;
+};
+
+export type ProcIpcDeliverArgs = {
+  sourcePid: string;
+  source: ProcessIdentity;
+  conversationId?: string;
+  message: string;
+  metadata?: ProcIpcMetadata;
+  sentAt: number;
+};
+
+export type ProcIpcSendResult =
+  | {
+      ok: true;
+      status: "started";
+      pid: string;
+      sourcePid: string;
+      conversationId: string;
+      runId: string;
+      queued?: boolean;
+    }
+  | { ok: false; error: string };
+
+export type ProcIpcDeliverResult = ProcIpcSendResult;
+
+export const PROC_IPC_SEND_DEFINITION: ToolDefinition = {
+  name: SYSCALL_TOOL_NAMES[PROC_IPC_SEND],
+  description:
+    "Send an asynchronous message to another process owned by the same user. The target process receives the message in the selected conversation and may run or queue work.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      pid: {
+        type: "string",
+        description: "Target process id.",
+      },
+      conversationId: {
+        type: "string",
+        description: "Optional target conversation id. Defaults to the process default conversation.",
+      },
+      message: {
+        type: "string",
+        description: "Message to deliver to the target process.",
+      },
+      metadata: {
+        type: "object",
+        description: "Optional JSON metadata for the target process.",
+        additionalProperties: true,
+      },
+    },
+    required: ["pid", "message"],
+  },
+};
 
 export type ProcHistoryArgs = {
   pid?: string;

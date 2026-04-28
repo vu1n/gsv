@@ -500,9 +500,20 @@ transcript archives and visible summary markers.
 
 ### 6. Add same-owner IPC
 
-Implement same-owner process-to-process delivery first:
+Partially completed. `proc.ipc.send` now provides asynchronous same-owner
+process-to-process delivery. The public syscall only works from a registered
+source process, validates that source and target processes have the same uid,
+and then asks the target Process DO to handle a kernel-only
+`proc.ipc.deliver` request. The target appends a visible message envelope into
+the requested conversation and starts a run, or queues the message if another
+run is active.
+
+Implemented:
 
 - async mail
+
+Still pending:
+
 - bounded call
 - delegation helper
 

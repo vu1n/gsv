@@ -12,6 +12,8 @@ import type {
   ProcListArgs,
   ProcListResult,
   ProcListEntry,
+  ProcIpcSendArgs,
+  ProcIpcSendResult,
   ProcProfileListArgs,
   ProcProfileListEntry,
   ProcProfileListResult,
@@ -317,6 +319,67 @@ export async function handleProcSpawn(
   };
 }
 
+export async function handleProcIpcSend(
+  args: ProcIpcSendArgs,
+  ctx: KernelContext,
+): Promise<ProcIpcSendResult> {
+  const sourcePid = ctx.processId;
+  if (!sourcePid) {
+    return { ok: false, error: "proc.ipc.send requires a process caller" };
+  }
+
+  const validated = normalizeIpcSendArgs(args);
+  if (!validated.ok) {
+    return validated;
+  }
+
+  const source = ctx.procs.get(sourcePid);
+  if (!source) {
+    return { ok: false, error: `Source process not found: ${sourcePid}` };
+  }
+
+  const target = ctx.procs.get(validated.pid);
+  if (!target) {
+    return { ok: false, error: `Process not found: ${validated.pid}` };
+  }
+
+  if (source.uid !== ctx.identity!.process.uid) {
+    return { ok: false, error: `Source process identity mismatch: ${sourcePid}` };
+  }
+
+  if (target.uid !== source.uid) {
+    return { ok: false, error: `Permission denied: target process belongs to another user` };
+  }
+
+  if (target.workspaceId) {
+    ctx.workspaces.touch(target.workspaceId);
+  }
+
+  const response = await sendFrameToProcess(validated.pid, {
+    type: "req",
+    id: crypto.randomUUID(),
+    call: "proc.ipc.deliver",
+    args: {
+      sourcePid,
+      source: ctx.identity!.process,
+      conversationId: validated.conversationId,
+      message: validated.message,
+      metadata: validated.metadata,
+      sentAt: Date.now(),
+    },
+  });
+
+  if (response && response.type === "res") {
+    const res = response as ResponseFrame;
+    if (res.ok) {
+      return (res as { data: ProcIpcSendResult }).data;
+    }
+    return { ok: false, error: (res as { error: { message: string } }).error.message };
+  }
+
+  return { ok: false, error: "proc.ipc.deliver did not return a response" };
+}
+
 /**
  * Forward a proc.* request to the target Process DO.
  *
@@ -355,6 +418,60 @@ export async function forwardToProcess(
   }
 
   return { ok: true, status: "delivered" };
+}
+
+type NormalizedIpcSendArgs =
+  | {
+      ok: true;
+      pid: string;
+      conversationId?: string;
+      message: string;
+      metadata?: Record<string, unknown>;
+    }
+  | { ok: false; error: string };
+
+function normalizeIpcSendArgs(args: ProcIpcSendArgs): NormalizedIpcSendArgs {
+  if (!args || typeof args !== "object") {
+    return { ok: false, error: "proc.ipc.send requires arguments" };
+  }
+  const record = args as Record<string, unknown>;
+  const pid = normalizeRequiredString(record.pid);
+  if (!pid) {
+    return { ok: false, error: "proc.ipc.send requires pid" };
+  }
+
+  const message = normalizeRequiredString(record.message);
+  if (!message) {
+    return { ok: false, error: "proc.ipc.send requires message" };
+  }
+
+  const conversationId = record.conversationId === undefined
+    ? undefined
+    : normalizeRequiredString(record.conversationId);
+  if (record.conversationId !== undefined && !conversationId) {
+    return { ok: false, error: "proc.ipc.send conversationId must be a non-empty string" };
+  }
+
+  if (
+    record.metadata !== undefined
+    && (!record.metadata || typeof record.metadata !== "object" || Array.isArray(record.metadata))
+  ) {
+    return { ok: false, error: "proc.ipc.send metadata must be an object" };
+  }
+
+  return {
+    ok: true,
+    pid,
+    message,
+    ...(conversationId ? { conversationId } : {}),
+    ...(record.metadata ? { metadata: record.metadata as Record<string, unknown> } : {}),
+  };
+}
+
+function normalizeRequiredString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : null;
 }
 
 type SpawnIdentityOutcome =

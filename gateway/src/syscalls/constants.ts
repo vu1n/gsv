@@ -17,6 +17,8 @@ export const PROC_SPAWN = "proc.spawn";
 export const PROC_KILL = "proc.kill";
 export const PROC_LIST = "proc.list";
 export const PROC_SEND = "proc.send";
+export const PROC_IPC_SEND = "proc.ipc.send";
+export const PROC_IPC_DELIVER = "proc.ipc.deliver";
 export const PROC_ABORT = "proc.abort";
 export const PROC_HIL = "proc.hil";
 export const PROC_HISTORY = "proc.history";
@@ -96,6 +98,7 @@ export const SYSCALL_TOOL_NAMES: Record<string, string> = {
   [FS_SEARCH]: "Search",
   [SHELL_EXEC]: "Shell",
   [CODEMODE_EXEC]: "CodeMode",
+  [PROC_IPC_SEND]: "ProcessMessage",
 };
 
 // LLM tool name -> syscall. Reverse mapping of the above

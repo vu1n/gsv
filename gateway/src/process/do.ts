@@ -30,6 +30,8 @@ import { isAiContextProfile } from "../syscalls/ai";
 import type {
   ProcSendArgs,
   ProcSendResult,
+  ProcIpcDeliverArgs,
+  ProcIpcDeliverResult,
   ProcAbortResult,
   ProcHilArgs,
   ProcHilResult,
@@ -173,6 +175,20 @@ function normalizeStringArray(value: unknown): string[] {
     : [];
 }
 
+function isProcessIdentity(value: unknown): value is ProcessIdentity {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const identity = value as Partial<ProcessIdentity>;
+  return typeof identity.uid === "number"
+    && typeof identity.gid === "number"
+    && Array.isArray(identity.gids)
+    && typeof identity.username === "string"
+    && typeof identity.home === "string"
+    && typeof identity.cwd === "string"
+    && (identity.workspaceId === null || typeof identity.workspaceId === "string");
+}
+
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
@@ -220,6 +236,24 @@ function formatWatchedSignalMessage(signal: string, payload: unknown): string {
   }
   if (renderedPayload) {
     lines.push("", "Signal payload:", "```json", renderedPayload, "```");
+  }
+  return lines.join("\n");
+}
+
+function formatIpcMessage(args: ProcIpcDeliverArgs): string {
+  const sentAt = Number.isFinite(args.sentAt)
+    ? new Date(args.sentAt).toISOString()
+    : new Date().toISOString();
+  const source = `${args.source.username} uid=${args.source.uid}`;
+  const lines = [
+    `Message from process \`${args.sourcePid}\` (${source}).`,
+    `Sent at: ${sentAt}.`,
+    "",
+    args.message,
+  ];
+  const renderedMetadata = renderJsonBlock(args.metadata);
+  if (renderedMetadata) {
+    lines.push("", "Metadata:", "```json", renderedMetadata, "```");
   }
   return lines.join("\n");
 }
@@ -428,6 +462,11 @@ export class Process extends Host<Env> {
             frame.args as ProcSendArgs,
           );
           break;
+        case "proc.ipc.deliver":
+          data = this.handleProcIpcDeliver(
+            frame.args as ProcIpcDeliverArgs,
+          );
+          break;
         case "proc.abort":
           data = await this.handleProcAbort();
           break;
@@ -540,6 +579,76 @@ export class Process extends Host<Env> {
     this.scheduleTick(runId);
 
     return { ok: true, status: "started", runId };
+  }
+
+  private handleProcIpcDeliver(args: ProcIpcDeliverArgs): ProcIpcDeliverResult {
+    if (!args || typeof args !== "object") {
+      return { ok: false, error: "proc.ipc.deliver requires arguments" };
+    }
+
+    const sourcePid = normalizeRequiredText(args.sourcePid);
+    if (!sourcePid) {
+      return { ok: false, error: "proc.ipc.deliver requires sourcePid" };
+    }
+
+    if (!isProcessIdentity(args.source)) {
+      return { ok: false, error: "proc.ipc.deliver requires source identity" };
+    }
+
+    const message = normalizeRequiredText(args.message);
+    if (!message) {
+      return { ok: false, error: "proc.ipc.deliver requires message" };
+    }
+
+    if (
+      args.metadata !== undefined
+      && (!args.metadata || typeof args.metadata !== "object" || Array.isArray(args.metadata))
+    ) {
+      return { ok: false, error: "proc.ipc.deliver metadata must be an object" };
+    }
+
+    const runId = crypto.randomUUID();
+    const conversationId = normalizeConversationId(args.conversationId);
+    const conversation = this.store.ensureConversation(conversationId);
+    if (conversation.status === "closed") {
+      return { ok: false, error: `Conversation is closed: ${conversationId}` };
+    }
+
+    const deliveredArgs: ProcIpcDeliverArgs = {
+      sourcePid,
+      source: args.source,
+      conversationId,
+      message,
+      metadata: args.metadata,
+      sentAt: Number.isFinite(args.sentAt) ? args.sentAt : Date.now(),
+    };
+    const renderedMessage = formatIpcMessage(deliveredArgs);
+
+    if (this.currentRun) {
+      this.store.enqueue(runId, renderedMessage, undefined, undefined, conversationId);
+      return {
+        ok: true,
+        status: "started",
+        pid: this.pid,
+        sourcePid,
+        conversationId,
+        runId,
+        queued: true,
+      };
+    }
+
+    this.store.appendMessage("user", renderedMessage, { conversationId });
+    this.currentRun = { runId, queued: false, conversationId };
+    this.scheduleTick(runId);
+
+    return {
+      ok: true,
+      status: "started",
+      pid: this.pid,
+      sourcePid,
+      conversationId,
+      runId,
+    };
   }
 
   private async handleProcAbort(): Promise<ProcAbortResult> {

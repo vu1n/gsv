@@ -123,6 +123,9 @@ describe("Process DO — mechanical", () => {
       const codeMode = data.tools.find((tool) => tool.name === "CodeMode");
       expect(codeMode).toBeDefined();
       expect(codeMode?.inputSchema.required).toEqual(["code"]);
+      const processMessage = data.tools.find((tool) => tool.name === "ProcessMessage");
+      expect(processMessage).toBeDefined();
+      expect(processMessage?.inputSchema.required).toEqual(["pid", "message"]);
     });
   });
 
@@ -273,6 +276,159 @@ describe("Process DO — mechanical", () => {
         expect(user.content[1].type).toBe("image");
         expect(user.content[1].mimeType).toBe("image/png");
         expect(user.content[1].data).toBe("AQID");
+      });
+    });
+  });
+
+  describe("proc.ipc.*", () => {
+    it("delivers same-owner process messages through the kernel", async () => {
+      const sourcePid = "mech-ipc-source";
+      const targetPid = "mech-ipc-target";
+      const identity: ProcessIdentity = {
+        uid: 1000,
+        gid: 1000,
+        gids: [1000, 100],
+        username: "sam",
+        home: "/home/sam",
+        cwd: "/home/sam",
+        workspaceId: null,
+      };
+
+      await registerInKernel(sourcePid, identity);
+      const target = await initProcess(targetPid, identity);
+      await runInDurableObject(target, (instance: Process) => {
+        (instance as any).currentRun = {
+          runId: "existing-target-run",
+          queued: false,
+          conversationId: "default",
+        };
+      });
+
+      const kernel = await getKernelPtr();
+      const response = await runInDurableObject(kernel, (instance: Kernel) =>
+        instance.recvFrame(
+          sourcePid,
+          makeReq("proc.ipc.send", {
+            pid: targetPid,
+            conversationId: "mail",
+            message: "Please summarize the current build status.",
+            metadata: { kind: "delegation" },
+          }),
+        ),
+      ) as ResponseOkFrame;
+
+      expect(response.ok).toBe(true);
+      expect(response.data).toMatchObject({
+        ok: true,
+        status: "started",
+        pid: targetPid,
+        sourcePid,
+        conversationId: "mail",
+        queued: true,
+      });
+
+      await runInDurableObject(target, (instance: Process) => {
+        const process = instance as any;
+        const store = process.store;
+        const messages = store.getMessages({ conversationId: "mail" });
+        expect(messages).toHaveLength(0);
+        expect(store.queueSize("mail")).toBe(1);
+        const queued = store.drainQueue("mail");
+        expect(queued[0].message).toContain(`Message from process \`${sourcePid}\``);
+        expect(queued[0].message).toContain("Please summarize the current build status.");
+        expect(queued[0].message).toContain('"kind": "delegation"');
+        expect(process.currentRun).toMatchObject({
+          conversationId: "default",
+        });
+        process.currentRun = null;
+      });
+    });
+
+    it("rejects cross-owner process messages in the kernel", async () => {
+      const sourcePid = "mech-ipc-foreign-source";
+      const targetPid = "mech-ipc-foreign-target";
+      const sourceIdentity: ProcessIdentity = {
+        uid: 1000,
+        gid: 1000,
+        gids: [1000, 100],
+        username: "sam",
+        home: "/home/sam",
+        cwd: "/home/sam",
+        workspaceId: null,
+      };
+      const targetIdentity: ProcessIdentity = {
+        uid: 1001,
+        gid: 1001,
+        gids: [1001, 100],
+        username: "lee",
+        home: "/home/lee",
+        cwd: "/home/lee",
+        workspaceId: null,
+      };
+
+      await registerInKernel(sourcePid, sourceIdentity);
+      await registerInKernel(targetPid, targetIdentity);
+
+      const kernel = await getKernelPtr();
+      const response = await runInDurableObject(kernel, (instance: Kernel) =>
+        instance.recvFrame(
+          sourcePid,
+          makeReq("proc.ipc.send", {
+            pid: targetPid,
+            message: "This should not cross uid boundaries.",
+          }),
+        ),
+      ) as ResponseOkFrame;
+
+      expect(response.ok).toBe(true);
+      expect(response.data).toEqual({
+        ok: false,
+        error: "Permission denied: target process belongs to another user",
+      });
+    });
+
+    it("queues delivered IPC when the target process is already running", async () => {
+      const pid = "mech-ipc-queued";
+      const stub = await initProcess(pid, ROOT_IDENTITY);
+
+      await runInDurableObject(stub, (instance: Process) => {
+        const process = instance as any;
+        process.scheduleTick = () => {};
+        process.currentRun = {
+          runId: "active-run",
+          queued: false,
+          conversationId: "default",
+        };
+      });
+
+      const response = await stub.recvFrame(makeReq("proc.ipc.deliver", {
+        sourcePid: "source-process",
+        source: ROOT_IDENTITY,
+        conversationId: "side",
+        message: "Queued IPC work.",
+        metadata: { priority: "normal" },
+        sentAt: 1_700_000_000_000,
+      })) as ResponseOkFrame;
+
+      expect(response.ok).toBe(true);
+      expect(response.data).toMatchObject({
+        ok: true,
+        status: "started",
+        pid,
+        sourcePid: "source-process",
+        conversationId: "side",
+        queued: true,
+      });
+
+      await runInDurableObject(stub, (instance: Process) => {
+        const process = instance as any;
+        const store = process.store;
+        expect(store.messageCount("side")).toBe(0);
+        expect(store.queueSize("side")).toBe(1);
+        const queued = store.drainQueue("side");
+        expect(queued[0].message).toContain("Queued IPC work.");
+        expect(queued[0].message).toContain('"priority": "normal"');
+        process.currentRun = null;
       });
     });
   });

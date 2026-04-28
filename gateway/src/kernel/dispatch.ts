@@ -27,6 +27,7 @@ import { handleShellExec } from "../drivers/native/shell";
 import { handleAiTools, handleAiConfig } from "./ai";
 import {
   handleProcList,
+  handleProcIpcSend,
   handleProcProfileList,
   handleProcSpawn,
   forwardToProcess,
@@ -216,6 +217,9 @@ async function dispatchNative(
       case "proc.spawn":
         data = await handleProcSpawn(frame.args, ctx);
         break;
+      case "proc.ipc.send":
+        data = await handleProcIpcSend(frame.args, ctx);
+        break;
       case "proc.send":
       case "proc.abort":
       case "proc.hil":
@@ -231,6 +235,8 @@ async function dispatchNative(
       case "proc.reset":
         data = await forwardToProcess(frame, ctx);
         break;
+      case "proc.ipc.deliver":
+        return errFrame(frame.id, 403, "proc.ipc.deliver is kernel-only");
       case "proc.setidentity":
         return errFrame(frame.id, 403, "proc.setidentity is kernel-only");
 
