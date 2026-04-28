@@ -107,6 +107,20 @@ describe("ProcessStore", () => {
         expect(all[2].content).toBe("third");
       });
     });
+
+    it("keeps messages scoped to a conversation", async () => {
+      const stub = await getProcessByPid("msg-conversation-scope");
+      await runInDurableObject(stub, (instance: Process) => {
+        const store = (instance as any).store;
+        store.appendMessage("user", "default message");
+        store.appendMessage("user", "side message", { conversationId: "side" });
+
+        expect(store.messageCount()).toBe(1);
+        expect(store.messageCount("side")).toBe(1);
+        expect(store.getMessages()[0].content).toBe("default message");
+        expect(store.getMessages({ conversationId: "side" })[0].content).toBe("side message");
+      });
+    });
   });
 
   // ---------- toolResult role ----------
@@ -349,6 +363,25 @@ describe("ProcessStore", () => {
         const item = store.dequeue();
         expect(item!.media).toBe('["img.png"]');
         expect(item!.overrides).toBe('{"model":"gpt-4"}');
+      });
+    });
+
+    it("drains only the requested conversation", async () => {
+      const stub = await getProcessByPid("queue-conversation-scope");
+      await runInDurableObject(stub, (instance: Process) => {
+        const store = (instance as any).store;
+        store.enqueue("run-default", "default queued");
+        store.enqueue("run-side", "side queued", undefined, undefined, "side");
+
+        const side = store.drainQueue("side");
+        expect(side).toHaveLength(1);
+        expect(side[0].conversationId).toBe("side");
+        expect(side[0].message).toBe("side queued");
+
+        expect(store.queueSize()).toBe(1);
+        const next = store.dequeue();
+        expect(next!.conversationId).toBe("default");
+        expect(next!.message).toBe("default queued");
       });
     });
   });

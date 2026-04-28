@@ -455,19 +455,22 @@ Keep the existing `SignalFrame` protocol and `signal.watch` behavior unchanged.
 
 ### 2. Add process event and conversation types
 
-Introduce internal runtime types for process events, principals, conversations,
-and process signals. Do not change frame transport naming in this phase.
+Partially started. Conversation identifiers and default conversation constants
+exist in the Process runtime. Broader process event, principal, and process
+signal types still need to be introduced. Do not change frame transport naming
+in this phase.
 
 ### 3. Add default process conversations
 
-Add conversation storage to the Process DO and migrate current behavior onto a
-default conversation. Preserve existing `proc.send` and `proc.history`
-behavior.
+Completed initial storage slice. The Process DO has a `conversations` table, and
+message, queue, pending tool call, and HIL records are scoped to a conversation
+and generation. Current behavior is preserved through the `default`
+conversation.
 
 ### 4. Extend proc syscalls
 
-Add optional `conversationId` where compatible. Then introduce explicit
-conversation management syscalls.
+Partially completed. `proc.send` and `proc.history` accept optional
+`conversationId`. Explicit conversation management syscalls are still pending.
 
 ### 5. Add conversation lifecycle operations
 

@@ -518,6 +518,33 @@ describe("Process DO — mechanical", () => {
       expect(data.truncated).toBe(true);
     });
 
+    it("reads history for the requested conversation", async () => {
+      const pid = "mech-history-conversation";
+      const stub = await initProcess(pid, ROOT_IDENTITY);
+
+      await runInDurableObject(stub, (instance: Process) => {
+        const store = (instance as any).store;
+        store.appendMessage("user", "default message");
+        store.appendMessage("user", "side message", { conversationId: "side" });
+      });
+
+      const defaultRes = (await stub.recvFrame(
+        makeReq("proc.history", {}),
+      )) as ResponseOkFrame;
+      const sideRes = (await stub.recvFrame(
+        makeReq("proc.history", { conversationId: "side" }),
+      )) as ResponseOkFrame;
+
+      const defaultData = defaultRes.data as any;
+      const sideData = sideRes.data as any;
+      expect(defaultData.conversationId).toBe("default");
+      expect(defaultData.messageCount).toBe(1);
+      expect(defaultData.messages[0].content).toBe("default message");
+      expect(sideData.conversationId).toBe("side");
+      expect(sideData.messageCount).toBe(1);
+      expect(sideData.messages[0].content).toBe("side message");
+    });
+
     it("includes full toolResult payload (metadata + output)", async () => {
       const pid = "mech-history-toolresult";
       const stub = await initProcess(pid, ROOT_IDENTITY);

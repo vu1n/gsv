@@ -25,12 +25,20 @@ import {
   describeStoredProcessMedia,
   parseStoredProcessMedia,
 } from "./media";
+import {
+  DEFAULT_CONVERSATION_GENERATION,
+  DEFAULT_CONVERSATION_ID,
+  normalizeConversationId,
+  type ProcessConversationRecord,
+} from "./conversations";
 
 export type ToolCallStatus = "pending" | "completed" | "error";
 
 export type ToolCallRecord = {
   id: string;
   runId: string;
+  conversationId: string;
+  generation: number;
   call: string;
   status: ToolCallStatus;
   result: unknown;
@@ -41,6 +49,8 @@ export type MessageRole = "user" | "assistant" | "system" | "toolResult";
 
 export type MessageRecord = {
   id: number;
+  conversationId: string;
+  generation: number;
   role: MessageRole;
   content: string;
   toolCalls: string | null;
@@ -57,6 +67,8 @@ export type AssistantMessageMeta = {
 export type QueuedMessage = {
   id: number;
   runId: string;
+  conversationId: string;
+  generation: number;
   message: string;
   media: string | null;
   overrides: string | null;
@@ -65,6 +77,8 @@ export type QueuedMessage = {
 export type PendingHilRecord = {
   requestId: string;
   runId: string;
+  conversationId: string;
+  generation: number;
   toolCallId: string;
   toolName: string;
   syscall: string;
@@ -78,8 +92,21 @@ export class ProcessStore {
 
   init(): void {
     this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS conversations (
+        id TEXT PRIMARY KEY,
+        generation INTEGER NOT NULL DEFAULT 1,
+        status TEXT NOT NULL DEFAULT 'open',
+        title TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `);
+
+    this.sql.exec(`
       CREATE TABLE IF NOT EXISTS messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id TEXT NOT NULL DEFAULT 'default',
+        generation INTEGER NOT NULL DEFAULT 1,
         role TEXT NOT NULL,
         content TEXT NOT NULL DEFAULT '',
         tool_calls TEXT,
@@ -93,6 +120,8 @@ export class ProcessStore {
       CREATE TABLE IF NOT EXISTS pending_tool_calls (
         id TEXT PRIMARY KEY,
         run_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL DEFAULT 'default',
+        generation INTEGER NOT NULL DEFAULT 1,
         call TEXT NOT NULL,
         args_json TEXT NOT NULL,
         result_json TEXT,
@@ -113,6 +142,8 @@ export class ProcessStore {
       CREATE TABLE IF NOT EXISTS message_queue (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         run_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL DEFAULT 'default',
+        generation INTEGER NOT NULL DEFAULT 1,
         message TEXT NOT NULL,
         media_json TEXT,
         overrides_json TEXT,
@@ -124,6 +155,8 @@ export class ProcessStore {
       CREATE TABLE IF NOT EXISTS pending_hil (
         request_id TEXT PRIMARY KEY,
         run_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL DEFAULT 'default',
+        generation INTEGER NOT NULL DEFAULT 1,
         tool_call_id TEXT NOT NULL,
         tool_name TEXT NOT NULL,
         syscall TEXT NOT NULL,
@@ -140,6 +173,26 @@ export class ProcessStore {
       "ALTER TABLE messages ADD COLUMN media_json TEXT",
     );
     this.ensureColumn(
+      "messages",
+      "conversation_id",
+      "ALTER TABLE messages ADD COLUMN conversation_id TEXT NOT NULL DEFAULT 'default'",
+    );
+    this.ensureColumn(
+      "messages",
+      "generation",
+      "ALTER TABLE messages ADD COLUMN generation INTEGER NOT NULL DEFAULT 1",
+    );
+    this.ensureColumn(
+      "pending_tool_calls",
+      "conversation_id",
+      "ALTER TABLE pending_tool_calls ADD COLUMN conversation_id TEXT NOT NULL DEFAULT 'default'",
+    );
+    this.ensureColumn(
+      "pending_tool_calls",
+      "generation",
+      "ALTER TABLE pending_tool_calls ADD COLUMN generation INTEGER NOT NULL DEFAULT 1",
+    );
+    this.ensureColumn(
       "message_queue",
       "media_json",
       "ALTER TABLE message_queue ADD COLUMN media_json TEXT",
@@ -149,16 +202,109 @@ export class ProcessStore {
       "overrides_json",
       "ALTER TABLE message_queue ADD COLUMN overrides_json TEXT",
     );
+    this.ensureColumn(
+      "message_queue",
+      "conversation_id",
+      "ALTER TABLE message_queue ADD COLUMN conversation_id TEXT NOT NULL DEFAULT 'default'",
+    );
+    this.ensureColumn(
+      "message_queue",
+      "generation",
+      "ALTER TABLE message_queue ADD COLUMN generation INTEGER NOT NULL DEFAULT 1",
+    );
+    this.ensureColumn(
+      "pending_hil",
+      "conversation_id",
+      "ALTER TABLE pending_hil ADD COLUMN conversation_id TEXT NOT NULL DEFAULT 'default'",
+    );
+    this.ensureColumn(
+      "pending_hil",
+      "generation",
+      "ALTER TABLE pending_hil ADD COLUMN generation INTEGER NOT NULL DEFAULT 1",
+    );
+
+    this.ensureConversation(DEFAULT_CONVERSATION_ID);
+  }
+
+  // --- Conversations ---
+
+  ensureConversation(conversationId: string = DEFAULT_CONVERSATION_ID): ProcessConversationRecord {
+    const id = normalizeConversationId(conversationId);
+    const existing = this.getConversation(id);
+    if (existing) {
+      return existing;
+    }
+
+    const now = Date.now();
+    this.sql.exec(
+      `INSERT INTO conversations (id, generation, status, title, created_at, updated_at)
+       VALUES (?, ?, 'open', NULL, ?, ?)`,
+      id,
+      DEFAULT_CONVERSATION_GENERATION,
+      now,
+      now,
+    );
+
+    return {
+      id,
+      generation: DEFAULT_CONVERSATION_GENERATION,
+      status: "open",
+      title: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+
+  getConversation(conversationId: string = DEFAULT_CONVERSATION_ID): ProcessConversationRecord | null {
+    const id = normalizeConversationId(conversationId);
+    const rows = [...this.sql.exec<{
+      id: string;
+      generation: number;
+      status: string;
+      title: string | null;
+      created_at: number;
+      updated_at: number;
+    }>(
+      "SELECT * FROM conversations WHERE id = ? LIMIT 1",
+      id,
+    )];
+    const row = rows[0];
+    if (!row) {
+      return null;
+    }
+    return {
+      id: row.id,
+      generation: row.generation,
+      status: row.status === "closed" ? "closed" : "open",
+      title: row.title,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  getConversationGeneration(conversationId: string = DEFAULT_CONVERSATION_ID): number {
+    return this.ensureConversation(conversationId).generation;
   }
 
   // --- Tool calls ---
 
-  register(id: string, runId: string, call: SyscallName, args: unknown): void {
+  register(
+    id: string,
+    runId: string,
+    call: SyscallName,
+    args: unknown,
+    conversationId: string = DEFAULT_CONVERSATION_ID,
+  ): void {
+    const normalizedConversationId = normalizeConversationId(conversationId);
+    const generation = this.getConversationGeneration(normalizedConversationId);
     this.sql.exec(
-      `INSERT OR REPLACE INTO pending_tool_calls (id, run_id, call, args_json, status, created_at)
-       VALUES (?, ?, ?, ?, 'pending', ?)`,
+      `INSERT OR REPLACE INTO pending_tool_calls (
+        id, run_id, conversation_id, generation, call, args_json, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`,
       id,
       runId,
+      normalizedConversationId,
+      generation,
       call,
       JSON.stringify(args),
       Date.now(),
@@ -202,16 +348,22 @@ export class ProcessStore {
     return [...this.sql.exec<{
       id: string;
       run_id: string;
+      conversation_id: string;
+      generation: number;
       call: string;
       status: string;
       result_json: string | null;
       error: string | null;
     }>(
-      "SELECT id, run_id, call, status, result_json, error FROM pending_tool_calls WHERE run_id = ?",
+      `SELECT id, run_id, conversation_id, generation, call, status, result_json, error
+         FROM pending_tool_calls
+        WHERE run_id = ?`,
       runId,
     )].map((row) => ({
       id: row.id,
       runId: row.run_id,
+      conversationId: row.conversation_id,
+      generation: row.generation,
       call: row.call,
       status: row.status as ToolCallStatus,
       result: row.result_json ? JSON.parse(row.result_json) : null,
@@ -231,11 +383,13 @@ export class ProcessStore {
     this.clearPendingHil();
     this.sql.exec(
       `INSERT INTO pending_hil (
-        request_id, run_id, tool_call_id, tool_name, syscall,
+        request_id, run_id, conversation_id, generation, tool_call_id, tool_name, syscall,
         args_json, remaining_tool_calls_json, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       record.requestId,
       record.runId,
+      normalizeConversationId(record.conversationId),
+      record.generation,
       record.toolCallId,
       record.toolName,
       record.syscall,
@@ -250,6 +404,8 @@ export class ProcessStore {
       ...this.sql.exec<{
         request_id: string;
         run_id: string;
+        conversation_id: string;
+        generation: number;
         tool_call_id: string;
         tool_name: string;
         syscall: string;
@@ -268,6 +424,8 @@ export class ProcessStore {
     return {
       requestId: row.request_id,
       runId: row.run_id,
+      conversationId: row.conversation_id,
+      generation: row.generation,
       toolCallId: row.tool_call_id,
       toolName: row.tool_name,
       syscall: row.syscall,
@@ -292,11 +450,22 @@ export class ProcessStore {
   appendMessage(
     role: MessageRole,
     content: string,
-    opts?: { toolCalls?: string; toolCallId?: string; media?: string },
+    opts?: {
+      conversationId?: string;
+      generation?: number;
+      toolCalls?: string;
+      toolCallId?: string;
+      media?: string;
+    },
   ): number {
+    const conversationId = normalizeConversationId(opts?.conversationId);
+    const generation = opts?.generation ?? this.getConversationGeneration(conversationId);
     this.sql.exec(
-      `INSERT INTO messages (role, content, tool_calls, tool_call_id, media_json, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO messages (
+        conversation_id, generation, role, content, tool_calls, tool_call_id, media_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      conversationId,
+      generation,
       role,
       content,
       opts?.toolCalls ?? null,
@@ -309,24 +478,34 @@ export class ProcessStore {
     return rows[0]?.id ?? -1;
   }
 
-  getMessages(opts?: { limit?: number; offset?: number }): MessageRecord[] {
+  getMessages(opts?: {
+    conversationId?: string;
+    limit?: number;
+    offset?: number;
+  }): MessageRecord[] {
+    const conversationId = normalizeConversationId(opts?.conversationId);
     const limit = opts?.limit ?? 200;
     const offset = opts?.offset ?? 0;
 
     return [...this.sql.exec<{
       id: number;
+      conversation_id: string;
+      generation: number;
       role: string;
-        content: string;
-        tool_calls: string | null;
-        tool_call_id: string | null;
-        media_json: string | null;
-        created_at: number;
+      content: string;
+      tool_calls: string | null;
+      tool_call_id: string | null;
+      media_json: string | null;
+      created_at: number;
       }>(
-        "SELECT * FROM messages ORDER BY id ASC LIMIT ? OFFSET ?",
+        "SELECT * FROM messages WHERE conversation_id = ? ORDER BY id ASC LIMIT ? OFFSET ?",
+      conversationId,
       limit,
       offset,
     )].map((row) => ({
       id: row.id,
+      conversationId: row.conversation_id,
+      generation: row.generation,
       role: row.role as MessageRole,
       content: row.content,
       toolCalls: row.tool_calls,
@@ -336,26 +515,33 @@ export class ProcessStore {
     }));
   }
 
-  messageCount(): number {
+  messageCount(conversationId: string = DEFAULT_CONVERSATION_ID): number {
     const rows = [...this.sql.exec<{ cnt: number }>(
-      "SELECT COUNT(*) as cnt FROM messages",
+      "SELECT COUNT(*) as cnt FROM messages WHERE conversation_id = ?",
+      normalizeConversationId(conversationId),
     )];
     return rows[0]?.cnt ?? 0;
   }
 
-  allMessagesForArchive(): MessageRecord[] {
+  allMessagesForArchive(conversationId: string = DEFAULT_CONVERSATION_ID): MessageRecord[] {
+    const normalizedConversationId = normalizeConversationId(conversationId);
     return [...this.sql.exec<{
       id: number;
+      conversation_id: string;
+      generation: number;
       role: string;
-        content: string;
-        tool_calls: string | null;
-        tool_call_id: string | null;
-        media_json: string | null;
-        created_at: number;
+      content: string;
+      tool_calls: string | null;
+      tool_call_id: string | null;
+      media_json: string | null;
+      created_at: number;
       }>(
-        "SELECT * FROM messages ORDER BY id ASC",
+        "SELECT * FROM messages WHERE conversation_id = ? ORDER BY id ASC",
+      normalizedConversationId,
     )].map((row) => ({
       id: row.id,
+      conversationId: row.conversation_id,
+      generation: row.generation,
       role: row.role as MessageRole,
       content: row.content,
       toolCalls: row.tool_calls,
@@ -365,9 +551,10 @@ export class ProcessStore {
     }));
   }
 
-  clearMessages(): number {
-    const count = this.messageCount();
-    this.sql.exec("DELETE FROM messages");
+  clearMessages(conversationId: string = DEFAULT_CONVERSATION_ID): number {
+    const normalizedConversationId = normalizeConversationId(conversationId);
+    const count = this.messageCount(normalizedConversationId);
+    this.sql.exec("DELETE FROM messages WHERE conversation_id = ?", normalizedConversationId);
     return count;
   }
 
@@ -430,7 +617,11 @@ export class ProcessStore {
 
   // --- Message conversion to pi-ai format ---
 
-  toMessages(opts?: { limit?: number; offset?: number }): Message[] {
+  toMessages(opts?: {
+    conversationId?: string;
+    limit?: number;
+    offset?: number;
+  }): Message[] {
     const records = this.getMessages(opts);
     const messages: Message[] = [];
 
@@ -509,9 +700,11 @@ export class ProcessStore {
     syscallName: string,
     content: string,
     isError: boolean,
+    conversationId: string = DEFAULT_CONVERSATION_ID,
   ): number {
     const toolName = SYSCALL_TOOL_NAMES[syscallName] ?? syscallName;
     return this.appendMessage("toolResult", content, {
+      conversationId,
       toolCallId,
       toolCalls: JSON.stringify({ toolName, isError }),
     });
@@ -524,11 +717,17 @@ export class ProcessStore {
     message: string,
     media?: string,
     overrides?: string,
+    conversationId: string = DEFAULT_CONVERSATION_ID,
   ): void {
+    const normalizedConversationId = normalizeConversationId(conversationId);
+    const generation = this.getConversationGeneration(normalizedConversationId);
     this.sql.exec(
-      `INSERT INTO message_queue (run_id, message, media_json, overrides_json, created_at)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO message_queue (
+        run_id, conversation_id, generation, message, media_json, overrides_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
       runId,
+      normalizedConversationId,
+      generation,
       message,
       media ?? null,
       overrides ?? null,
@@ -536,16 +735,31 @@ export class ProcessStore {
     );
   }
 
-  dequeue(): QueuedMessage | null {
+  dequeue(conversationId?: string): QueuedMessage | null {
+    const normalizedConversationId = conversationId === undefined
+      ? null
+      : normalizeConversationId(conversationId);
     const rows = [
       ...this.sql.exec<{
         id: number;
         run_id: string;
+        conversation_id: string;
+        generation: number;
         message: string;
         media_json: string | null;
         overrides_json: string | null;
       }>(
-        "SELECT id, run_id, message, media_json, overrides_json FROM message_queue ORDER BY id ASC LIMIT 1",
+        normalizedConversationId
+          ? `SELECT id, run_id, conversation_id, generation, message, media_json, overrides_json
+               FROM message_queue
+              WHERE conversation_id = ?
+              ORDER BY id ASC
+              LIMIT 1`
+          : `SELECT id, run_id, conversation_id, generation, message, media_json, overrides_json
+               FROM message_queue
+              ORDER BY id ASC
+              LIMIT 1`,
+        ...(normalizedConversationId ? [normalizedConversationId] : []),
       ),
     ];
     if (rows.length === 0) return null;
@@ -554,43 +768,77 @@ export class ProcessStore {
     return {
       id: row.id,
       runId: row.run_id,
+      conversationId: row.conversation_id,
+      generation: row.generation,
       message: row.message,
       media: row.media_json,
       overrides: row.overrides_json,
     };
   }
 
-  drainQueue(): QueuedMessage[] {
+  drainQueue(conversationId?: string): QueuedMessage[] {
+    const normalizedConversationId = conversationId === undefined
+      ? null
+      : normalizeConversationId(conversationId);
     const rows = [
       ...this.sql.exec<{
         id: number;
         run_id: string;
+        conversation_id: string;
+        generation: number;
         message: string;
         media_json: string | null;
         overrides_json: string | null;
       }>(
-        "SELECT id, run_id, message, media_json, overrides_json FROM message_queue ORDER BY id ASC",
+        normalizedConversationId
+          ? `SELECT id, run_id, conversation_id, generation, message, media_json, overrides_json
+               FROM message_queue
+              WHERE conversation_id = ?
+              ORDER BY id ASC`
+          : `SELECT id, run_id, conversation_id, generation, message, media_json, overrides_json
+               FROM message_queue
+              ORDER BY id ASC`,
+        ...(normalizedConversationId ? [normalizedConversationId] : []),
       ),
     ];
     if (rows.length === 0) return [];
-    this.sql.exec("DELETE FROM message_queue");
+    if (normalizedConversationId) {
+      this.sql.exec("DELETE FROM message_queue WHERE conversation_id = ?", normalizedConversationId);
+    } else {
+      this.sql.exec("DELETE FROM message_queue");
+    }
     return rows.map((row) => ({
       id: row.id,
       runId: row.run_id,
+      conversationId: row.conversation_id,
+      generation: row.generation,
       message: row.message,
       media: row.media_json,
       overrides: row.overrides_json,
     }));
   }
 
-  clearQueue(): void {
-    this.sql.exec("DELETE FROM message_queue");
+  clearQueue(conversationId?: string): void {
+    if (conversationId === undefined) {
+      this.sql.exec("DELETE FROM message_queue");
+      return;
+    }
+    this.sql.exec(
+      "DELETE FROM message_queue WHERE conversation_id = ?",
+      normalizeConversationId(conversationId),
+    );
   }
 
-  queueSize(): number {
+  queueSize(conversationId?: string): number {
+    const normalizedConversationId = conversationId === undefined
+      ? null
+      : normalizeConversationId(conversationId);
     const rows = [
       ...this.sql.exec<{ cnt: number }>(
-        "SELECT COUNT(*) as cnt FROM message_queue",
+        normalizedConversationId
+          ? "SELECT COUNT(*) as cnt FROM message_queue WHERE conversation_id = ?"
+          : "SELECT COUNT(*) as cnt FROM message_queue",
+        ...(normalizedConversationId ? [normalizedConversationId] : []),
       ),
     ];
     return rows[0]?.cnt ?? 0;

@@ -58,6 +58,7 @@ export type ProcKillResult =
 
 export type ProcSendArgs = {
   pid?: string;
+  conversationId?: string;
   message: string;
   media?: ProcMediaInput[];
 };
@@ -82,6 +83,7 @@ export type ProcHilDecision = "approve" | "deny";
 export type ProcHilRequest = {
   requestId: string;
   runId: string;
+  conversationId?: string;
   callId: string;
   toolName: string;
   syscall: string;
@@ -112,6 +114,7 @@ export type ProcSendResult =
 
 export type ProcHistoryArgs = {
   pid?: string;
+  conversationId?: string;
   limit?: number;
   offset?: number;
 };
@@ -126,6 +129,7 @@ export type ProcHistoryResult =
   | {
       ok: true;
       pid: string;
+      conversationId?: string;
       messages: ProcHistoryMessage[];
       messageCount: number;
       truncated?: boolean;
