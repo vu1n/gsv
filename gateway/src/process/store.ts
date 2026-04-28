@@ -988,6 +988,15 @@ export class ProcessStore {
           break;
         }
 
+        case "system": {
+          messages.push({
+            role: "user",
+            content: `Process event:\n${r.content}`,
+            timestamp: r.createdAt,
+          } satisfies UserMessage);
+          break;
+        }
+
         case "assistant": {
           const content: (TextContent | ThinkingContent | ToolCall)[] = [];
           const meta = parseAssistantMessageMeta(r.toolCalls);
