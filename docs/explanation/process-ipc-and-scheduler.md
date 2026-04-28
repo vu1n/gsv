@@ -228,10 +228,10 @@ A compact operation should:
 1. Require the conversation to be idle, or queue until the active run completes.
 2. Select an old prefix of active messages.
 3. Archive the exact selected messages as JSONL, compressed where appropriate.
-4. Generate or accept a markdown summary.
+4. Accept a markdown summary.
 5. Replace the selected active messages with one explicit summary/system record.
 6. Record a `ConversationSegment`.
-7. Emit a notification topic over the existing `SignalFrame` transport, for
+7. Later, emit a notification topic over the existing `SignalFrame` transport, for
    example `conversation.compacted`.
 
 The summary record should say what happened and where the exact archive lives.
@@ -241,6 +241,7 @@ filesystem surfaces.
 Compaction should be callable explicitly:
 
 - `proc.conversation.compact`
+- `proc.conversation.segments`
 
 It may also run automatically under a visible conversation policy, but that
 policy must be part of process/conversation state.
@@ -487,13 +488,15 @@ conversation lifecycle state.
 
 Partially completed. `proc.conversation.reset` archives a selected conversation
 by default, clears its active messages and queued/runtime state, increments its
-generation, and leaves other conversations intact. Process-wide `proc.reset`
-and `proc.kill` now archive every non-empty conversation into a directory with
-one generation file per conversation before clearing all conversation messages
-and runtime state.
+generation, and leaves other conversations intact. `proc.conversation.compact`
+archives an old prefix of active messages, inserts a visible summary marker at
+the prefix boundary, and records a `compaction` segment that can be listed with
+`proc.conversation.segments`. Process-wide `proc.reset` and `proc.kill` archive
+every non-empty conversation into a directory with one generation file per
+conversation before clearing all conversation messages and runtime state.
 
-Still pending: explicit compaction, checkpoint, and segmented history APIs.
-Preserve raw transcript archives and visible summary markers.
+Still pending: checkpoint and richer segmented history APIs. Preserve raw
+transcript archives and visible summary markers.
 
 ### 6. Add same-owner IPC
 

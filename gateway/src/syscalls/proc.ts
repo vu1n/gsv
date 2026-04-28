@@ -234,6 +234,54 @@ export type ProcConversationResetResult =
     }
   | { ok: false; error: string };
 
+export type ProcConversationSegmentKind = "compaction";
+
+export type ProcConversationSegment = {
+  id: string;
+  conversationId: string;
+  generation: number;
+  kind: ProcConversationSegmentKind;
+  fromMessageId: number;
+  toMessageId: number;
+  archivePath: string;
+  summaryMessageId: number | null;
+  createdAt: number;
+};
+
+export type ProcConversationCompactArgs = {
+  pid?: string;
+  conversationId?: string;
+  summary: string;
+  keepLast?: number;
+  throughMessageId?: number;
+};
+
+export type ProcConversationCompactResult =
+  | {
+      ok: true;
+      pid: string;
+      conversationId: string;
+      segment: ProcConversationSegment;
+      archivedMessages: number;
+      archivedTo: string;
+      summaryMessageId: number;
+    }
+  | { ok: false; error: string };
+
+export type ProcConversationSegmentsArgs = {
+  pid?: string;
+  conversationId?: string;
+};
+
+export type ProcConversationSegmentsResult =
+  | {
+      ok: true;
+      pid: string;
+      conversationId: string;
+      segments: ProcConversationSegment[];
+    }
+  | { ok: false; error: string };
+
 export type ProcResetArgs = {
   pid?: string;
 };

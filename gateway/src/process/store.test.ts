@@ -107,6 +107,58 @@ describe("ProcessStore", () => {
         expect(byId.get("side")).toMatchObject({ generation: 2, status: "open", title: "Side" });
       });
     });
+
+    it("compacts a conversation prefix and records a segment", async () => {
+      const stub = await getProcessByPid("conversation-compact-store");
+      await runInDurableObject(stub, (instance: Process) => {
+        const store = (instance as any).store;
+        store.openConversation({ conversationId: "thread" });
+        const firstId = store.appendMessage("user", "old one", { conversationId: "thread" });
+        const secondId = store.appendMessage("assistant", "old two", { conversationId: "thread" });
+        const thirdId = store.appendMessage("user", "keep me", { conversationId: "thread" });
+
+        const prefix = store.getConversationPrefixMessages({
+          conversationId: "thread",
+          keepLast: 1,
+        });
+        expect(prefix.map((message: any) => message.id)).toEqual([firstId, secondId]);
+
+        const summaryId = store.compactConversationPrefix({
+          conversationId: "thread",
+          generation: 1,
+          fromMessageId: firstId,
+          toMessageId: secondId,
+          summary: "Conversation compacted.\n\nSummary:\nOld work.",
+        });
+        const segment = store.recordConversationSegment({
+          id: "segment-1",
+          conversationId: "thread",
+          generation: 1,
+          kind: "compaction",
+          fromMessageId: firstId,
+          toMessageId: secondId,
+          archivePath: "/var/sessions/root/pid/conversations/thread/segment-1.jsonl.gz",
+          summaryMessageId: summaryId,
+        });
+
+        expect(segment.summaryMessageId).toBe(firstId);
+        expect(store.listConversationSegments("thread")).toEqual([
+          expect.objectContaining({
+            id: "segment-1",
+            conversationId: "thread",
+            kind: "compaction",
+            fromMessageId: firstId,
+            toMessageId: secondId,
+            summaryMessageId: firstId,
+          }),
+        ]);
+        const messages = store.getMessages({ conversationId: "thread" });
+        expect(messages.map((message: any) => [message.id, message.role, message.content])).toEqual([
+          [firstId, "system", "Conversation compacted.\n\nSummary:\nOld work."],
+          [thirdId, "user", "keep me"],
+        ]);
+      });
+    });
   });
 
   // ---------- Message CRUD ----------

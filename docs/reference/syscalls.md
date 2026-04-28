@@ -420,6 +420,8 @@ Runtime behavior:
 | `proc.conversation.get` | Process DO | Returns one conversation record for `conversationId` or `default`; unknown conversations return `conversation: null`. |
 | `proc.conversation.close` | Process DO | Marks a conversation closed without deleting history. Future `proc.send` calls to that conversation fail until it is reopened. |
 | `proc.conversation.reset` | Process DO | Archives the selected conversation by default, clears its active messages and queued/runtime state, increments its generation, and reopens it. Other conversations are left intact. |
+| `proc.conversation.compact` | Process DO | Explicitly archives an old prefix of a conversation, inserts a visible system summary marker at the prefix boundary, and records a `compaction` segment. Requires caller-provided `summary` and exactly one selector: `keepLast` or `throughMessageId`. |
+| `proc.conversation.segments` | Process DO | Lists recorded lifecycle segments for `conversationId` or `default`, including archive paths and summary marker ids. |
 | `proc.reset` | Process DO | Checkpoints workspace, archives every non-empty conversation under `/var/sessions/<username>/<pid>/<archiveId>/`, clears active execution state, queues, process media, and all conversation messages, then increments conversation generations. |
 | `proc.setidentity` | Process DO direct path | Kernel-only through public dispatch. Stores pid, identity, profile, and assignment context; `assignment.autoStart` can create a run immediately. |
 
@@ -462,6 +464,18 @@ type ProcArchiveEntry = {
   generation: number;
   messages: number;
   path: string;
+};
+
+type ProcConversationSegment = {
+  id: string;
+  conversationId: string;
+  generation: number;
+  kind: "compaction";
+  fromMessageId: number;
+  toMessageId: number;
+  archivePath: string;
+  summaryMessageId: number | null;
+  createdAt: number;
 };
 
 type ProcessSyscalls = {
@@ -528,6 +542,16 @@ type ProcessSyscalls = {
   "proc.conversation.reset": {
     args: { pid?: string; conversationId?: string; archive?: boolean };
     result: { ok: true; pid: string; conversationId: string; generation: number; archivedMessages: number; archivedTo?: string } | OperationError;
+  };
+
+  "proc.conversation.compact": {
+    args: { pid?: string; conversationId?: string; summary: string; keepLast?: number; throughMessageId?: number };
+    result: { ok: true; pid: string; conversationId: string; segment: ProcConversationSegment; archivedMessages: number; archivedTo: string; summaryMessageId: number } | OperationError;
+  };
+
+  "proc.conversation.segments": {
+    args: { pid?: string; conversationId?: string };
+    result: { ok: true; pid: string; conversationId: string; segments: ProcConversationSegment[] } | OperationError;
   };
 
   "proc.reset": {

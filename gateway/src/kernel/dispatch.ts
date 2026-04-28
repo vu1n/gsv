@@ -226,6 +226,8 @@ async function dispatchNative(
       case "proc.conversation.get":
       case "proc.conversation.close":
       case "proc.conversation.reset":
+      case "proc.conversation.compact":
+      case "proc.conversation.segments":
       case "proc.reset":
         data = await forwardToProcess(frame, ctx);
         break;

@@ -467,6 +467,112 @@ describe("Process DO — mechanical", () => {
         process.currentRun = null;
       });
     });
+
+    it("compacts a conversation prefix into an archived segment", async () => {
+      const pid = "mech-conversation-compact";
+      const stub = await initProcess(pid, ROOT_IDENTITY);
+
+      const messageIds = await runInDurableObject(stub, (instance: Process) => {
+        const store = (instance as any).store;
+        store.openConversation({ conversationId: "thread", title: "Thread" });
+        return [
+          store.appendMessage("user", "old user", { conversationId: "thread" }),
+          store.appendMessage("assistant", "old assistant", { conversationId: "thread" }),
+          store.appendMessage("user", "keep this", { conversationId: "thread" }),
+        ];
+      });
+
+      const compactRes = (await stub.recvFrame(
+        makeReq("proc.conversation.compact", {
+          conversationId: "thread",
+          keepLast: 1,
+          summary: "The old exchange established the thread context.",
+        }),
+      )) as ResponseOkFrame;
+      const data = compactRes.data as any;
+
+      expect(data).toMatchObject({
+        ok: true,
+        pid,
+        conversationId: "thread",
+        archivedMessages: 2,
+        summaryMessageId: messageIds[0],
+        segment: {
+          conversationId: "thread",
+          generation: 1,
+          kind: "compaction",
+          fromMessageId: messageIds[0],
+          toMessageId: messageIds[1],
+          summaryMessageId: messageIds[0],
+        },
+      });
+      expect(data.archivedTo).toMatch(
+        new RegExp(`/var/sessions/root/${pid}/conversations/thread/.+\\.jsonl\\.gz$`),
+      );
+
+      const archiveKey = data.archivedTo.replace(/^\//, "");
+      expect(await env.STORAGE.get(archiveKey)).not.toBeNull();
+
+      await runInDurableObject(stub, (instance: Process) => {
+        const store = (instance as any).store;
+        const messages = store.getMessages({ conversationId: "thread" });
+        expect(messages).toHaveLength(2);
+        expect(messages[0]).toMatchObject({
+          id: messageIds[0],
+          role: "system",
+        });
+        expect(messages[0].content).toContain("Conversation compacted.");
+        expect(messages[0].content).toContain(data.archivedTo);
+        expect(messages[0].content).toContain("The old exchange established the thread context.");
+        expect(messages[1]).toMatchObject({
+          id: messageIds[2],
+          role: "user",
+          content: "keep this",
+        });
+      });
+
+      const segmentsRes = (await stub.recvFrame(
+        makeReq("proc.conversation.segments", { conversationId: "thread" }),
+      )) as ResponseOkFrame;
+      expect((segmentsRes.data as any).segments).toEqual([
+        expect.objectContaining({
+          id: data.segment.id,
+          archivePath: data.archivedTo,
+          summaryMessageId: messageIds[0],
+        }),
+      ]);
+    });
+
+    it("rejects compaction while that conversation is active", async () => {
+      const pid = "mech-conversation-compact-active";
+      const stub = await initProcess(pid, ROOT_IDENTITY);
+
+      await runInDurableObject(stub, (instance: Process) => {
+        const process = instance as any;
+        const store = process.store;
+        store.appendMessage("user", "active message");
+        process.currentRun = {
+          runId: "run-active-compact",
+          queued: false,
+          conversationId: "default",
+        };
+      });
+
+      const compactRes = (await stub.recvFrame(
+        makeReq("proc.conversation.compact", {
+          keepLast: 0,
+          summary: "Should fail.",
+        }),
+      )) as ResponseOkFrame;
+      expect(compactRes.data).toEqual({
+        ok: false,
+        error: "Conversation is active: default",
+      });
+
+      await runInDurableObject(stub, (instance: Process) => {
+        (instance as any).currentRun = null;
+      });
+    });
   });
 
   describe("proc.abort", () => {

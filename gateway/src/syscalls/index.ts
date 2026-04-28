@@ -36,6 +36,10 @@ import type {
   ProcConversationCloseResult,
   ProcConversationResetArgs,
   ProcConversationResetResult,
+  ProcConversationCompactArgs,
+  ProcConversationCompactResult,
+  ProcConversationSegmentsArgs,
+  ProcConversationSegmentsResult,
   ProcResetArgs,
   ProcResetResult,
   ProcListArgs,
@@ -206,6 +210,8 @@ export type SyscallDomains = {
   "proc.conversation.get": { args: ProcConversationGetArgs; result: ProcConversationGetResult };
   "proc.conversation.close": { args: ProcConversationCloseArgs; result: ProcConversationCloseResult };
   "proc.conversation.reset": { args: ProcConversationResetArgs; result: ProcConversationResetResult };
+  "proc.conversation.compact": { args: ProcConversationCompactArgs; result: ProcConversationCompactResult };
+  "proc.conversation.segments": { args: ProcConversationSegmentsArgs; result: ProcConversationSegmentsResult };
   "proc.reset": { args: ProcResetArgs; result: ProcResetResult };
   "proc.setidentity": { args: ProcSetIdentityArgs; result: ProcSetIdentityResult };
 

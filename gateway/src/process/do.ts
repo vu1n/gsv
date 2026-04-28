@@ -48,6 +48,11 @@ import type {
   ProcConversationCloseResult,
   ProcConversationResetArgs,
   ProcConversationResetResult,
+  ProcConversationCompactArgs,
+  ProcConversationCompactResult,
+  ProcConversationSegment,
+  ProcConversationSegmentsArgs,
+  ProcConversationSegmentsResult,
   ProcArchiveEntry,
   ProcResetResult,
   ProcKillResult,
@@ -105,6 +110,7 @@ import {
   DEFAULT_CONVERSATION_ID,
   normalizeConversationId,
   type ProcessConversationRecord,
+  type ProcessConversationSegmentRecord,
 } from "./conversations";
 
 type RunState = {
@@ -155,10 +161,24 @@ function normalizeOptionalString(value: unknown): string | undefined {
     : undefined;
 }
 
+function normalizeRequiredText(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : null;
+}
+
 function normalizeStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.map((item) => String(item))
     : [];
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
 function isWatchedSignalPayload(
@@ -224,6 +244,22 @@ function emptyProcessArchive(): ProcessArchiveResult {
 
 function conversationArchiveFilename(conversationId: string, generation: number): string {
   return `${encodeURIComponent(conversationId)}.gen-${generation}.jsonl.gz`;
+}
+
+function formatCompactionSummaryMessage(input: {
+  archivedMessages: number;
+  archivePath: string;
+  summary: string;
+}): string {
+  return [
+    "Conversation compacted.",
+    "",
+    `Archived messages: ${input.archivedMessages}`,
+    `Archive: ${input.archivePath}`,
+    "",
+    "Summary:",
+    input.summary,
+  ].join("\n");
 }
 
 export class Process extends Host<Env> {
@@ -433,6 +469,16 @@ export class Process extends Host<Env> {
         case "proc.conversation.reset":
           data = await this.handleConversationReset(
             (frame.args ?? {}) as ProcConversationResetArgs,
+          );
+          break;
+        case "proc.conversation.compact":
+          data = await this.handleConversationCompact(
+            (frame.args ?? {}) as ProcConversationCompactArgs,
+          );
+          break;
+        case "proc.conversation.segments":
+          data = this.handleConversationSegments(
+            (frame.args ?? {}) as ProcConversationSegmentsArgs,
           );
           break;
         case "proc.reset":
@@ -834,6 +880,105 @@ export class Process extends Host<Env> {
     };
   }
 
+  private async handleConversationCompact(
+    args: ProcConversationCompactArgs,
+  ): Promise<ProcConversationCompactResult> {
+    const pid = this.pid;
+    const conversationId = normalizeConversationId(args.conversationId);
+    const summary = normalizeRequiredText(args.summary);
+    if (!summary) {
+      return { ok: false, error: "proc.conversation.compact requires summary" };
+    }
+
+    const hasKeepLast = args.keepLast !== undefined;
+    const hasThroughMessageId = args.throughMessageId !== undefined;
+    if (hasKeepLast === hasThroughMessageId) {
+      return { ok: false, error: "proc.conversation.compact requires exactly one of keepLast or throughMessageId" };
+    }
+    if (hasKeepLast && !isNonNegativeInteger(args.keepLast)) {
+      return { ok: false, error: "proc.conversation.compact keepLast must be a non-negative integer" };
+    }
+    if (hasThroughMessageId && !isPositiveInteger(args.throughMessageId)) {
+      return { ok: false, error: "proc.conversation.compact throughMessageId must be a positive integer" };
+    }
+
+    if (this.currentRun?.conversationId === conversationId) {
+      return { ok: false, error: `Conversation is active: ${conversationId}` };
+    }
+
+    const conversation = this.store.ensureConversation(conversationId);
+    const selected = this.store.getConversationPrefixMessages({
+      conversationId,
+      keepLast: hasKeepLast ? args.keepLast : undefined,
+      throughMessageId: hasThroughMessageId ? args.throughMessageId : undefined,
+    });
+    if (selected.length === 0) {
+      return { ok: false, error: "No conversation messages selected for compaction" };
+    }
+
+    const fromMessageId = selected[0].id;
+    const toMessageId = selected[selected.length - 1].id;
+    const segmentId = crypto.randomUUID();
+    const archiveKey = [
+      "var",
+      "sessions",
+      this.identity.username,
+      pid,
+      "conversations",
+      encodeURIComponent(conversationId),
+      `${segmentId}.jsonl.gz`,
+    ].join("/");
+    await this.archiveMessageRecords(archiveKey, selected);
+
+    const archivedTo = `/${archiveKey}`;
+    const summaryMessageId = this.store.compactConversationPrefix({
+      conversationId,
+      generation: conversation.generation,
+      fromMessageId,
+      toMessageId,
+      summary: formatCompactionSummaryMessage({
+        archivedMessages: selected.length,
+        archivePath: archivedTo,
+        summary,
+      }),
+    });
+    const segment = this.store.recordConversationSegment({
+      id: segmentId,
+      conversationId,
+      generation: conversation.generation,
+      kind: "compaction",
+      fromMessageId,
+      toMessageId,
+      archivePath: archivedTo,
+      summaryMessageId,
+    });
+
+    return {
+      ok: true,
+      pid,
+      conversationId,
+      segment: this.toProcConversationSegment(segment),
+      archivedMessages: selected.length,
+      archivedTo,
+      summaryMessageId,
+    };
+  }
+
+  private handleConversationSegments(
+    args: ProcConversationSegmentsArgs,
+  ): ProcConversationSegmentsResult {
+    const conversationId = normalizeConversationId(args.conversationId);
+    this.store.ensureConversation(conversationId);
+    return {
+      ok: true,
+      pid: this.pid,
+      conversationId,
+      segments: this.store
+        .listConversationSegments(conversationId)
+        .map((segment) => this.toProcConversationSegment(segment)),
+    };
+  }
+
   private toProcConversation(record: ProcessConversationRecord): ProcConversation {
     return {
       id: record.id,
@@ -843,6 +988,22 @@ export class Process extends Host<Env> {
       messageCount: this.store.messageCount(record.id),
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
+    };
+  }
+
+  private toProcConversationSegment(
+    record: ProcessConversationSegmentRecord,
+  ): ProcConversationSegment {
+    return {
+      id: record.id,
+      conversationId: record.conversationId,
+      generation: record.generation,
+      kind: record.kind,
+      fromMessageId: record.fromMessageId,
+      toMessageId: record.toMessageId,
+      archivePath: record.archivePath,
+      summaryMessageId: record.summaryMessageId,
+      createdAt: record.createdAt,
     };
   }
 
@@ -1378,12 +1539,6 @@ export class Process extends Host<Env> {
     const messages = this.store.allMessagesForArchive(normalizedConversationId);
     if (messages.length === 0) return null;
 
-    const jsonl = messages
-      .map((m) =>
-        JSON.stringify(serializeArchivedMessage(m)),
-      )
-      .join("\n");
-
     const key = [
       "var",
       "sessions",
@@ -1394,7 +1549,7 @@ export class Process extends Host<Env> {
       `${archiveId}.jsonl.gz`,
     ].join("/");
 
-    await this.writeMessageArchive(key, jsonl);
+    await this.archiveMessageRecords(key, messages);
     return key;
   }
 
@@ -1420,13 +1575,8 @@ export class Process extends Host<Env> {
         conversation.id,
         conversation.generation,
       )}`;
-      const jsonl = messages
-        .map((m) =>
-          JSON.stringify(serializeArchivedMessage(m)),
-        )
-        .join("\n");
 
-      await this.writeMessageArchive(key, jsonl);
+      await this.archiveMessageRecords(key, messages);
       archivedMessages += messages.length;
       archives.push({
         conversationId: conversation.id,
@@ -1441,6 +1591,15 @@ export class Process extends Host<Env> {
       archivedTo: archivedMessages > 0 ? `/${archiveDir}` : undefined,
       archives,
     };
+  }
+
+  private async archiveMessageRecords(key: string, messages: MessageRecord[]): Promise<void> {
+    const jsonl = messages
+      .map((m) =>
+        JSON.stringify(serializeArchivedMessage(m)),
+      )
+      .join("\n");
+    await this.writeMessageArchive(key, jsonl);
   }
 
   private async writeMessageArchive(key: string, jsonl: string): Promise<void> {

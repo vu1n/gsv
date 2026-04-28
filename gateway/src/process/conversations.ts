@@ -12,6 +12,20 @@ export type ProcessConversationRecord = {
   updatedAt: number;
 };
 
+export type ConversationSegmentKind = "compaction";
+
+export type ProcessConversationSegmentRecord = {
+  id: string;
+  conversationId: string;
+  generation: number;
+  kind: ConversationSegmentKind;
+  fromMessageId: number;
+  toMessageId: number;
+  archivePath: string;
+  summaryMessageId: number | null;
+  createdAt: number;
+};
+
 export function normalizeConversationId(value: unknown): string {
   return typeof value === "string" && value.trim().length > 0
     ? value.trim()
