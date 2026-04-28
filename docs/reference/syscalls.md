@@ -415,6 +415,10 @@ Runtime behavior:
 | `proc.hil` | Process DO | Resolves a pending human-in-the-loop request. `approve` dispatches the original syscall; `deny` appends a synthetic error tool result. |
 | `proc.kill` | Process DO | Checkpoints workspace, clears active run, tool state, HIL, queue, media, and messages. Archives messages unless `archive: false`. Does not remove the kernel process registry entry in normal syscall use. |
 | `proc.history` | Process DO | Returns paged stored messages for `conversationId` or `default`, plus message count, truncation status, timestamps, and pending HIL. Tool results and assistant metadata are expanded into structured content. |
+| `proc.conversation.open` | Process DO | Creates or reopens a process-local conversation. If `conversationId` is omitted, the Process DO generates one. Optional `title` is trimmed and stored. |
+| `proc.conversation.list` | Process DO | Lists open conversations by default. `includeClosed: true` includes closed conversations. Each record includes generation, status, title, message count, and timestamps. |
+| `proc.conversation.get` | Process DO | Returns one conversation record for `conversationId` or `default`; unknown conversations return `conversation: null`. |
+| `proc.conversation.close` | Process DO | Marks a conversation closed without deleting history. Future `proc.send` calls to that conversation fail until it is reopened. |
 | `proc.reset` | Process DO | Checkpoints workspace, clears active execution state and process media, archives existing messages to `/var/sessions/<username>/<pid>/...jsonl.gz`, then clears history. |
 | `proc.setidentity` | Process DO direct path | Kernel-only through public dispatch. Stores pid, identity, profile, and assignment context; `assignment.autoStart` can create a run immediately. |
 
@@ -440,6 +444,16 @@ type ProcHilRequest = {
   syscall: string;
   args: Record<string, unknown>;
   createdAt: number;
+};
+
+type ProcConversation = {
+  id: string;
+  generation: number;
+  status: "open" | "closed";
+  title: string | null;
+  messageCount: number;
+  createdAt: number;
+  updatedAt: number;
 };
 
 type ProcessSyscalls = {
@@ -481,6 +495,26 @@ type ProcessSyscalls = {
   "proc.history": {
     args: { pid?: string; conversationId?: string; limit?: number; offset?: number };
     result: { ok: true; pid: string; conversationId?: string; messages: Array<{ role: "user" | "assistant" | "system" | "toolResult"; content: unknown; timestamp?: number }>; messageCount: number; truncated?: boolean; pendingHil?: ProcHilRequest | null } | OperationError;
+  };
+
+  "proc.conversation.open": {
+    args: { pid?: string; conversationId?: string; title?: string };
+    result: { ok: true; pid: string; conversation: ProcConversation; created: boolean } | OperationError;
+  };
+
+  "proc.conversation.list": {
+    args: { pid?: string; includeClosed?: boolean };
+    result: { ok: true; pid: string; conversations: ProcConversation[] } | OperationError;
+  };
+
+  "proc.conversation.get": {
+    args: { pid?: string; conversationId?: string };
+    result: { ok: true; pid: string; conversation: ProcConversation | null } | OperationError;
+  };
+
+  "proc.conversation.close": {
+    args: { pid?: string; conversationId: string };
+    result: { ok: true; pid: string; conversationId: string; closed: boolean } | OperationError;
   };
 
   "proc.reset": {

@@ -4,6 +4,72 @@ import type { Process } from "./do";
 import { getProcessByPid } from "../shared/utils";
 
 describe("ProcessStore", () => {
+  describe("conversations", () => {
+    it("opens and lists conversations", async () => {
+      const stub = await getProcessByPid("conversation-open-list");
+      await runInDurableObject(stub, (instance: Process) => {
+        const store = (instance as any).store;
+        const opened = store.openConversation({
+          conversationId: "side",
+          title: "  Side channel  ",
+        });
+
+        expect(opened.created).toBe(true);
+        expect(opened.conversation).toMatchObject({
+          id: "side",
+          generation: 1,
+          status: "open",
+          title: "Side channel",
+        });
+
+        const conversationIds = store
+          .listConversations()
+          .map((conversation: any) => conversation.id)
+          .sort();
+        expect(conversationIds).toEqual(["default", "side"]);
+      });
+    });
+
+    it("reopens closed conversations without replacing history", async () => {
+      const stub = await getProcessByPid("conversation-reopen");
+      await runInDurableObject(stub, (instance: Process) => {
+        const store = (instance as any).store;
+        store.openConversation({ conversationId: "thread", title: "First title" });
+        store.appendMessage("user", "hello", { conversationId: "thread" });
+
+        expect(store.closeConversation("thread")).toBe(true);
+        expect(store.getConversation("thread").status).toBe("closed");
+        expect(store.listConversations().map((conversation: any) => conversation.id)).not.toContain("thread");
+
+        const reopened = store.openConversation({ conversationId: "thread", title: "Second title" });
+        expect(reopened.created).toBe(false);
+        expect(reopened.conversation).toMatchObject({
+          id: "thread",
+          status: "open",
+          title: "Second title",
+        });
+        expect(store.messageCount("thread")).toBe(1);
+      });
+    });
+
+    it("returns closed conversations only when requested", async () => {
+      const stub = await getProcessByPid("conversation-closed-filter");
+      await runInDurableObject(stub, (instance: Process) => {
+        const store = (instance as any).store;
+        store.openConversation({ conversationId: "done" });
+        expect(store.closeConversation("done")).toBe(true);
+
+        expect(store.listConversations().map((conversation: any) => conversation.id)).toEqual(["default"]);
+        const allConversationIds = store
+          .listConversations({ includeClosed: true })
+          .map((conversation: any) => conversation.id)
+          .sort();
+        expect(allConversationIds).toEqual(["default", "done"]);
+        expect(store.closeConversation("missing")).toBe(false);
+      });
+    });
+  });
+
   // ---------- Message CRUD ----------
 
   describe("messages", () => {

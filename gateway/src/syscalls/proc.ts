@@ -137,6 +137,73 @@ export type ProcHistoryResult =
     }
   | { ok: false; error: string };
 
+export type ProcConversationStatus = "open" | "closed";
+
+export type ProcConversation = {
+  id: string;
+  generation: number;
+  status: ProcConversationStatus;
+  title: string | null;
+  messageCount: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type ProcConversationOpenArgs = {
+  pid?: string;
+  conversationId?: string;
+  title?: string;
+};
+
+export type ProcConversationOpenResult =
+  | {
+      ok: true;
+      pid: string;
+      conversation: ProcConversation;
+      created: boolean;
+    }
+  | { ok: false; error: string };
+
+export type ProcConversationListArgs = {
+  pid?: string;
+  includeClosed?: boolean;
+};
+
+export type ProcConversationListResult =
+  | {
+      ok: true;
+      pid: string;
+      conversations: ProcConversation[];
+    }
+  | { ok: false; error: string };
+
+export type ProcConversationGetArgs = {
+  pid?: string;
+  conversationId?: string;
+};
+
+export type ProcConversationGetResult =
+  | {
+      ok: true;
+      pid: string;
+      conversation: ProcConversation | null;
+    }
+  | { ok: false; error: string };
+
+export type ProcConversationCloseArgs = {
+  pid?: string;
+  conversationId: string;
+};
+
+export type ProcConversationCloseResult =
+  | {
+      ok: true;
+      pid: string;
+      conversationId: string;
+      closed: boolean;
+    }
+  | { ok: false; error: string };
+
 export type ProcResetArgs = {
   pid?: string;
 };

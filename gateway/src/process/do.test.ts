@@ -277,6 +277,100 @@ describe("Process DO — mechanical", () => {
     });
   });
 
+  describe("proc.conversation.*", () => {
+    it("opens, gets, and lists process conversations", async () => {
+      const pid = "mech-conversation-open";
+      const stub = await initProcess(pid, ROOT_IDENTITY);
+
+      const openRes = (await stub.recvFrame(
+        makeReq("proc.conversation.open", {
+          conversationId: "build",
+          title: "Build thread",
+        }),
+      )) as ResponseOkFrame;
+
+      expect(openRes.ok).toBe(true);
+      expect(openRes.data).toMatchObject({
+        ok: true,
+        pid,
+        created: true,
+        conversation: {
+          id: "build",
+          generation: 1,
+          status: "open",
+          title: "Build thread",
+          messageCount: 0,
+        },
+      });
+
+      const getRes = (await stub.recvFrame(
+        makeReq("proc.conversation.get", { conversationId: "build" }),
+      )) as ResponseOkFrame;
+      expect(getRes.data).toMatchObject({
+        ok: true,
+        pid,
+        conversation: {
+          id: "build",
+          status: "open",
+        },
+      });
+
+      const listRes = (await stub.recvFrame(
+        makeReq("proc.conversation.list", {}),
+      )) as ResponseOkFrame;
+      const listData = listRes.data as any;
+      expect(listData.ok).toBe(true);
+      expect(listData.conversations.map((conversation: any) => conversation.id).sort()).toEqual([
+        "build",
+        "default",
+      ]);
+    });
+
+    it("closes conversations and rejects new sends to them", async () => {
+      const pid = "mech-conversation-close";
+      const stub = await initProcess(pid, ROOT_IDENTITY);
+
+      await stub.recvFrame(makeReq("proc.conversation.open", { conversationId: "closed" }));
+
+      const closeRes = (await stub.recvFrame(
+        makeReq("proc.conversation.close", { conversationId: "closed" }),
+      )) as ResponseOkFrame;
+      expect(closeRes.data).toEqual({
+        ok: true,
+        pid,
+        conversationId: "closed",
+        closed: true,
+      });
+
+      const sendRes = (await stub.recvFrame(
+        makeReq("proc.send", {
+          conversationId: "closed",
+          message: "should not start",
+        }),
+      )) as ResponseOkFrame;
+      expect(sendRes.ok).toBe(true);
+      expect(sendRes.data).toEqual({
+        ok: false,
+        error: "Conversation is closed: closed",
+      });
+
+      const listOpenRes = (await stub.recvFrame(
+        makeReq("proc.conversation.list", {}),
+      )) as ResponseOkFrame;
+      expect((listOpenRes.data as any).conversations.map((conversation: any) => conversation.id)).toEqual([
+        "default",
+      ]);
+
+      const listAllRes = (await stub.recvFrame(
+        makeReq("proc.conversation.list", { includeClosed: true }),
+      )) as ResponseOkFrame;
+      expect((listAllRes.data as any).conversations.map((conversation: any) => conversation.id).sort()).toEqual([
+        "closed",
+        "default",
+      ]);
+    });
+  });
+
   describe("proc.abort", () => {
     it("returns aborted=false when no run is active", async () => {
       const pid = "mech-abort-idle";

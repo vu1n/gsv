@@ -286,6 +286,93 @@ export class ProcessStore {
     return this.ensureConversation(conversationId).generation;
   }
 
+  openConversation(input?: {
+    conversationId?: string;
+    title?: string | null;
+  }): { conversation: ProcessConversationRecord; created: boolean } {
+    const id = normalizeConversationId(input?.conversationId ?? crypto.randomUUID());
+    const existing = this.getConversation(id);
+    const now = Date.now();
+    const title = normalizeNullableString(input?.title);
+
+    if (existing) {
+      this.sql.exec(
+        `UPDATE conversations
+            SET status = 'open',
+                title = COALESCE(?, title),
+                updated_at = ?
+          WHERE id = ?`,
+        title,
+        now,
+        id,
+      );
+      return {
+        conversation: this.getConversation(id) ?? existing,
+        created: false,
+      };
+    }
+
+    this.sql.exec(
+      `INSERT INTO conversations (id, generation, status, title, created_at, updated_at)
+       VALUES (?, ?, 'open', ?, ?, ?)`,
+      id,
+      DEFAULT_CONVERSATION_GENERATION,
+      title,
+      now,
+      now,
+    );
+
+    return {
+      conversation: {
+        id,
+        generation: DEFAULT_CONVERSATION_GENERATION,
+        status: "open",
+        title,
+        createdAt: now,
+        updatedAt: now,
+      },
+      created: true,
+    };
+  }
+
+  listConversations(options?: { includeClosed?: boolean }): ProcessConversationRecord[] {
+    const rows = [...this.sql.exec<{
+      id: string;
+      generation: number;
+      status: string;
+      title: string | null;
+      created_at: number;
+      updated_at: number;
+    }>(
+      options?.includeClosed
+        ? "SELECT * FROM conversations ORDER BY updated_at DESC, id ASC"
+        : "SELECT * FROM conversations WHERE status != 'closed' ORDER BY updated_at DESC, id ASC",
+    )];
+
+    return rows.map((row) => ({
+      id: row.id,
+      generation: row.generation,
+      status: row.status === "closed" ? "closed" : "open",
+      title: row.title,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
+  }
+
+  closeConversation(conversationId: string): boolean {
+    const id = normalizeConversationId(conversationId);
+    const existing = this.getConversation(id);
+    if (!existing || existing.status === "closed") {
+      return false;
+    }
+    this.sql.exec(
+      "UPDATE conversations SET status = 'closed', updated_at = ? WHERE id = ?",
+      Date.now(),
+      id,
+    );
+    return true;
+  }
+
   // --- Tool calls ---
 
   register(
@@ -881,6 +968,12 @@ export function parseAssistantMessageMeta(raw: string | null): AssistantMessageM
       ? meta.toolCalls as ToolCall[]
       : undefined,
   };
+}
+
+function normalizeNullableString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : null;
 }
 
 function buildFallbackUserContent(

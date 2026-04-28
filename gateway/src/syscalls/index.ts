@@ -26,6 +26,14 @@ import type {
   ProcSendResult,
   ProcHistoryArgs,
   ProcHistoryResult,
+  ProcConversationOpenArgs,
+  ProcConversationOpenResult,
+  ProcConversationListArgs,
+  ProcConversationListResult,
+  ProcConversationGetArgs,
+  ProcConversationGetResult,
+  ProcConversationCloseArgs,
+  ProcConversationCloseResult,
   ProcResetArgs,
   ProcResetResult,
   ProcListArgs,
@@ -191,6 +199,10 @@ export type SyscallDomains = {
   "proc.abort": { args: ProcAbortArgs; result: ProcAbortResult };
   "proc.hil": { args: ProcHilArgs; result: ProcHilResult };
   "proc.history": { args: ProcHistoryArgs; result: ProcHistoryResult };
+  "proc.conversation.open": { args: ProcConversationOpenArgs; result: ProcConversationOpenResult };
+  "proc.conversation.list": { args: ProcConversationListArgs; result: ProcConversationListResult };
+  "proc.conversation.get": { args: ProcConversationGetArgs; result: ProcConversationGetResult };
+  "proc.conversation.close": { args: ProcConversationCloseArgs; result: ProcConversationCloseResult };
   "proc.reset": { args: ProcResetArgs; result: ProcResetResult };
   "proc.setidentity": { args: ProcSetIdentityArgs; result: ProcSetIdentityResult };
 

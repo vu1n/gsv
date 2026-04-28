@@ -28,6 +28,7 @@ import type {
 } from "../syscalls/ai";
 import { isAiContextProfile } from "../syscalls/ai";
 import type {
+  ProcSendArgs,
   ProcSendResult,
   ProcAbortResult,
   ProcHilArgs,
@@ -36,6 +37,15 @@ import type {
   ProcHistoryArgs,
   ProcHistoryResult,
   ProcHistoryMessage,
+  ProcConversation,
+  ProcConversationOpenArgs,
+  ProcConversationOpenResult,
+  ProcConversationListArgs,
+  ProcConversationListResult,
+  ProcConversationGetArgs,
+  ProcConversationGetResult,
+  ProcConversationCloseArgs,
+  ProcConversationCloseResult,
   ProcResetResult,
   ProcKillResult,
   ProcSpawnAssignment,
@@ -87,11 +97,11 @@ import {
 } from "../syscalls/constants";
 import { RipgitClient } from "../fs/ripgit/client";
 import { workspaceRepoRef } from "../fs/ripgit/repos";
-import type { ProcSendArgs } from "../syscalls/proc";
 import { executeCodeMode } from "./codemode";
 import {
   DEFAULT_CONVERSATION_ID,
   normalizeConversationId,
+  type ProcessConversationRecord,
 } from "./conversations";
 
 type RunState = {
@@ -380,6 +390,26 @@ export class Process extends Host<Env> {
             frame.args as ProcHistoryArgs,
           );
           break;
+        case "proc.conversation.open":
+          data = this.handleConversationOpen(
+            frame.args as ProcConversationOpenArgs,
+          );
+          break;
+        case "proc.conversation.list":
+          data = this.handleConversationList(
+            frame.args as ProcConversationListArgs,
+          );
+          break;
+        case "proc.conversation.get":
+          data = this.handleConversationGet(
+            frame.args as ProcConversationGetArgs,
+          );
+          break;
+        case "proc.conversation.close":
+          data = this.handleConversationClose(
+            frame.args as ProcConversationCloseArgs,
+          );
+          break;
         case "proc.reset":
           data = await this.handleProcReset();
           break;
@@ -415,7 +445,10 @@ export class Process extends Host<Env> {
   private async handleProcSend(args: ProcSendArgs): Promise<ProcSendResult> {
     const runId = crypto.randomUUID();
     const conversationId = normalizeConversationId(args.conversationId);
-    this.store.ensureConversation(conversationId);
+    const conversation = this.store.ensureConversation(conversationId);
+    if (conversation.status === "closed") {
+      return { ok: false, error: `Conversation is closed: ${conversationId}` };
+    }
     const media = await storeIncomingProcessMedia(
       this.env.STORAGE,
       this.identity.uid,
@@ -694,6 +727,62 @@ export class Process extends Host<Env> {
       messageCount: total,
       truncated: (args.offset ?? 0) + messages.length < total,
       pendingHil: this.toProcHilRequest(this.store.getPendingHil()),
+    };
+  }
+
+  private handleConversationOpen(args: ProcConversationOpenArgs): ProcConversationOpenResult {
+    const { conversation, created } = this.store.openConversation({
+      conversationId: args.conversationId,
+      title: args.title,
+    });
+    return {
+      ok: true,
+      pid: this.pid,
+      conversation: this.toProcConversation(conversation),
+      created,
+    };
+  }
+
+  private handleConversationList(args: ProcConversationListArgs): ProcConversationListResult {
+    return {
+      ok: true,
+      pid: this.pid,
+      conversations: this.store
+        .listConversations({ includeClosed: args.includeClosed })
+        .map((record) => this.toProcConversation(record)),
+    };
+  }
+
+  private handleConversationGet(args: ProcConversationGetArgs): ProcConversationGetResult {
+    const conversationId = normalizeConversationId(args.conversationId);
+    const conversation = this.store.getConversation(conversationId);
+    return {
+      ok: true,
+      pid: this.pid,
+      conversation: conversation ? this.toProcConversation(conversation) : null,
+    };
+  }
+
+  private handleConversationClose(args: ProcConversationCloseArgs): ProcConversationCloseResult {
+    const conversationId = normalizeConversationId(args.conversationId);
+    const closed = this.store.closeConversation(conversationId);
+    return {
+      ok: true,
+      pid: this.pid,
+      conversationId,
+      closed,
+    };
+  }
+
+  private toProcConversation(record: ProcessConversationRecord): ProcConversation {
+    return {
+      id: record.id,
+      generation: record.generation,
+      status: record.status,
+      title: record.title,
+      messageCount: this.store.messageCount(record.id),
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
     };
   }
 

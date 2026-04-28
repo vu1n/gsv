@@ -469,8 +469,10 @@ conversation.
 
 ### 4. Extend proc syscalls
 
-Partially completed. `proc.send` and `proc.history` accept optional
-`conversationId`. Explicit conversation management syscalls are still pending.
+Completed conversation management slice. `proc.send` and `proc.history` accept
+optional `conversationId`, and `proc.conversation.open`, `proc.conversation.list`,
+`proc.conversation.get`, and `proc.conversation.close` expose process-local
+conversation lifecycle state.
 
 ### 5. Add conversation lifecycle operations
 
