@@ -531,9 +531,19 @@ Defer cross-user IPC until ACLs are in place.
 
 ### 7. Implement Kernel scheduler
 
-Add a clean scheduler store and handlers for the existing `sched.*` syscall
-surface. Start with `at`, `every`, `process.spawn`, `process.event`, and
-`process.lifecycle`.
+Implemented:
+
+- Kernel-owned schedule store and `sched.*` syscall handlers.
+- `at`, `after`, `every`, and timezone-aware five-field cron expressions.
+- `process.spawn` targets for scheduled background work.
+- `process.event` targets that enter process context as visible process events.
+- Cloudflare Agent schedules as one-shot wake-ups only; GSV stores the schedule
+  definition and computes the next fire time.
+
+Still pending:
+
+- `process.lifecycle` schedule targets.
+- package-owned Kernel schedules and package event targets.
 
 ### 8. Add filesystem views
 

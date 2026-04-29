@@ -90,6 +90,13 @@ import {
   handleNotificationMarkRead,
 } from "./notifications";
 import { handleSignalUnwatch, handleSignalWatch } from "./signals";
+import {
+  handleSchedulerAdd,
+  handleSchedulerList,
+  handleSchedulerRemove,
+  handleSchedulerRun,
+  handleSchedulerUpdate,
+} from "./scheduler";
 
 export type DispatchDeps = {
   routingTable: RoutingTable;
@@ -372,11 +379,20 @@ async function dispatchNative(
 
       // --- sched.* ---
       case "sched.list":
+        data = handleSchedulerList(frame.args, ctx);
+        break;
       case "sched.add":
+        data = await handleSchedulerAdd(frame.args, ctx);
+        break;
       case "sched.update":
+        data = await handleSchedulerUpdate(frame.args, ctx);
+        break;
       case "sched.remove":
+        data = await handleSchedulerRemove(frame.args, ctx);
+        break;
       case "sched.run":
-        return errFrame(frame.id, 501, `${frame.call} not yet implemented`);
+        data = await handleSchedulerRun(frame.args, ctx);
+        break;
 
       // --- adapter.* ---
       case "adapter.connect":

@@ -221,6 +221,60 @@ function isWatchedSignalPayload(
   return !!value && typeof value === "object" && (value as { watched?: unknown }).watched === true;
 }
 
+function isScheduleEventPayload(
+  value: unknown,
+): value is {
+  scheduleId?: unknown;
+  scheduleName?: unknown;
+  conversationId?: unknown;
+  message?: unknown;
+  data?: unknown;
+  scheduledAtMs?: unknown;
+  firedAtMs?: unknown;
+} {
+  return !!value && typeof value === "object";
+}
+
+function formatScheduleEventMessage(payload: unknown): string {
+  const value = payload && typeof payload === "object"
+    ? payload as Record<string, unknown>
+    : {};
+  const scheduleId = typeof value.scheduleId === "string" && value.scheduleId.trim().length > 0
+    ? value.scheduleId.trim()
+    : null;
+  const scheduleName = typeof value.scheduleName === "string" && value.scheduleName.trim().length > 0
+    ? value.scheduleName.trim()
+    : null;
+  const message = typeof value.message === "string" && value.message.trim().length > 0
+    ? value.message.trim()
+    : "Scheduled event fired.";
+  const scheduledAtMs = typeof value.scheduledAtMs === "number" && Number.isFinite(value.scheduledAtMs)
+    ? value.scheduledAtMs
+    : null;
+  const firedAtMs = typeof value.firedAtMs === "number" && Number.isFinite(value.firedAtMs)
+    ? value.firedAtMs
+    : Date.now();
+
+  const lines = [
+    scheduleName
+      ? `Scheduled event \`${scheduleName}\` fired.`
+      : "Scheduled event fired.",
+  ];
+  if (scheduleId) {
+    lines.push(`Schedule id: \`${scheduleId}\`.`);
+  }
+  if (scheduledAtMs !== null) {
+    lines.push(`Scheduled at: ${new Date(scheduledAtMs).toISOString()}.`);
+  }
+  lines.push(`Fired at: ${new Date(firedAtMs).toISOString()}.`, "", message);
+
+  const renderedData = renderJsonBlock(value.data);
+  if (renderedData) {
+    lines.push("", "Event data:", "```json", renderedData, "```");
+  }
+  return lines.join("\n");
+}
+
 function formatWatchedSignalMessage(signal: string, payload: unknown): string {
   const value = payload && typeof payload === "object"
     ? payload as Record<string, unknown>
@@ -1285,6 +1339,9 @@ export class Process extends Host<Env> {
       case "ipc.timeout":
         await this.handleIpcSignal(frame.signal, frame.payload);
         break;
+      case "schedule.event":
+        await this.handleScheduleEventSignal(frame.payload);
+        break;
       default:
         console.log(`[Process] Unknown signal: ${frame.signal}`);
         break;
@@ -1324,6 +1381,25 @@ export class Process extends Host<Env> {
         runId,
         queued: false,
         conversationId: DEFAULT_CONVERSATION_ID,
+      };
+      this.scheduleTick(runId);
+    }
+  }
+
+  private async handleScheduleEventSignal(payload: unknown): Promise<void> {
+    if (!isScheduleEventPayload(payload)) {
+      return;
+    }
+    const conversationId = normalizeConversationId(payload.conversationId);
+    this.store.appendMessage("system", formatScheduleEventMessage(payload), {
+      conversationId,
+    });
+    if (!this.currentRun) {
+      const runId = crypto.randomUUID();
+      this.currentRun = {
+        runId,
+        queued: false,
+        conversationId,
       };
       this.scheduleTick(runId);
     }

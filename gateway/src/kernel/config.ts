@@ -23,7 +23,7 @@ const GSV_PROCESS_CONTEXT = [
   "GSV is a Linux-shaped distributed AI operating environment.",
   "A process is a persistent agent execution unit with an owner, identity, current working directory, optional workspace, conversation history, and command/syscall tools.",
   "Treat `/home`, `/workspaces`, `/proc`, `/sys`, `/etc`, `/var`, and `/dev` as system surfaces rather than ordinary project folders.",
-  "Messages beginning with `[Process Event]:` are runtime events injected by GSV, not ordinary user messages. They may report IPC replies, IPC timeouts, watched signals, conversation compaction, resets, or other process lifecycle changes. Use them as authoritative context for the process state, and do not quote the prefix back unless it is directly relevant.",
+  "Messages beginning with `[Process Event]:` are runtime events injected by GSV, not ordinary user messages. They may report IPC replies, IPC timeouts, watched signals, scheduled events, conversation compaction, resets, or other process lifecycle changes. Use them as authoritative context for the process state, and do not quote the prefix back unless it is directly relevant.",
 ].join("\n");
 
 export const SYSTEM_CONFIG_DEFAULTS: Record<string, string> = {

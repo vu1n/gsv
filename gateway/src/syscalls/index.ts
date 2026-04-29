@@ -141,9 +141,13 @@ import type {
   SchedulerListArgs,
   SchedulerListResult,
   SchedulerAddArgs,
+  SchedulerAddResult,
+  SchedulerUpdateArgs,
+  SchedulerUpdateResult,
+  SchedulerRemoveArgs,
+  SchedulerRemoveResult,
+  SchedulerRunArgs,
   SchedulerRunResult,
-  CronJob,
-  CronJobPatch,
 } from "./scheduler";
 import type {
   AiToolsArgs,
@@ -270,10 +274,10 @@ export type SyscallDomains = {
 
   // Scheduler (cron)
   "sched.list": { args: SchedulerListArgs; result: SchedulerListResult };
-  "sched.add": { args: SchedulerAddArgs; result: { job: CronJob } };
-  "sched.update": { args: { id: string; patch: CronJobPatch }; result: { job: CronJob } };
-  "sched.remove": { args: { id: string }; result: { removed: boolean } };
-  "sched.run": { args: { id?: string; mode?: "due" | "force" }; result: SchedulerRunResult };
+  "sched.add": { args: SchedulerAddArgs; result: SchedulerAddResult };
+  "sched.update": { args: SchedulerUpdateArgs; result: SchedulerUpdateResult };
+  "sched.remove": { args: SchedulerRemoveArgs; result: SchedulerRemoveResult };
+  "sched.run": { args: SchedulerRunArgs; result: SchedulerRunResult };
 
   // AI (process bootstrap)
   "ai.tools": { args: AiToolsArgs; result: AiToolsResult };

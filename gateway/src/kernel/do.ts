@@ -28,6 +28,12 @@ import { WorkspaceStore } from "./workspaces";
 import { SignalWatchStore, type SignalWatchRecord } from "./signal-watches";
 import { NotificationStore } from "./notifications";
 import { IpcCallStore, type IpcCallRecord } from "./ipc-calls";
+import {
+  assertCanManageSchedule,
+  computeNextRunAfterFinish,
+  ScheduleStore,
+  skippedScheduleResult,
+} from "./scheduler";
 import { AppSessionStore } from "./app-sessions";
 import {
   ensureKernelBootstrapped,
@@ -61,6 +67,13 @@ import {
 } from "../protocol/app-frame";
 import type { AppClientSessionContext } from "../protocol/app-session";
 import { listLocalPublicPackages } from "./pkg";
+import { handleProcSpawn } from "./proc-handlers";
+import type {
+  ScheduleRecord,
+  ScheduleRunResult,
+  SchedulerRunArgs,
+  SchedulerRunResult,
+} from "../syscalls/scheduler";
 
 const SERVER_VERSION = "0.1.1";
 
@@ -169,6 +182,7 @@ export class Kernel extends Host<Env> {
   private readonly signalWatches: SignalWatchStore;
   private readonly ipcCalls: IpcCallStore;
   private readonly notifications: NotificationStore;
+  private readonly schedules: ScheduleStore;
   private readonly appSessions: AppSessionStore;
   private readonly packages: PackageStore;
   private readonly ready: Promise<void>;
@@ -219,6 +233,9 @@ export class Kernel extends Host<Env> {
 
     this.notifications = new NotificationStore(sql);
     this.notifications.init();
+
+    this.schedules = new ScheduleStore(sql);
+    this.schedules.init();
 
     this.appSessions = new AppSessionStore(sql);
     this.appSessions.init();
@@ -922,6 +939,7 @@ export class Kernel extends Host<Env> {
       signalWatches: this.signalWatches,
       ipcCalls: this.ipcCalls,
       notifications: this.notifications,
+      schedules: this.schedules,
       connection: null as unknown as Connection,
       identity: connIdentity,
       processId,
@@ -930,6 +948,9 @@ export class Kernel extends Host<Env> {
       broadcastToUid: this.broadcastToUid.bind(this),
       getAppRunner: this.getAppRunner.bind(this),
       scheduleIpcCallTimeout: this.scheduleIpcCallTimeout.bind(this),
+      scheduleScheduleWake: this.scheduleScheduleWake.bind(this),
+      cancelScheduleWake: this.cancelScheduleWake.bind(this),
+      runSchedules: this.runSchedules.bind(this),
     };
 
     const origin: RouteOrigin = { type: "process", id: processId };
@@ -987,6 +1008,7 @@ export class Kernel extends Host<Env> {
       signalWatches: this.signalWatches,
       ipcCalls: this.ipcCalls,
       notifications: this.notifications,
+      schedules: this.schedules,
       connection,
       identity: state.identity as ConnectionIdentity,
       processId: undefined,
@@ -995,6 +1017,9 @@ export class Kernel extends Host<Env> {
       broadcastToUid: this.broadcastToUid.bind(this),
       getAppRunner: this.getAppRunner.bind(this),
       scheduleIpcCallTimeout: this.scheduleIpcCallTimeout.bind(this),
+      scheduleScheduleWake: this.scheduleScheduleWake.bind(this),
+      cancelScheduleWake: this.cancelScheduleWake.bind(this),
+      runSchedules: this.runSchedules.bind(this),
     };
   }
 
@@ -1014,6 +1039,7 @@ export class Kernel extends Host<Env> {
       signalWatches: this.signalWatches,
       ipcCalls: this.ipcCalls,
       notifications: this.notifications,
+      schedules: this.schedules,
       connection: null as unknown as Connection,
       identity,
       processId: undefined,
@@ -1022,6 +1048,9 @@ export class Kernel extends Host<Env> {
       broadcastToUid: this.broadcastToUid.bind(this),
       getAppRunner: this.getAppRunner.bind(this),
       scheduleIpcCallTimeout: this.scheduleIpcCallTimeout.bind(this),
+      scheduleScheduleWake: this.scheduleScheduleWake.bind(this),
+      cancelScheduleWake: this.cancelScheduleWake.bind(this),
+      runSchedules: this.runSchedules.bind(this),
     };
   }
 
@@ -1052,6 +1081,20 @@ export class Kernel extends Host<Env> {
       callId,
     );
     return sched.id;
+  }
+
+  private async scheduleScheduleWake(scheduleId: string, dueAtMs: number): Promise<string> {
+    const wakeAt = new Date(ceilToSecondMs(Math.max(Date.now() + 1_000, dueAtMs)));
+    const sched = await this.schedule(
+      wakeAt,
+      "onScheduleDue",
+      scheduleId,
+    );
+    return sched.id;
+  }
+
+  private async cancelScheduleWake(wakeScheduleId: string): Promise<void> {
+    await this.cancelSchedule(wakeScheduleId);
   }
 
   private async handleReq(connection: Connection<ConnectionState>, frame: RequestFrame): Promise<void> {
@@ -1606,6 +1649,244 @@ export class Kernel extends Host<Env> {
     });
   }
 
+  async onScheduleDue(scheduleId: string, wake?: { id?: unknown }): Promise<void> {
+    await this.ready;
+    const record = this.schedules.getStored(scheduleId);
+    const wakeId = typeof wake?.id === "string" ? wake.id : null;
+    if (wakeId && record?.wakeScheduleId !== wakeId) {
+      return;
+    }
+
+    const result = await this.runSchedules({ id: scheduleId, mode: "due" });
+    if (result.ran !== 0) {
+      return;
+    }
+
+    const current = this.schedules.getStored(scheduleId);
+    if (current?.enabled && current.state.nextRunAtMs !== null && current.state.nextRunAtMs > Date.now()) {
+      const nextWakeId = await this.scheduleScheduleWake(current.id, current.state.nextRunAtMs);
+      this.schedules.setWakeScheduleId(current.id, nextWakeId);
+    }
+  }
+
+  private async runSchedules(
+    args: SchedulerRunArgs,
+    identity?: ConnectionIdentity,
+  ): Promise<SchedulerRunResult> {
+    const mode = args.mode ?? "due";
+    if (mode === "force" && !args.id) {
+      throw new Error("sched.run force requires an id");
+    }
+
+    const now = Date.now();
+    const records = args.id
+      ? [this.schedules.get(args.id)].filter((record): record is ScheduleRecord => record !== null)
+      : this.schedules.listDue(now, identity && identity.process.uid !== 0 ? identity.process.uid : undefined);
+
+    const results: ScheduleRunResult[] = [];
+    for (const record of records) {
+      if (identity) {
+        assertCanManageSchedule(identity, record);
+      }
+      results.push(await this.runScheduleRecord(record, mode));
+    }
+
+    return {
+      ran: results.filter((result) => result.status !== "skipped").length,
+      results,
+    };
+  }
+
+  private async runScheduleRecord(
+    record: ScheduleRecord,
+    mode: "due" | "force",
+  ): Promise<ScheduleRunResult> {
+    const now = Date.now();
+    const scheduledAtMs = record.state.nextRunAtMs;
+
+    if (mode === "due") {
+      if (!record.enabled) {
+        return skippedScheduleResult(record.id, "schedule is disabled");
+      }
+      if (scheduledAtMs === null || scheduledAtMs > now) {
+        return skippedScheduleResult(record.id, "schedule is not due");
+      }
+    }
+
+    if (record.state.runningAtMs !== null) {
+      return skippedScheduleResult(record.id, "schedule is already running");
+    }
+
+    const startedAtMs = Date.now();
+    const running = this.schedules.markRunning(record.id, startedAtMs);
+    if (!running) {
+      return skippedScheduleResult(record.id, "schedule is already running");
+    }
+
+    let status: "ok" | "error" = "ok";
+    let error: string | undefined;
+    let result: unknown;
+
+    try {
+      result = await this.dispatchScheduleTarget(record, scheduledAtMs, startedAtMs);
+    } catch (err) {
+      status = "error";
+      error = err instanceof Error ? err.message : String(err);
+      result = { error };
+    }
+
+    const finishedAtMs = Date.now();
+    const next = mode === "force"
+      ? { enabled: record.enabled, nextRunAtMs: record.state.nextRunAtMs }
+      : computeNextRunAfterFinish(record.expression, Math.max(finishedAtMs, scheduledAtMs ?? finishedAtMs));
+    const updated = this.schedules.finishRun({
+      scheduleId: record.id,
+      ownerUid: record.ownerUid,
+      scheduledAtMs: mode === "force" ? null : scheduledAtMs,
+      startedAtMs,
+      finishedAtMs,
+      status,
+      error,
+      result,
+      nextRunAtMs: next.nextRunAtMs,
+      enabled: next.enabled,
+    });
+
+    if (updated?.enabled && updated.state.nextRunAtMs !== null && mode !== "force") {
+      const wakeId = await this.scheduleScheduleWake(updated.id, updated.state.nextRunAtMs);
+      this.schedules.setWakeScheduleId(updated.id, wakeId);
+    } else if (updated && !updated.enabled) {
+      this.schedules.setWakeScheduleId(updated.id, null);
+    }
+
+    return {
+      scheduleId: record.id,
+      status,
+      ...(error ? { error } : {}),
+      summary: scheduleResultSummary(record, result),
+      durationMs: Math.max(0, finishedAtMs - startedAtMs),
+      nextRunAtMs: updated?.state.nextRunAtMs ?? null,
+    };
+  }
+
+  private async dispatchScheduleTarget(
+    record: ScheduleRecord,
+    scheduledAtMs: number | null,
+    firedAtMs: number,
+  ): Promise<unknown> {
+    const target = record.target;
+    if (target.kind === "process.spawn") {
+      const ctx = this.buildScheduleContext(record);
+      const result = await handleProcSpawn({
+        profile: target.profile ?? "cron",
+        label: target.label ?? record.name,
+        prompt: target.prompt,
+        parentPid: target.parentPid,
+        workspace: target.workspace,
+        mounts: target.mounts,
+        assignment: target.assignment,
+      }, ctx);
+      if (!result.ok) {
+        throw new Error(result.error);
+      }
+      return {
+        kind: "process.spawn",
+        pid: result.pid,
+        profile: result.profile,
+      };
+    }
+
+    if (target.kind === "process.event") {
+      const proc = this.procs.get(target.pid);
+      if (!proc) {
+        throw new Error(`Process not found: ${target.pid}`);
+      }
+      if (proc.uid !== record.ownerUid && record.ownerUid !== 0) {
+        throw new Error(`Permission denied: schedule ${record.id} cannot access process ${target.pid}`);
+      }
+
+      await sendFrameToProcess(target.pid, {
+        type: "sig",
+        signal: "schedule.event",
+        payload: {
+          scheduleId: record.id,
+          scheduleName: record.name,
+          conversationId: target.conversationId,
+          message: target.message,
+          data: target.data,
+          scheduledAtMs,
+          firedAtMs,
+        },
+      });
+      return {
+        kind: "process.event",
+        pid: target.pid,
+        conversationId: target.conversationId ?? "default",
+      };
+    }
+
+    return { kind: "unknown" };
+  }
+
+  private buildScheduleContext(record: ScheduleRecord): KernelContext {
+    const process = this.resolveScheduleIdentity(record.ownerUid);
+    const identity: ConnectionIdentity = {
+      role: "user",
+      process,
+      capabilities: this.caps.resolve(process.gids),
+    };
+
+    return {
+      env: this.env,
+      auth: this.auth,
+      caps: this.caps,
+      config: this.config,
+      devices: this.devices,
+      procs: this.procs,
+      workspaces: this.workspaces,
+      packages: this.packages,
+      adapters: this.adapters,
+      runRoutes: this.runRoutes,
+      shellSessions: this.shellSessions,
+      signalWatches: this.signalWatches,
+      ipcCalls: this.ipcCalls,
+      notifications: this.notifications,
+      schedules: this.schedules,
+      connection: null as unknown as Connection,
+      identity,
+      processId: record.runAs.kind === "process" ? record.runAs.pid : undefined,
+      appFrame: undefined,
+      serverVersion: SERVER_VERSION,
+      broadcastToUid: this.broadcastToUid.bind(this),
+      getAppRunner: this.getAppRunner.bind(this),
+      scheduleIpcCallTimeout: this.scheduleIpcCallTimeout.bind(this),
+      scheduleScheduleWake: this.scheduleScheduleWake.bind(this),
+      cancelScheduleWake: this.cancelScheduleWake.bind(this),
+      runSchedules: this.runSchedules.bind(this),
+    };
+  }
+
+  private resolveScheduleIdentity(uid: number): ProcessIdentity {
+    const initIdentity = this.procs.getIdentity(`init:${uid}`);
+    if (initIdentity) {
+      return initIdentity;
+    }
+
+    const user = this.auth.getPasswdByUid(uid);
+    if (!user) {
+      throw new Error(`Cannot resolve schedule owner uid ${uid}`);
+    }
+    return {
+      uid: user.uid,
+      gid: user.gid,
+      gids: this.auth.resolveGids(user.username, user.gid),
+      username: user.username,
+      home: user.home,
+      cwd: user.home,
+      workspaceId: null,
+    };
+  }
+
   private deliverToOrigin(origin: RouteOrigin, frame: ResponseFrame): void {
     if (origin.type === "connection") {
       const conn = this.connections.get(origin.id);
@@ -1908,6 +2189,21 @@ function errFrame(id: string, code: number, message: string): ResponseFrame {
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? value as Record<string, unknown> : null;
+}
+
+function ceilToSecondMs(value: number): number {
+  return Math.ceil(value / 1_000) * 1_000;
+}
+
+function scheduleResultSummary(record: ScheduleRecord, result: unknown): string {
+  const value = asRecord(result);
+  if (record.target.kind === "process.spawn" && typeof value?.pid === "string") {
+    return `spawned process ${value.pid}`;
+  }
+  if (record.target.kind === "process.event") {
+    return `delivered event to process ${record.target.pid}`;
+  }
+  return "schedule ran";
 }
 
 function shellStatusFromResult(status: string): ShellSessionStatus {

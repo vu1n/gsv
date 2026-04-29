@@ -124,9 +124,10 @@ type OnboardingDraft = {
   lane: "quick" | "customize" | "advanced";
   mode: "manual" | "guided";
   stage: "welcome" | "details" | "review";
-  detailStep: "account" | "admin" | "ai" | "source" | "device";
+  detailStep: "account" | "admin" | "system" | "ai" | "source" | "device";
   account: { username: string; password: string; passwordConfirm: string };
   admin: { mode: "same" | "custom"; password: string };
+  system: { timezone: string };
   ai: { enabled: boolean; provider: string; model: string; apiKey: string };
   source: { enabled: boolean; value: string; ref: string };
   device: { enabled: boolean; deviceId: string; label: string; expiryDays: string };
@@ -135,7 +136,7 @@ type OnboardingDraft = {
 type OnboardingAssistPatch = {
   op: "set" | "clear";
   path:
-    | "account.username" | "admin.mode" | "ai.enabled" | "ai.provider" | "ai.model"
+    | "account.username" | "admin.mode" | "system.timezone" | "ai.enabled" | "ai.provider" | "ai.model"
     | "source.enabled" | "source.value" | "source.ref"
     | "device.enabled" | "device.deviceId" | "device.label" | "device.expiryDays";
   value?: string | boolean;
@@ -807,7 +808,7 @@ Runtime behavior:
 |---|---|---|
 | `sys.connect` | `handleConnect` | First request on a WebSocket connection. Authenticates, assigns identity, returns capabilities as `syscalls`, returns signal list, registers driver devices, closes older same-client connections, and starts/reconciles the user init process. Setup mode rejects with `425` and `next: "sys.setup"`. |
 | `sys.setup.assist` | `handleSysSetupAssist` | Pre-connect setup helper. Uses app AI config to guide onboarding, redacts secrets from drafts, and only accepts whitelisted non-secret patches from model output. Rejected if already connected or initialized. |
-| `sys.setup` | `handleSysSetup` | Pre-connect setup-mode bootstrap. Creates first user, root password, groups/home, optional AI config, optional node token, home layout, and optional system bootstrap. Username and password are validated. |
+| `sys.setup` | `handleSysSetup` | Pre-connect setup-mode bootstrap. Creates first user, root password, groups/home, optional timezone, optional AI config, optional node token, home layout, and optional system bootstrap. Username, password, and timezone are validated. |
 | `sys.bootstrap` | `handleSysBootstrap` | Imports `root/gsv`, seeds builtin packages, mirrors stable/dev CLI assets, stores default CLI channel, and broadcasts `pkg.changed`. Defaults repo to `deathbyknowledge/gsv` and ref to `main`. Requires `RIPGIT` and storage. |
 | `sys.config.get` | `handleSysConfigGet` | Reads exact config key or visible prefix. Root sees all; non-root sees own `users/<uid>/` keys and non-sensitive `config/` keys. Sensitive names such as password, token, secret, and api key are hidden from non-root. |
 | `sys.config.set` | `handleSysConfigSet` | Writes a config value. Root can write any key; non-root can write only own user-overridable keys, currently under `users/<uid>/ai/`. Values are coerced with `String(value)`. |
@@ -837,7 +838,7 @@ type SystemSyscalls = {
   };
 
   "sys.setup": {
-    args: { username: string; password: string; rootPassword?: string; bootstrap?: { remoteUrl?: string; repo?: string; ref?: string }; ai?: { provider?: string; model?: string; apiKey?: string }; node?: { deviceId: string; label?: string; expiresAt?: number } };
+    args: { username: string; password: string; rootPassword?: string; timezone?: string; bootstrap?: { remoteUrl?: string; repo?: string; ref?: string }; ai?: { provider?: string; model?: string; apiKey?: string }; node?: { deviceId: string; label?: string; expiresAt?: number } };
     result: { user: ProcessIdentity; rootLocked: boolean; bootstrap?: SystemSyscalls["sys.bootstrap"]["result"]; nodeToken?: { tokenId: string; token: string; tokenPrefix: string; uid: number; kind: "node"; label: string | null; allowedRole: "driver" | null; allowedDeviceId: string | null; createdAt: number; expiresAt: number | null } };
   };
 
@@ -1041,69 +1042,67 @@ Signal frames themselves are described in [WebSocket Protocol Reference](/refere
 
 ## Scheduler: `sched.*`
 
-Scheduler syscalls are typed but currently return `501 not yet implemented` from the dispatcher.
+Scheduler syscalls are Kernel-owned. Schedule records live in Kernel SQLite,
+GSV computes timezone-aware next fire times, and Cloudflare Agent schedules are
+used only as concrete wake-ups.
 
 Runtime behavior:
 
 | Syscall | Handler | Behavior |
 |---|---|---|
-| `sched.list` | none | Dispatch returns `501 sched.list not yet implemented`. |
-| `sched.add` | none | Dispatch returns `501 sched.add not yet implemented`. |
-| `sched.update` | none | Dispatch returns `501 sched.update not yet implemented`. |
-| `sched.remove` | none | Dispatch returns `501 sched.remove not yet implemented`. |
-| `sched.run` | none | Dispatch returns `501 sched.run not yet implemented`. |
+| `sched.list` | `handleSchedulerList` | Lists schedules visible to the caller. Non-root callers see their own schedules; root may pass `ownerUid`. |
+| `sched.add` | `handleSchedulerAdd` | Creates a user-owned schedule, validates the expression and target, computes the next run, and arms a Kernel wake. |
+| `sched.update` | `handleSchedulerUpdate` | Updates schedule metadata, expression, enabled state, or target, then re-arms the wake. |
+| `sched.remove` | `handleSchedulerRemove` | Removes a schedule and cancels its pending wake when present. |
+| `sched.run` | `handleSchedulerRun` | Runs due schedules or force-runs one schedule. `force` requires `id`. |
 
 ```ts
-type CronSchedule =
-  | { kind: "every"; everyMs: number; anchorMs?: number }
+type ScheduleExpression =
   | { kind: "at"; atMs: number }
-  | { kind: "cron"; expr: string; tz?: string };
+  | { kind: "after"; afterMs: number }
+  | { kind: "every"; everyMs: number; anchorMs?: number }
+  | { kind: "cron"; expr: string; timezone: string };
 
-type CronMode = {
-  sessionKey?: string;
-  message?: string;
-  model?: string;
-  thinking?: string;
-  timeoutSeconds?: number;
-  deliver?: boolean;
-  channel?: string;
-  to?: string;
-};
+type ScheduleTarget =
+  | { kind: "process.spawn"; profile?: string; label?: string; prompt: string; parentPid?: string; workspace?: unknown; mounts?: unknown[]; assignment?: unknown }
+  | { kind: "process.event"; pid: string; conversationId?: string; message: string; data?: Record<string, unknown> };
 
-type CronJob = {
+type ScheduleRecord = {
   id: string;
+  ownerUid: number;
   name: string;
   description?: string;
   enabled: boolean;
-  deleteAfterRun?: boolean;
+  expression: ScheduleExpression;
+  target: ScheduleTarget;
+  overlapPolicy: "skip";
   createdAtMs: number;
   updatedAtMs: number;
-  schedule: CronSchedule;
-  spec: CronMode;
   state: {
-    nextRunAtMs?: number;
-    runningAtMs?: number;
-    lastRunAtMs?: number;
-    lastStatus?: "ok" | "error" | "skipped";
-    lastError?: string;
-    lastDurationMs?: number;
+    nextRunAtMs: number | null;
+    runningAtMs: number | null;
+    lastRunAtMs: number | null;
+    lastStatus: "ok" | "error" | "skipped" | null;
+    lastError: string | null;
+    lastDurationMs: number | null;
+    runCount: number;
   };
 };
 
 type SchedulerSyscalls = {
   "sched.list": {
-    args: { includeDisabled?: boolean; limit?: number; offset?: number };
-    result: { jobs: CronJob[]; count: number };
+    args: { ownerUid?: number; includeDisabled?: boolean; limit?: number; offset?: number };
+    result: { schedules: ScheduleRecord[]; count: number };
   };
 
   "sched.add": {
-    args: { name: string; description?: string; enabled?: boolean; deleteAfterRun?: boolean; schedule: CronSchedule; spec: CronMode };
-    result: { job: CronJob };
+    args: { name: string; description?: string; enabled?: boolean; expression: ScheduleExpression; target: ScheduleTarget };
+    result: { schedule: ScheduleRecord };
   };
 
   "sched.update": {
-    args: { id: string; patch: { name?: string; description?: string; enabled?: boolean; deleteAfterRun?: boolean; schedule?: CronSchedule; spec?: Partial<CronMode> } };
-    result: { job: CronJob };
+    args: { id: string; patch: { name?: string; description?: string | null; enabled?: boolean; expression?: ScheduleExpression; target?: ScheduleTarget } };
+    result: { schedule: ScheduleRecord };
   };
 
   "sched.remove": {
@@ -1113,7 +1112,7 @@ type SchedulerSyscalls = {
 
   "sched.run": {
     args: { id?: string; mode?: "due" | "force" };
-    result: { ran: number; results: Array<{ jobId: string; status: "ok" | "error" | "skipped"; error?: string; summary?: string; durationMs: number; nextRunAtMs?: number }> };
+    result: { ran: number; results: Array<{ scheduleId: string; status: "ok" | "error" | "skipped"; error?: string; summary?: string; durationMs: number; nextRunAtMs?: number | null }> };
   };
 };
 ```
