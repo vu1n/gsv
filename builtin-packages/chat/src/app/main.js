@@ -40,6 +40,12 @@ const CHAT_LAYOUT = `
           </div>
         </div>
         <div class="stage-actions">
+          <button type="button" class="btn btn-quiet icon-btn" id="compact-thread" title="Compact conversation" aria-label="Compact conversation">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4v5H3" /><path d="M16 20v-5h5" /><path d="M3 9l6-6" /><path d="M21 15l-6 6" /></svg>
+          </button>
+          <button type="button" class="btn btn-quiet icon-btn" id="open-archive" title="Conversation archive" aria-label="Conversation archive">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16" /><path d="M6 7v12h12V7" /><path d="M9 11h6" /><path d="M8 4h8l1 3H7z" /></svg>
+          </button>
           <button type="button" class="btn btn-quiet icon-btn" id="open-files" title="Open Files" aria-label="Open Files">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5h6l2 2H21v9.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
           </button>
@@ -54,6 +60,7 @@ const CHAT_LAYOUT = `
       </header>
 
       <div class="stage-body">
+        <section class="archive-panel" id="archive-panel" hidden></section>
         <section class="transcript" id="chat-log"></section>
       </div>
 
@@ -676,6 +683,24 @@ function applyContextSignal(payload) {
   renderStatus();
 }
 
+function applyLifecycleSignal(payload) {
+  const record = asRecord(payload);
+  if (!record) {
+    return;
+  }
+  const pid = asString(record.pid);
+  if (pid && pid !== getActivePid()) {
+    return;
+  }
+  const event = asString(record.event);
+  if (event === "conversation.compacted" || event === "conversation.forked") {
+    scheduleRefresh({ history: true, threads: true });
+    if (archiveOpen) {
+      void loadArchiveSegments({ preserveSelection: true });
+    }
+  }
+}
+
 function deriveThreadLabel(message) {
   const firstLine = String(message ?? "")
     .split("\\n")
@@ -894,6 +919,9 @@ function createEmbeddedHostClient(backend) {
       });
       return result;
     },
+    compactConversation: async (args) => backend.compactConversation(args),
+    listConversationSegments: async (args) => backend.listConversationSegments(args),
+    readConversationSegment: async (args) => backend.readConversationSegment(args),
   };
 }
 
@@ -907,6 +935,9 @@ const elements = {
   activeThreadTitle: document.getElementById("active-thread-title"),
   activeThreadMeta: document.getElementById("active-thread-meta"),
   contextMeter: document.getElementById("context-meter"),
+  compactThread: document.getElementById("compact-thread"),
+  openArchive: document.getElementById("open-archive"),
+  archivePanel: document.getElementById("archive-panel"),
   connectionPill: document.getElementById("connection-pill"),
   chatLog: document.getElementById("chat-log"),
   composeForm: document.getElementById("chat-compose-form"),
@@ -939,6 +970,15 @@ let suppressNextAbortedComplete = false;
 let pendingHilRequest = null;
 let hilBusy = false;
 let contextState = null;
+let archiveOpen = false;
+let archiveBusy = false;
+let archiveError = "";
+let archiveSegments = [];
+let selectedArchiveSegmentId = null;
+let selectedArchiveMessages = [];
+let selectedArchiveMessageCount = 0;
+let selectedArchiveTruncated = false;
+let compactBusy = false;
 
 function fallbackProfiles() {
   return [
@@ -1480,6 +1520,12 @@ function renderStatus() {
     const hasActiveRun = Boolean(getActivePid()) && (messageBusy || pendingAssistantState !== null || pendingHilRequest !== null);
     elements.stopRun.disabled = !interactive || abortBusy || !hasActiveRun;
   }
+  if (elements.compactThread) {
+    elements.compactThread.disabled = !interactive || !getActivePid() || compactBusy || messageBusy || pendingAssistantState !== null;
+  }
+  if (elements.openArchive) {
+    elements.openArchive.disabled = !interactive || !getActivePid();
+  }
   if (elements.openFiles) {
     elements.openFiles.disabled = !activeThreadContext;
   }
@@ -1489,6 +1535,7 @@ function renderStatus() {
   if (elements.newThreadProfile) {
     elements.newThreadProfile.disabled = !interactive || listNewConversationProfiles().length === 0;
   }
+  renderArchivePanel();
 }
 
 function renderContextMeter() {
@@ -1541,6 +1588,88 @@ function formatCompactTokens(value) {
     return (value / 1000).toFixed(value >= 10000 ? 0 : 1).replace(/\.0$/, "") + "k";
   }
   return String(Math.round(value));
+}
+
+function normalizeConversationSegment(value) {
+  const record = asRecord(value);
+  const id = asString(record?.id);
+  if (!id) {
+    return null;
+  }
+  return {
+    id,
+    generation: asNumber(record?.generation) || 0,
+    fromMessageId: asNumber(record?.fromMessageId) || 0,
+    toMessageId: asNumber(record?.toMessageId) || 0,
+    archivePath: asString(record?.archivePath) || "",
+    summaryMessageId: asNumber(record?.summaryMessageId),
+    createdAt: normalizeTimestampMs(record?.createdAt) || Date.now(),
+  };
+}
+
+function renderArchivePanel() {
+  const panel = elements.archivePanel;
+  if (!panel) {
+    return;
+  }
+  panel.hidden = !archiveOpen;
+  if (!archiveOpen) {
+    panel.innerHTML = "";
+    return;
+  }
+
+  const segmentRows = archiveSegments.length === 0
+    ? '<p class="archive-empty">No compacted segments.</p>'
+    : archiveSegments.map((segment) => (
+      '<button type="button" class="archive-segment' + (segment.id === selectedArchiveSegmentId ? ' is-active' : '') + '" data-segment-id="' + escapeHtmlClient(segment.id) + '">' +
+        '<span class="archive-segment-id">' + escapeHtmlClient(segment.id.slice(0, 8)) + '</span>' +
+        '<span class="archive-segment-meta">' + escapeHtmlClient(segment.fromMessageId + "-" + segment.toMessageId + " · " + formatTimestamp(segment.createdAt)) + '</span>' +
+      '</button>'
+    )).join("");
+
+  const selected = selectedArchiveSegmentId
+    ? archiveSegments.find((segment) => segment.id === selectedArchiveSegmentId)
+    : null;
+  const preview = renderArchivePreview(selected);
+  panel.innerHTML =
+    '<div class="archive-head">' +
+      '<div><h2>Archive</h2>' +
+      '<p>' + escapeHtmlClient(archiveBusy ? "Loading..." : archiveError || "Compacted conversation segments") + '</p></div>' +
+      '<div class="archive-actions">' +
+        '<button type="button" class="btn btn-quiet icon-btn" data-archive-refresh title="Refresh archive" aria-label="Refresh archive">' +
+          '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0 2 5.5" /><path d="M20 4v7h-7" /></svg>' +
+        '</button>' +
+        '<button type="button" class="btn btn-quiet icon-btn" data-archive-close title="Close archive" aria-label="Close archive">' +
+          '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10" /><path d="M17 7 7 17" /></svg>' +
+        '</button>' +
+      '</div>' +
+    '</div>' +
+    '<div class="archive-body">' +
+      '<div class="archive-list">' + segmentRows + '</div>' +
+      '<div class="archive-preview">' + preview + '</div>' +
+    '</div>';
+}
+
+function renderArchivePreview(segment) {
+  if (!segment) {
+    return '<p class="archive-empty">Select a segment.</p>';
+  }
+  if (archiveBusy && selectedArchiveMessages.length === 0) {
+    return '<p class="archive-empty">Loading segment.</p>';
+  }
+  const rows = selectedArchiveMessages.map((entry) => {
+    const role = entry?.role === "user" ? "user" : entry?.role === "assistant" ? "assistant" : "system";
+    const timestamp = normalizeTimestampMs(entry?.timestamp);
+    return '<article class="archive-message">' +
+      '<div class="archive-message-head"><span>' + escapeHtmlClient(labelForRole(role)) + '</span><span>' + escapeHtmlClient(timestamp ? formatTimestamp(timestamp) : "") + '</span></div>' +
+      '<pre>' + escapeHtmlClient(formatMessageContent(entry?.content)) + '</pre>' +
+    '</article>';
+  }).join("");
+  return '<div class="archive-preview-head">' +
+      '<span>' + escapeHtmlClient(segment.id) + '</span>' +
+      '<span>' + escapeHtmlClient(String(selectedArchiveMessages.length) + "/" + String(selectedArchiveMessageCount) + (selectedArchiveTruncated ? " shown" : "")) + '</span>' +
+    '</div>' +
+    (rows || '<p class="archive-empty">No archived messages.</p>');
 }
 
 async function loadProfiles() {
@@ -1698,6 +1827,136 @@ async function loadHistory() {
   renderStatus();
 }
 
+async function compactActiveConversation() {
+  if (!client || !client.isConnected()) {
+    appendSystemRow("session is locked");
+    return;
+  }
+  const pid = getActivePid();
+  if (!pid) {
+    return;
+  }
+  const keepLast = contextState?.level === "full" || contextState?.level === "critical" ? 40 : 80;
+  if (!window.confirm("Compact this conversation and keep the newest " + keepLast + " messages live?")) {
+    return;
+  }
+  compactBusy = true;
+  renderStatus();
+  try {
+    const result = await client.compactConversation({ pid, keepLast, conversationId: "default" });
+    if (!result?.ok) {
+      appendSystemRow("compact failed: " + (result?.error || "unknown error"));
+      return;
+    }
+    appendSystemRow("conversation compacted: " + result.archivedMessages + " messages archived");
+    await loadHistory();
+    if (archiveOpen) {
+      await loadArchiveSegments({ preserveSelection: true });
+    }
+  } catch (error) {
+    appendSystemRow("compact failed: " + (error instanceof Error ? error.message : String(error)));
+  } finally {
+    compactBusy = false;
+    renderStatus();
+  }
+}
+
+async function openArchivePanel() {
+  archiveOpen = true;
+  renderArchivePanel();
+  await loadArchiveSegments({ preserveSelection: true });
+}
+
+function closeArchivePanel() {
+  archiveOpen = false;
+  archiveError = "";
+  selectedArchiveSegmentId = null;
+  selectedArchiveMessages = [];
+  renderArchivePanel();
+}
+
+async function loadArchiveSegments(options = {}) {
+  if (!client || !client.isConnected()) {
+    return;
+  }
+  const pid = getActivePid();
+  if (!pid) {
+    archiveSegments = [];
+    renderArchivePanel();
+    return;
+  }
+  archiveBusy = true;
+  archiveError = "";
+  renderArchivePanel();
+  try {
+    const result = await client.listConversationSegments({ pid, conversationId: "default" });
+    if (!result?.ok) {
+      archiveError = result?.error || "archive load failed";
+      archiveSegments = [];
+      return;
+    }
+    archiveSegments = Array.isArray(result.segments)
+      ? result.segments.map(normalizeConversationSegment).filter(Boolean).reverse()
+      : [];
+    const keepSelection = options.preserveSelection === true
+      && selectedArchiveSegmentId
+      && archiveSegments.some((segment) => segment.id === selectedArchiveSegmentId);
+    selectedArchiveSegmentId = keepSelection
+      ? selectedArchiveSegmentId
+      : (archiveSegments[0]?.id || null);
+    if (selectedArchiveSegmentId) {
+      await loadArchiveSegment(selectedArchiveSegmentId);
+    } else {
+      selectedArchiveMessages = [];
+      selectedArchiveMessageCount = 0;
+      selectedArchiveTruncated = false;
+    }
+  } catch (error) {
+    archiveError = error instanceof Error ? error.message : String(error);
+    archiveSegments = [];
+  } finally {
+    archiveBusy = false;
+    renderArchivePanel();
+  }
+}
+
+async function loadArchiveSegment(segmentId) {
+  if (!client || !client.isConnected()) {
+    return;
+  }
+  const pid = getActivePid();
+  if (!pid || !segmentId) {
+    return;
+  }
+  selectedArchiveSegmentId = segmentId;
+  selectedArchiveMessages = [];
+  selectedArchiveMessageCount = 0;
+  selectedArchiveTruncated = false;
+  archiveBusy = true;
+  archiveError = "";
+  renderArchivePanel();
+  try {
+    const result = await client.readConversationSegment({
+      pid,
+      conversationId: "default",
+      segmentId,
+      limit: 100,
+    });
+    if (!result?.ok) {
+      archiveError = result?.error || "segment read failed";
+      return;
+    }
+    selectedArchiveMessages = Array.isArray(result.messages) ? result.messages : [];
+    selectedArchiveMessageCount = asNumber(result.messageCount) || selectedArchiveMessages.length;
+    selectedArchiveTruncated = result.truncated === true;
+  } catch (error) {
+    archiveError = error instanceof Error ? error.message : String(error);
+  } finally {
+    archiveBusy = false;
+    renderArchivePanel();
+  }
+}
+
 async function loadThreads() {
   if (!client || !client.isConnected()) {
     renderThreads();
@@ -1747,9 +2006,15 @@ function activateThreadContext(context) {
   }
   activeThreadContext = normalized;
   contextState = null;
+  archiveSegments = [];
+  selectedArchiveSegmentId = null;
+  selectedArchiveMessages = [];
   renderThreads();
   renderStatus();
   void loadHistory();
+  if (archiveOpen) {
+    void loadArchiveSegments();
+  }
 }
 
 async function openThread(workspaceId) {
@@ -1786,6 +2051,10 @@ async function openThread(workspaceId) {
 function resetToNewThread() {
   activeThreadContext = setActiveThreadContext(null);
   contextState = null;
+  archiveOpen = false;
+  archiveSegments = [];
+  selectedArchiveSegmentId = null;
+  selectedArchiveMessages = [];
   if (client && client.isConnected() && typeof client.setActivePid === "function") {
     void client.setActivePid(null);
   }
@@ -2085,6 +2354,37 @@ function bindUi() {
   });
   elements.openFiles?.addEventListener("click", () => openCompanion("files"));
   elements.openShell?.addEventListener("click", () => openCompanion("shell"));
+  elements.compactThread?.addEventListener("click", () => {
+    void compactActiveConversation();
+  });
+  elements.openArchive?.addEventListener("click", () => {
+    if (archiveOpen) {
+      closeArchivePanel();
+    } else {
+      void openArchivePanel();
+    }
+  });
+  elements.archivePanel?.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) {
+      return;
+    }
+    if (target.closest("[data-archive-close]")) {
+      closeArchivePanel();
+      return;
+    }
+    if (target.closest("[data-archive-refresh]")) {
+      void loadArchiveSegments({ preserveSelection: true });
+      return;
+    }
+    const segmentButton = target.closest("[data-segment-id]");
+    if (segmentButton instanceof HTMLElement) {
+      const segmentId = segmentButton.dataset.segmentId?.trim();
+      if (segmentId) {
+        void loadArchiveSegment(segmentId);
+      }
+    }
+  });
 }
 
 async function boot() {
@@ -2122,6 +2422,8 @@ async function boot() {
         }
       } else if (signal === "process.context") {
         applyContextSignal(payload);
+      } else if (signal === "process.lifecycle") {
+        applyLifecycleSignal(payload);
       } else if (signal === "chat.tool_call") {
         setPendingHilRequest(null);
         setPendingAssistantState("tool");

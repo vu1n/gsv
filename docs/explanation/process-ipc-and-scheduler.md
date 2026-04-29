@@ -234,11 +234,12 @@ A compact operation should:
 1. Require the conversation to be idle, or queue until the active run completes.
 2. Select an old prefix of active messages.
 3. Archive the exact selected messages as JSONL, compressed where appropriate.
-4. Accept a markdown summary.
+4. Accept a markdown summary or generate one from the selected prefix.
 5. Replace the selected active messages with one explicit summary/system record.
 6. Record a `ConversationSegment`.
-7. Later, emit a notification topic over the existing `SignalFrame` transport, for
-   example `conversation.compacted`.
+7. Allow archived segment reads without restoring the archived messages.
+8. Emit a lifecycle notification over the existing `SignalFrame` transport,
+   for example `process.lifecycle` with `event: "conversation.compacted"`.
 
 The summary record should say what happened and where the exact archive lives.
 Agents should be able to inspect the archive through normal history or
@@ -247,6 +248,8 @@ filesystem surfaces.
 Compaction should be callable explicitly:
 
 - `proc.conversation.compact`
+- `proc.conversation.fork`
+- `proc.conversation.segment.read`
 - `proc.conversation.segments`
 
 It may also run automatically under a visible conversation policy, but that
@@ -256,12 +259,15 @@ Example policy:
 
 ```ts
 type ConversationContextPolicy = {
-  overflow: "manual" | "auto-compact" | "auto-reset" | "fail";
-  compactAtTokens?: number;
-  keepRecentTokens?: number;
-  archiveExactTranscript: boolean;
+  overflow: "manual" | "auto-compact" | "fail";
+  compactAtPressure: number;
+  keepLast: number;
 };
 ```
+
+`proc.conversation.policy.get` and `proc.conversation.policy.set` expose this
+policy. The default is manual; automatic compaction should only happen when the
+conversation policy explicitly opts into `auto-compact`.
 
 Automatic compaction is acceptable when it is policy-driven, recorded, and
 visible. It should not be a secret background subsystem.
@@ -497,12 +503,17 @@ by default, clears its active messages and queued/runtime state, increments its
 generation, and leaves other conversations intact. `proc.conversation.compact`
 archives an old prefix of active messages, inserts a visible summary marker at
 the prefix boundary, and records a `compaction` segment that can be listed with
-`proc.conversation.segments`. Process-wide `proc.reset` and `proc.kill` archive
-every non-empty conversation into a directory with one generation file per
-conversation before clearing all conversation messages and runtime state.
+`proc.conversation.segments`. `proc.conversation.segment.read` pages archived
+messages out of a compacted segment without restoring them. `proc.conversation.fork`
+can restore a compacted segment into a new conversation, including the live suffix
+that existed at the compaction boundary by default. Compaction and fork emit
+`process.lifecycle` so UI clients can refresh without polling. Process-wide
+`proc.reset` and `proc.kill` archive every non-empty conversation into a
+directory with one generation file per conversation before clearing all
+conversation messages and runtime state.
 
-Still pending: checkpoint and richer segmented history APIs. Preserve raw
-transcript archives and visible summary markers.
+Still pending: checkpoint and richer segmented history read APIs. Preserve raw
+transcript archives, visible summary markers, and forkable segments.
 
 ### 6. Add same-owner IPC
 

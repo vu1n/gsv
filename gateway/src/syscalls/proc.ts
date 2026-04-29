@@ -317,6 +317,45 @@ export type ProcConversationResetResult =
     }
   | { ok: false; error: string };
 
+export type ProcConversationOverflowPolicy = "manual" | "auto-compact" | "fail";
+
+export type ProcConversationContextPolicy = {
+  conversationId: string;
+  overflow: ProcConversationOverflowPolicy;
+  compactAtPressure: number;
+  keepLast: number;
+  updatedAt: number;
+};
+
+export type ProcConversationPolicyGetArgs = {
+  pid?: string;
+  conversationId?: string;
+};
+
+export type ProcConversationPolicyGetResult =
+  | {
+      ok: true;
+      pid: string;
+      policy: ProcConversationContextPolicy;
+    }
+  | { ok: false; error: string };
+
+export type ProcConversationPolicySetArgs = {
+  pid?: string;
+  conversationId?: string;
+  overflow?: ProcConversationOverflowPolicy;
+  compactAtPressure?: number;
+  keepLast?: number;
+};
+
+export type ProcConversationPolicySetResult =
+  | {
+      ok: true;
+      pid: string;
+      policy: ProcConversationContextPolicy;
+    }
+  | { ok: false; error: string };
+
 export type ProcConversationSegmentKind = "compaction";
 
 export type ProcConversationSegment = {
@@ -334,7 +373,8 @@ export type ProcConversationSegment = {
 export type ProcConversationCompactArgs = {
   pid?: string;
   conversationId?: string;
-  summary: string;
+  summary?: string;
+  generateSummary?: boolean;
   keepLast?: number;
   throughMessageId?: number;
 };
@@ -348,6 +388,47 @@ export type ProcConversationCompactResult =
       archivedMessages: number;
       archivedTo: string;
       summaryMessageId: number;
+    }
+  | { ok: false; error: string };
+
+export type ProcConversationForkArgs = {
+  pid?: string;
+  conversationId?: string;
+  segmentId: string;
+  targetConversationId?: string;
+  title?: string;
+  includeLiveSuffix?: boolean;
+};
+
+export type ProcConversationForkResult =
+  | {
+      ok: true;
+      pid: string;
+      sourceConversationId: string;
+      targetConversation: ProcConversation;
+      segment: ProcConversationSegment;
+      restoredMessages: number;
+      includedLiveSuffix: boolean;
+    }
+  | { ok: false; error: string };
+
+export type ProcConversationSegmentReadArgs = {
+  pid?: string;
+  conversationId?: string;
+  segmentId: string;
+  limit?: number;
+  offset?: number;
+};
+
+export type ProcConversationSegmentReadResult =
+  | {
+      ok: true;
+      pid: string;
+      conversationId: string;
+      segment: ProcConversationSegment;
+      messages: ProcHistoryMessage[];
+      messageCount: number;
+      truncated?: boolean;
     }
   | { ok: false; error: string };
 

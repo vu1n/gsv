@@ -578,6 +578,48 @@ export class ProcessStore {
     }));
   }
 
+  getConversationSegment(
+    conversationId: string,
+    segmentId: string,
+  ): ProcessConversationSegmentRecord | null {
+    const normalizedConversationId = normalizeConversationId(conversationId);
+    const rows = [...this.sql.exec<{
+      id: string;
+      conversation_id: string;
+      generation: number;
+      kind: string;
+      from_message_id: number;
+      to_message_id: number;
+      archive_path: string;
+      summary_message_id: number | null;
+      created_at: number;
+    }>(
+      `SELECT id, conversation_id, generation, kind, from_message_id, to_message_id,
+              archive_path, summary_message_id, created_at
+         FROM conversation_segments
+        WHERE conversation_id = ?
+          AND id = ?
+        LIMIT 1`,
+      normalizedConversationId,
+      segmentId,
+    )];
+    const row = rows[0];
+    if (!row) {
+      return null;
+    }
+    return {
+      id: row.id,
+      conversationId: row.conversation_id,
+      generation: row.generation,
+      kind: row.kind === "compaction" ? "compaction" : "compaction",
+      fromMessageId: row.from_message_id,
+      toMessageId: row.to_message_id,
+      archivePath: row.archive_path,
+      summaryMessageId: row.summary_message_id,
+      createdAt: row.created_at,
+    };
+  }
+
   // --- Tool calls ---
 
   register(
@@ -845,6 +887,56 @@ export class ProcessStore {
         ORDER BY id ASC`,
       normalizedConversationId,
       normalizedGeneration,
+    )].map((row) => ({
+      id: row.id,
+      conversationId: row.conversation_id,
+      generation: row.generation,
+      role: row.role as MessageRole,
+      content: row.content,
+      toolCalls: row.tool_calls,
+      toolCallId: row.tool_call_id,
+      media: row.media_json,
+      createdAt: row.created_at,
+    }));
+  }
+
+  getMessagesForGenerationAfter(opts: {
+    conversationId?: string;
+    generation: number;
+    afterMessageId: number;
+    throughCreatedAt?: number;
+  }): MessageRecord[] {
+    const normalizedConversationId = normalizeConversationId(opts.conversationId);
+    const args: Array<string | number> = [
+      normalizedConversationId,
+      opts.generation,
+      opts.afterMessageId,
+    ];
+    const createdAtFilter = opts.throughCreatedAt === undefined
+      ? ""
+      : "AND created_at <= ?";
+    if (opts.throughCreatedAt !== undefined) {
+      args.push(opts.throughCreatedAt);
+    }
+
+    return [...this.sql.exec<{
+      id: number;
+      conversation_id: string;
+      generation: number;
+      role: string;
+      content: string;
+      tool_calls: string | null;
+      tool_call_id: string | null;
+      media_json: string | null;
+      created_at: number;
+    }>(
+      `SELECT * FROM messages
+        WHERE conversation_id = ?
+          AND generation = ?
+          AND id > ?
+          ${createdAtFilter}
+        ORDER BY id ASC`,
+      ...args,
     )].map((row) => ({
       id: row.id,
       conversationId: row.conversation_id,

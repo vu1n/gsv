@@ -932,7 +932,12 @@ describe("Process DO — mechanical", () => {
       const stub = await initProcess(pid, ROOT_IDENTITY);
 
       const messageIds = await runInDurableObject(stub, (instance: Process) => {
-        const store = (instance as any).store;
+        const process = instance as any;
+        const store = process.store;
+        process.__signals = [];
+        process.sendSignal = async (signal: string, payload: unknown) => {
+          process.__signals.push({ signal, payload });
+        };
         store.openConversation({ conversationId: "thread", title: "Thread" });
         return [
           store.appendMessage("user", "old user", { conversationId: "thread" }),
@@ -988,6 +993,22 @@ describe("Process DO — mechanical", () => {
           role: "user",
           content: "keep this",
         });
+        expect((instance as any).__signals).toEqual([
+          {
+            signal: "process.lifecycle",
+            payload: expect.objectContaining({
+              event: "conversation.compacted",
+              pid,
+              conversationId: "thread",
+              archivedMessages: 2,
+              archivedTo: data.archivedTo,
+              summaryMessageId: messageIds[0],
+              segment: expect.objectContaining({
+                id: data.segment.id,
+              }),
+            }),
+          },
+        ]);
       });
 
       const segmentsRes = (await stub.recvFrame(
@@ -1000,6 +1021,208 @@ describe("Process DO — mechanical", () => {
           summaryMessageId: messageIds[0],
         }),
       ]);
+    });
+
+    it("can generate the compaction summary from selected messages", async () => {
+      const pid = "mech-conversation-compact-generated";
+      const stub = await initProcess(pid, ROOT_IDENTITY);
+
+      await runInDurableObject(stub, (instance: Process) => {
+        const process = instance as any;
+        const store = process.store;
+        store.openConversation({ conversationId: "thread", title: "Thread" });
+        store.appendMessage("user", "old user goal", { conversationId: "thread" });
+        store.appendMessage("assistant", "old assistant decision", { conversationId: "thread" });
+        store.appendMessage("user", "keep this", { conversationId: "thread" });
+        process.currentRun = {
+          runId: "config-source",
+          queued: false,
+          conversationId: "other",
+          config: {
+            profile: "task",
+            provider: "workers-ai",
+            model: "@cf/test/model",
+            apiKey: "",
+            reasoning: "off",
+            maxTokens: 4096,
+          },
+        };
+        process.generation = {
+          async generate() {
+            throw new Error("unexpected chat generation");
+          },
+          async generateText(request: any) {
+            expect(request.purpose).toBe("compaction.summary");
+            expect(request.context.messages[0].content).toContain("old user goal");
+            return "Generated compact summary.";
+          },
+        };
+      });
+
+      const compactRes = (await stub.recvFrame(
+        makeReq("proc.conversation.compact", {
+          conversationId: "thread",
+          keepLast: 1,
+          generateSummary: true,
+        }),
+      )) as ResponseOkFrame;
+      expect(compactRes.data).toMatchObject({
+        ok: true,
+        pid,
+        conversationId: "thread",
+        archivedMessages: 2,
+      });
+
+      await runInDurableObject(stub, (instance: Process) => {
+        const process = instance as any;
+        const messages = process.store.getMessages({ conversationId: "thread" });
+        expect(messages[0].content).toContain("Generated compact summary.");
+        process.currentRun = null;
+      });
+    });
+
+    it("reads compacted segment archives with pagination", async () => {
+      const pid = "mech-conversation-segment-read";
+      const stub = await initProcess(pid, ROOT_IDENTITY);
+
+      await runInDurableObject(stub, (instance: Process) => {
+        const store = (instance as any).store;
+        store.openConversation({ conversationId: "thread", title: "Thread" });
+        store.appendMessage("user", "old user", { conversationId: "thread", createdAt: 10 });
+        store.appendMessage("assistant", "old assistant", { conversationId: "thread", createdAt: 20 });
+        store.appendMessage("user", "keep this", { conversationId: "thread", createdAt: 30 });
+      });
+
+      const compactRes = (await stub.recvFrame(
+        makeReq("proc.conversation.compact", {
+          conversationId: "thread",
+          keepLast: 1,
+          summary: "Earlier context.",
+        }),
+      )) as ResponseOkFrame;
+      const compactData = compactRes.data as any;
+
+      const firstPageRes = (await stub.recvFrame(
+        makeReq("proc.conversation.segment.read", {
+          conversationId: "thread",
+          segmentId: compactData.segment.id,
+          limit: 1,
+        }),
+      )) as ResponseOkFrame;
+      const firstPage = firstPageRes.data as any;
+      expect(firstPage).toMatchObject({
+        ok: true,
+        pid,
+        conversationId: "thread",
+        messageCount: 2,
+        truncated: true,
+        segment: {
+          id: compactData.segment.id,
+          archivePath: compactData.archivedTo,
+        },
+      });
+      expect(firstPage.messages).toEqual([
+        {
+          role: "user",
+          content: "old user",
+          timestamp: 10,
+        },
+      ]);
+
+      const secondPageRes = (await stub.recvFrame(
+        makeReq("proc.conversation.segment.read", {
+          conversationId: "thread",
+          segmentId: compactData.segment.id,
+          limit: 1,
+          offset: 1,
+        }),
+      )) as ResponseOkFrame;
+      expect((secondPageRes.data as any).messages).toEqual([
+        {
+          role: "assistant",
+          content: {
+            text: "old assistant",
+            thinking: [],
+            toolCalls: [],
+          },
+          timestamp: 20,
+        },
+      ]);
+      expect((secondPageRes.data as any).truncated).toBe(false);
+    });
+
+    it("forks a compacted segment into a new conversation", async () => {
+      const pid = "mech-conversation-fork-segment";
+      const stub = await initProcess(pid, ROOT_IDENTITY);
+
+      await runInDurableObject(stub, (instance: Process) => {
+        const store = (instance as any).store;
+        store.openConversation({ conversationId: "thread", title: "Thread" });
+        store.appendMessage("user", "old user", { conversationId: "thread", createdAt: 10 });
+        store.appendMessage("assistant", "old assistant", { conversationId: "thread", createdAt: 20 });
+        store.appendMessage("user", "keep this", { conversationId: "thread", createdAt: 30 });
+      });
+
+      const compactRes = (await stub.recvFrame(
+        makeReq("proc.conversation.compact", {
+          conversationId: "thread",
+          keepLast: 1,
+          summary: "Earlier context.",
+        }),
+      )) as ResponseOkFrame;
+      const compactData = compactRes.data as any;
+
+      await runInDurableObject(stub, (instance: Process) => {
+        const store = (instance as any).store;
+        store.appendMessage("user", "later live message", {
+          conversationId: "thread",
+          createdAt: compactData.segment.createdAt + 1000,
+        });
+      });
+
+      const forkRes = (await stub.recvFrame(
+        makeReq("proc.conversation.fork", {
+          conversationId: "thread",
+          segmentId: compactData.segment.id,
+          targetConversationId: "thread-restored",
+          title: "Restored thread",
+        }),
+      )) as ResponseOkFrame;
+      const forkData = forkRes.data as any;
+
+      expect(forkData).toMatchObject({
+        ok: true,
+        pid,
+        sourceConversationId: "thread",
+        restoredMessages: 3,
+        includedLiveSuffix: true,
+        targetConversation: {
+          id: "thread-restored",
+          title: "Restored thread",
+          messageCount: 3,
+        },
+        segment: {
+          id: compactData.segment.id,
+          archivePath: compactData.archivedTo,
+        },
+      });
+
+      await runInDurableObject(stub, (instance: Process) => {
+        const store = (instance as any).store;
+        const restored = store.getMessages({ conversationId: "thread-restored" });
+        expect(restored.map((message: any) => [message.role, message.content])).toEqual([
+          ["user", "old user"],
+          ["assistant", "old assistant"],
+          ["user", "keep this"],
+        ]);
+
+        const source = store.getMessages({ conversationId: "thread" });
+        expect(source.map((message: any) => message.content)).toEqual([
+          expect.stringContaining("Conversation compacted."),
+          "keep this",
+          "later live message",
+        ]);
+      });
     });
 
     it("rejects compaction while that conversation is active", async () => {
@@ -1030,6 +1253,59 @@ describe("Process DO — mechanical", () => {
 
       await runInDurableObject(stub, (instance: Process) => {
         (instance as any).currentRun = null;
+      });
+    });
+
+    it("gets and sets visible conversation context policy", async () => {
+      const pid = "mech-conversation-policy";
+      const stub = await initProcess(pid, ROOT_IDENTITY);
+
+      const defaultRes = (await stub.recvFrame(
+        makeReq("proc.conversation.policy.get", { conversationId: "thread" }),
+      )) as ResponseOkFrame;
+      expect(defaultRes.data).toMatchObject({
+        ok: true,
+        pid,
+        policy: {
+          conversationId: "thread",
+          overflow: "manual",
+          compactAtPressure: 0.9,
+          keepLast: 80,
+          updatedAt: 0,
+        },
+      });
+
+      const setRes = (await stub.recvFrame(
+        makeReq("proc.conversation.policy.set", {
+          conversationId: "thread",
+          overflow: "auto-compact",
+          compactAtPressure: 0.82,
+          keepLast: 42,
+        }),
+      )) as ResponseOkFrame;
+      expect(setRes.data).toMatchObject({
+        ok: true,
+        pid,
+        policy: {
+          conversationId: "thread",
+          overflow: "auto-compact",
+          compactAtPressure: 0.82,
+          keepLast: 42,
+        },
+      });
+
+      const nextRes = (await stub.recvFrame(
+        makeReq("proc.conversation.policy.get", { conversationId: "thread" }),
+      )) as ResponseOkFrame;
+      expect(nextRes.data).toMatchObject({
+        ok: true,
+        pid,
+        policy: {
+          conversationId: "thread",
+          overflow: "auto-compact",
+          compactAtPressure: 0.82,
+          keepLast: 42,
+        },
       });
     });
   });

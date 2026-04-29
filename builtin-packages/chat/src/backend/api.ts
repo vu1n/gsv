@@ -9,6 +9,7 @@ type AppBinding = {
 const CHAT_RUNTIME_SIGNALS = [
   "process.message",
   "process.context",
+  "process.lifecycle",
   "chat.tool_call",
   "chat.tool_result",
   "chat.text",
@@ -69,10 +70,57 @@ export async function sendMessage(kernel: KernelClient, input: unknown) {
 export async function getHistory(kernel: KernelClient, input: unknown) {
   const args = normalizeArgs(input);
   const pid = normalizePid(args.pid);
+  const conversationId = typeof args.conversationId === "string" && args.conversationId.trim()
+    ? args.conversationId.trim()
+    : undefined;
   const offset = typeof args.offset === "number" && Number.isFinite(args.offset) ? Math.floor(args.offset) : undefined;
   return kernel.request("proc.history", {
     limit: normalizeLimit(args.limit, 50),
     ...(pid ? { pid } : {}),
+    ...(conversationId ? { conversationId } : {}),
+    ...(typeof offset === "number" ? { offset } : {}),
+  });
+}
+
+export async function compactConversation(kernel: KernelClient, input: unknown) {
+  const args = normalizeArgs(input);
+  const pid = normalizePid(args.pid);
+  const keepLast = typeof args.keepLast === "number" && Number.isFinite(args.keepLast)
+    ? Math.max(0, Math.floor(args.keepLast))
+    : 40;
+  return kernel.request("proc.conversation.compact", {
+    keepLast,
+    generateSummary: true,
+    ...(pid ? { pid } : {}),
+    ...(typeof args.conversationId === "string" && args.conversationId.trim()
+      ? { conversationId: args.conversationId.trim() }
+      : {}),
+  });
+}
+
+export async function listConversationSegments(kernel: KernelClient, input: unknown) {
+  const args = normalizeArgs(input);
+  const pid = normalizePid(args.pid);
+  return kernel.request("proc.conversation.segments", {
+    ...(pid ? { pid } : {}),
+    ...(typeof args.conversationId === "string" && args.conversationId.trim()
+      ? { conversationId: args.conversationId.trim() }
+      : {}),
+  });
+}
+
+export async function readConversationSegment(kernel: KernelClient, input: unknown) {
+  const args = normalizeArgs(input);
+  const pid = normalizePid(args.pid);
+  const segmentId = typeof args.segmentId === "string" ? args.segmentId.trim() : "";
+  const offset = typeof args.offset === "number" && Number.isFinite(args.offset) ? Math.max(0, Math.floor(args.offset)) : undefined;
+  return kernel.request("proc.conversation.segment.read", {
+    segmentId,
+    limit: normalizeLimit(args.limit, 100),
+    ...(pid ? { pid } : {}),
+    ...(typeof args.conversationId === "string" && args.conversationId.trim()
+      ? { conversationId: args.conversationId.trim() }
+      : {}),
     ...(typeof offset === "number" ? { offset } : {}),
   });
 }

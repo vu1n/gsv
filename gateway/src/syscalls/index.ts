@@ -42,8 +42,16 @@ import type {
   ProcConversationCloseResult,
   ProcConversationResetArgs,
   ProcConversationResetResult,
+  ProcConversationPolicyGetArgs,
+  ProcConversationPolicyGetResult,
+  ProcConversationPolicySetArgs,
+  ProcConversationPolicySetResult,
   ProcConversationCompactArgs,
   ProcConversationCompactResult,
+  ProcConversationForkArgs,
+  ProcConversationForkResult,
+  ProcConversationSegmentReadArgs,
+  ProcConversationSegmentReadResult,
   ProcConversationSegmentsArgs,
   ProcConversationSegmentsResult,
   ProcResetArgs,
@@ -223,7 +231,11 @@ export type SyscallDomains = {
   "proc.conversation.get": { args: ProcConversationGetArgs; result: ProcConversationGetResult };
   "proc.conversation.close": { args: ProcConversationCloseArgs; result: ProcConversationCloseResult };
   "proc.conversation.reset": { args: ProcConversationResetArgs; result: ProcConversationResetResult };
+  "proc.conversation.policy.get": { args: ProcConversationPolicyGetArgs; result: ProcConversationPolicyGetResult };
+  "proc.conversation.policy.set": { args: ProcConversationPolicySetArgs; result: ProcConversationPolicySetResult };
   "proc.conversation.compact": { args: ProcConversationCompactArgs; result: ProcConversationCompactResult };
+  "proc.conversation.fork": { args: ProcConversationForkArgs; result: ProcConversationForkResult };
+  "proc.conversation.segment.read": { args: ProcConversationSegmentReadArgs; result: ProcConversationSegmentReadResult };
   "proc.conversation.segments": { args: ProcConversationSegmentsArgs; result: ProcConversationSegmentsResult };
   "proc.reset": { args: ProcResetArgs; result: ProcResetResult };
   "proc.setidentity": { args: ProcSetIdentityArgs; result: ProcSetIdentityResult };

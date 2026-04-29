@@ -50,9 +50,19 @@ import type {
   ProcConversationCloseResult,
   ProcConversationResetArgs,
   ProcConversationResetResult,
+  ProcConversationContextPolicy,
+  ProcConversationPolicyGetArgs,
+  ProcConversationPolicyGetResult,
+  ProcConversationPolicySetArgs,
+  ProcConversationPolicySetResult,
+  ProcConversationOverflowPolicy,
   ProcConversationCompactArgs,
   ProcConversationCompactResult,
+  ProcConversationForkArgs,
+  ProcConversationForkResult,
   ProcConversationSegment,
+  ProcConversationSegmentReadArgs,
+  ProcConversationSegmentReadResult,
   ProcConversationSegmentsArgs,
   ProcConversationSegmentsResult,
   ProcArchiveEntry,
@@ -153,11 +163,22 @@ type ProcessArchiveResult = {
   archives: ProcArchiveEntry[];
 };
 
+type ArchivedMessageRecord = {
+  role: MessageRole;
+  content: string;
+  toolCalls?: ToolCall[];
+  thinking?: ThinkingContent[];
+  toolCallId?: string;
+  media?: unknown;
+  createdAt?: number;
+};
+
 const CHECKPOINTED_MESSAGE_COUNT_KEY = "checkpointedMessageCount";
 const TEXT_ENCODER = new TextEncoder();
 const PROCESS_MEDIA_CACHE_LIMIT = 32;
 const CODE_MODE_NESTED_SYSCALL_TIMEOUT_MS = 55_000;
 const CODE_MODE_APPROVAL_TIMEOUT_MS = 55_000;
+const COMPACTION_SUMMARY_WINDOW_CHARS = 24_000;
 
 function isNonInteractiveProfile(profile: AiContextProfile): boolean {
   return profile === "cron";
@@ -214,6 +235,10 @@ function isNonNegativeInteger(value: unknown): value is number {
 
 function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+function isConversationOverflowPolicy(value: unknown): value is ProcConversationOverflowPolicy {
+  return value === "manual" || value === "auto-compact" || value === "fail";
 }
 
 function isWatchedSignalPayload(
@@ -408,6 +433,57 @@ function formatCompactionSummaryMessage(input: {
     "Summary:",
     input.summary,
   ].join("\n");
+}
+
+function conversationPolicyKey(conversationId: string): string {
+  return `conversationPolicy:${normalizeConversationId(conversationId)}`;
+}
+
+function defaultConversationPolicy(conversationId: string): ProcConversationContextPolicy {
+  return {
+    conversationId: normalizeConversationId(conversationId),
+    overflow: "manual",
+    compactAtPressure: 0.9,
+    keepLast: 80,
+    updatedAt: 0,
+  };
+}
+
+function buildCompactionSummaryContext(messages: MessageRecord[]): Context {
+  const transcript = renderCompactionTranscriptWindow(messages, COMPACTION_SUMMARY_WINDOW_CHARS);
+  return {
+    systemPrompt: [
+      "Summarize a compacted GSV process conversation segment.",
+      "Return concise markdown only.",
+      "Preserve facts needed to continue the conversation: user goals, decisions, constraints, tool results, process events, files, ids, and unresolved next steps.",
+      "Do not mention that you are an AI or that you summarized the transcript.",
+    ].join(" "),
+    messages: [
+      {
+        role: "user",
+        content: [
+          "Conversation segment JSONL:",
+          transcript || "(no messages)",
+          "",
+          "Write the replacement summary that will remain visible in the live process conversation.",
+        ].join("\n"),
+        timestamp: Date.now(),
+      },
+    ],
+  };
+}
+
+function renderCompactionTranscriptWindow(messages: MessageRecord[], maxChars: number): string {
+  const lines = messages.map((message) => JSON.stringify(serializeArchivedMessage(message)));
+  const transcript = lines.join("\n");
+  if (transcript.length <= maxChars) {
+    return transcript;
+  }
+
+  const omitted = "\n... middle messages omitted for summary budget ...\n";
+  const headBudget = Math.floor((maxChars - omitted.length) * 0.35);
+  const tailBudget = Math.max(0, maxChars - omitted.length - headBudget);
+  return `${transcript.slice(0, headBudget).trimEnd()}${omitted}${transcript.slice(-tailBudget).trimStart()}`;
 }
 
 export class Process extends Host<Env> {
@@ -624,9 +700,29 @@ export class Process extends Host<Env> {
             (frame.args ?? {}) as ProcConversationResetArgs,
           );
           break;
+        case "proc.conversation.policy.get":
+          data = this.handleConversationPolicyGet(
+            (frame.args ?? {}) as ProcConversationPolicyGetArgs,
+          );
+          break;
+        case "proc.conversation.policy.set":
+          data = await this.handleConversationPolicySet(
+            (frame.args ?? {}) as ProcConversationPolicySetArgs,
+          );
+          break;
         case "proc.conversation.compact":
           data = await this.handleConversationCompact(
             (frame.args ?? {}) as ProcConversationCompactArgs,
+          );
+          break;
+        case "proc.conversation.fork":
+          data = await this.handleConversationFork(
+            (frame.args ?? {}) as ProcConversationForkArgs,
+          );
+          break;
+        case "proc.conversation.segment.read":
+          data = await this.handleConversationSegmentRead(
+            (frame.args ?? {}) as ProcConversationSegmentReadArgs,
           );
           break;
         case "proc.conversation.segments":
@@ -1109,14 +1205,107 @@ export class Process extends Host<Env> {
     };
   }
 
+  private handleConversationPolicyGet(
+    args: ProcConversationPolicyGetArgs,
+  ): ProcConversationPolicyGetResult {
+    const conversationId = normalizeConversationId(args.conversationId);
+    this.store.ensureConversation(conversationId);
+    return {
+      ok: true,
+      pid: this.pid,
+      policy: this.getConversationContextPolicy(conversationId),
+    };
+  }
+
+  private async handleConversationPolicySet(
+    args: ProcConversationPolicySetArgs,
+  ): Promise<ProcConversationPolicySetResult> {
+    const conversationId = normalizeConversationId(args.conversationId);
+    this.store.ensureConversation(conversationId);
+    const existing = this.getConversationContextPolicy(conversationId);
+    const overflow = args.overflow ?? existing.overflow;
+    if (!isConversationOverflowPolicy(overflow)) {
+      return { ok: false, error: "proc.conversation.policy.set overflow must be manual, auto-compact, or fail" };
+    }
+    const compactAtPressure = args.compactAtPressure ?? existing.compactAtPressure;
+    if (
+      typeof compactAtPressure !== "number" ||
+      !Number.isFinite(compactAtPressure) ||
+      compactAtPressure <= 0 ||
+      compactAtPressure > 1
+    ) {
+      return { ok: false, error: "proc.conversation.policy.set compactAtPressure must be > 0 and <= 1" };
+    }
+    const keepLast = args.keepLast ?? existing.keepLast;
+    if (!isNonNegativeInteger(keepLast)) {
+      return { ok: false, error: "proc.conversation.policy.set keepLast must be a non-negative integer" };
+    }
+
+    const policy: ProcConversationContextPolicy = {
+      conversationId,
+      overflow,
+      compactAtPressure,
+      keepLast,
+      updatedAt: Date.now(),
+    };
+    this.store.setValue(conversationPolicyKey(conversationId), JSON.stringify(policy));
+    await this.emitProcessLifecycle({
+      event: "conversation.policy",
+      pid: this.pid,
+      conversationId,
+      policy,
+    });
+    return {
+      ok: true,
+      pid: this.pid,
+      policy,
+    };
+  }
+
+  private getConversationContextPolicy(conversationId: string): ProcConversationContextPolicy {
+    const normalizedConversationId = normalizeConversationId(conversationId);
+    const fallback = defaultConversationPolicy(normalizedConversationId);
+    const raw = this.store.getValue(conversationPolicyKey(normalizedConversationId));
+    if (!raw) {
+      return fallback;
+    }
+    try {
+      const parsed = JSON.parse(raw) as Partial<ProcConversationContextPolicy>;
+      const overflow = parsed.overflow;
+      const compactAtPressure = parsed.compactAtPressure;
+      const keepLast = parsed.keepLast;
+      return {
+        conversationId: normalizedConversationId,
+        overflow: isConversationOverflowPolicy(overflow) ? overflow : fallback.overflow,
+        compactAtPressure:
+          typeof compactAtPressure === "number" &&
+          Number.isFinite(compactAtPressure) &&
+          compactAtPressure > 0 &&
+          compactAtPressure <= 1
+            ? compactAtPressure
+            : fallback.compactAtPressure,
+        keepLast: isNonNegativeInteger(keepLast) ? keepLast : fallback.keepLast,
+        updatedAt: typeof parsed.updatedAt === "number" && Number.isFinite(parsed.updatedAt)
+          ? parsed.updatedAt
+          : fallback.updatedAt,
+      };
+    } catch {
+      return fallback;
+    }
+  }
+
   private async handleConversationCompact(
     args: ProcConversationCompactArgs,
   ): Promise<ProcConversationCompactResult> {
     const pid = this.pid;
     const conversationId = normalizeConversationId(args.conversationId);
-    const summary = normalizeRequiredText(args.summary);
-    if (!summary) {
-      return { ok: false, error: "proc.conversation.compact requires summary" };
+    const explicitSummary = normalizeOptionalString(args.summary);
+    const generateSummary = args.generateSummary === true;
+    if (!explicitSummary && !generateSummary) {
+      return { ok: false, error: "proc.conversation.compact requires summary or generateSummary" };
+    }
+    if (explicitSummary && generateSummary) {
+      return { ok: false, error: "proc.conversation.compact accepts either summary or generateSummary, not both" };
     }
 
     const hasKeepLast = args.keepLast !== undefined;
@@ -1143,6 +1332,15 @@ export class Process extends Host<Env> {
     });
     if (selected.length === 0) {
       return { ok: false, error: "No conversation messages selected for compaction" };
+    }
+    let summary = explicitSummary;
+    if (!summary) {
+      try {
+        summary = await this.generateConversationCompactionSummary(selected);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return { ok: false, error: `Failed to generate compaction summary: ${message}` };
+      }
     }
 
     const fromMessageId = selected[0].id;
@@ -1182,6 +1380,17 @@ export class Process extends Host<Env> {
       summaryMessageId,
     });
 
+    await this.emitProcessLifecycle({
+      event: "conversation.compacted",
+      pid,
+      conversationId,
+      generation: conversation.generation,
+      segment: this.toProcConversationSegment(segment),
+      archivedMessages: selected.length,
+      archivedTo,
+      summaryMessageId,
+    });
+
     return {
       ok: true,
       pid,
@@ -1190,6 +1399,235 @@ export class Process extends Host<Env> {
       archivedMessages: selected.length,
       archivedTo,
       summaryMessageId,
+    };
+  }
+
+  private async generateConversationCompactionSummary(messages: MessageRecord[]): Promise<string> {
+    const config = await this.resolveCheckpointConfig();
+    if (!config) {
+      throw new Error("AI config unavailable");
+    }
+
+    const generated = await this.generation.generateText({
+      purpose: "compaction.summary",
+      config,
+      context: buildCompactionSummaryContext(messages),
+      sessionAffinityKey: `${this.pid}:compaction`,
+    });
+    const summary = generated.trim();
+    if (!summary) {
+      throw new Error("summary generation returned empty text");
+    }
+    return summary;
+  }
+
+  private async handleConversationFork(
+    args: ProcConversationForkArgs,
+  ): Promise<ProcConversationForkResult> {
+    const pid = this.pid;
+    const sourceConversationId = normalizeConversationId(args.conversationId);
+    const segmentId = normalizeRequiredText(args.segmentId);
+    if (!segmentId) {
+      return { ok: false, error: "proc.conversation.fork requires segmentId" };
+    }
+
+    const segment = this.store.getConversationSegment(sourceConversationId, segmentId);
+    if (!segment) {
+      return { ok: false, error: `Conversation segment not found: ${segmentId}` };
+    }
+
+    const targetConversationId = normalizeConversationId(
+      args.targetConversationId ?? crypto.randomUUID(),
+    );
+    const existingTarget = this.store.getConversation(targetConversationId);
+    if (existingTarget && this.store.messageCount(targetConversationId) > 0) {
+      return { ok: false, error: `Target conversation already has messages: ${targetConversationId}` };
+    }
+
+    let archivedMessages: ArchivedMessageRecord[];
+    try {
+      archivedMessages = await this.readArchivedMessageRecords(segment.archivePath);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, error: `Failed to read segment archive: ${message}` };
+    }
+    const includeLiveSuffix = args.includeLiveSuffix !== false;
+    const suffixMessages = includeLiveSuffix
+      ? this.store.getMessagesForGenerationAfter({
+          conversationId: sourceConversationId,
+          generation: segment.generation,
+          afterMessageId: segment.toMessageId,
+          throughCreatedAt: segment.createdAt,
+        })
+      : [];
+
+    const { conversation } = this.store.openConversation({
+      conversationId: targetConversationId,
+      title: normalizeOptionalString(args.title) ??
+        `Fork of ${sourceConversationId} at ${segment.id.slice(0, 8)}`,
+    });
+    const targetGeneration = conversation.generation;
+    let restoredMessages = 0;
+
+    for (const archived of archivedMessages) {
+      this.appendRestoredArchivedMessage(archived, targetConversationId, targetGeneration);
+      restoredMessages += 1;
+    }
+
+    for (const message of suffixMessages) {
+      this.store.appendMessage(message.role, message.content, {
+        conversationId: targetConversationId,
+        generation: targetGeneration,
+        toolCalls: message.toolCalls ?? undefined,
+        toolCallId: message.toolCallId ?? undefined,
+        media: message.media ?? undefined,
+        createdAt: message.createdAt,
+      });
+      restoredMessages += 1;
+    }
+
+    await this.emitProcessLifecycle({
+      event: "conversation.forked",
+      pid,
+      sourceConversationId,
+      targetConversationId,
+      segment: this.toProcConversationSegment(segment),
+      restoredMessages,
+      includedLiveSuffix: includeLiveSuffix,
+    });
+
+    return {
+      ok: true,
+      pid,
+      sourceConversationId,
+      targetConversation: this.toProcConversation(this.store.getConversation(targetConversationId) ?? conversation),
+      segment: this.toProcConversationSegment(segment),
+      restoredMessages,
+      includedLiveSuffix: includeLiveSuffix,
+    };
+  }
+
+  private async emitProcessLifecycle(payload: Record<string, unknown>): Promise<void> {
+    await this.sendSignal("process.lifecycle", {
+      timestamp: Date.now(),
+      ...payload,
+    }).catch((error) => {
+      console.warn(
+        `[Process] Failed to emit process.lifecycle for ${this.pid}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    });
+  }
+
+  private appendRestoredArchivedMessage(
+    message: ArchivedMessageRecord,
+    conversationId: string,
+    generation: number,
+  ): number {
+    const toolCalls = message.role === "assistant"
+      ? stringifyAssistantMessageMeta({
+          toolCalls: message.toolCalls,
+          thinking: message.thinking,
+        })
+      : message.toolCalls
+        ? JSON.stringify(message.toolCalls)
+        : undefined;
+    return this.store.appendMessage(message.role, message.content, {
+      conversationId,
+      generation,
+      toolCalls,
+      toolCallId: message.toolCallId,
+      media: message.media === undefined ? undefined : JSON.stringify(message.media),
+      createdAt: message.createdAt,
+    });
+  }
+
+  private async handleConversationSegmentRead(
+    args: ProcConversationSegmentReadArgs,
+  ): Promise<ProcConversationSegmentReadResult> {
+    const conversationId = normalizeConversationId(args.conversationId);
+    const segmentId = normalizeRequiredText(args.segmentId);
+    if (!segmentId) {
+      return { ok: false, error: "proc.conversation.segment.read requires segmentId" };
+    }
+    if (args.offset !== undefined && !isNonNegativeInteger(args.offset)) {
+      return { ok: false, error: "proc.conversation.segment.read offset must be a non-negative integer" };
+    }
+    if (args.limit !== undefined && !isPositiveInteger(args.limit)) {
+      return { ok: false, error: "proc.conversation.segment.read limit must be a positive integer" };
+    }
+
+    const segment = this.store.getConversationSegment(conversationId, segmentId);
+    if (!segment) {
+      return { ok: false, error: `Conversation segment not found: ${segmentId}` };
+    }
+
+    let archivedMessages: ArchivedMessageRecord[];
+    try {
+      archivedMessages = await this.readArchivedMessageRecords(segment.archivePath);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, error: `Failed to read segment archive: ${message}` };
+    }
+
+    const offset = args.offset ?? 0;
+    const limit = Math.min(args.limit ?? 200, 500);
+    const page = archivedMessages.slice(offset, offset + limit);
+    const messages = page.map((message) => this.toProcHistoryMessageFromArchive(message));
+
+    return {
+      ok: true,
+      pid: this.pid,
+      conversationId,
+      segment: this.toProcConversationSegment(segment),
+      messages,
+      messageCount: archivedMessages.length,
+      truncated: offset + messages.length < archivedMessages.length,
+    };
+  }
+
+  private toProcHistoryMessageFromArchive(message: ArchivedMessageRecord): ProcHistoryMessage {
+    if (message.role === "toolResult") {
+      return {
+        role: message.role,
+        content: {
+          toolName: "unknown",
+          isError: false,
+          toolCallId: message.toolCallId ?? null,
+          output: message.content,
+        },
+        timestamp: message.createdAt,
+      };
+    }
+
+    if (message.role === "assistant") {
+      return {
+        role: message.role,
+        content: {
+          text: message.content,
+          thinking: message.thinking ?? [],
+          toolCalls: message.toolCalls ?? [],
+        },
+        timestamp: message.createdAt,
+      };
+    }
+
+    if (message.role === "user" && message.media !== undefined) {
+      return {
+        role: message.role,
+        content: {
+          text: message.content,
+          media: message.media,
+        },
+        timestamp: message.createdAt,
+      };
+    }
+
+    return {
+      role: message.role,
+      content: message.content,
+      timestamp: message.createdAt,
     };
   }
 
@@ -1948,6 +2386,21 @@ export class Process extends Host<Env> {
     });
   }
 
+  private async readArchivedMessageRecords(archivePath: string): Promise<ArchivedMessageRecord[]> {
+    const key = archivePath.replace(/^\/+/, "");
+    const object = await this.env.STORAGE.get(key);
+    if (!object) {
+      throw new Error(`archive not found: ${archivePath}`);
+    }
+
+    const jsonl = await gunzip(await object.arrayBuffer());
+    return jsonl
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .map((line) => parseArchivedMessageRecord(JSON.parse(line)));
+  }
+
   async dispatchSyscall(
     runId: string,
     id: string,
@@ -2687,6 +3140,47 @@ function serializeArchivedMessage(message: MessageRecord): Record<string, unknow
   };
 }
 
+function parseArchivedMessageRecord(value: unknown): ArchivedMessageRecord {
+  if (!value || typeof value !== "object") {
+    throw new Error("invalid archived message record");
+  }
+  const record = value as Record<string, unknown>;
+  const role = parseArchivedMessageRole(record.role);
+  const content = typeof record.content === "string" ? record.content : "";
+  const toolCallId = typeof record.tool_call_id === "string" && record.tool_call_id.trim().length > 0
+    ? record.tool_call_id
+    : undefined;
+  const createdAt = typeof record.ts === "number" && Number.isFinite(record.ts)
+    ? record.ts
+    : undefined;
+
+  return {
+    role,
+    content,
+    toolCalls: Array.isArray(record.tool_calls)
+      ? record.tool_calls as ToolCall[]
+      : undefined,
+    thinking: Array.isArray(record.thinking)
+      ? record.thinking as ThinkingContent[]
+      : undefined,
+    toolCallId,
+    media: record.media,
+    createdAt,
+  };
+}
+
+function parseArchivedMessageRole(value: unknown): MessageRole {
+  if (
+    value === "user" ||
+    value === "assistant" ||
+    value === "system" ||
+    value === "toolResult"
+  ) {
+    return value;
+  }
+  throw new Error(`invalid archived message role: ${String(value)}`);
+}
+
 function formatGenerationFailure(message: string): string {
   const normalized = message.trim();
   if (!normalized) {
@@ -2700,6 +3194,13 @@ async function gzip(input: string): Promise<ArrayBuffer> {
     .stream()
     .pipeThrough(new CompressionStream("gzip"));
   return new Response(stream).arrayBuffer();
+}
+
+async function gunzip(input: ArrayBuffer): Promise<string> {
+  const stream = new Blob([input])
+    .stream()
+    .pipeThrough(new DecompressionStream("gzip"));
+  return new Response(stream).text();
 }
 
 function uint8ArrayToBase64(data: Uint8Array): string {

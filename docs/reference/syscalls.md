@@ -423,7 +423,11 @@ Runtime behavior:
 | `proc.conversation.get` | Process DO | Returns one conversation record for `conversationId` or `default`; unknown conversations return `conversation: null`. |
 | `proc.conversation.close` | Process DO | Marks a conversation closed without deleting history. Future `proc.send` calls to that conversation fail until it is reopened. |
 | `proc.conversation.reset` | Process DO | Archives the selected conversation by default, clears its active messages and queued/runtime state, increments its generation, and reopens it. Other conversations are left intact. |
-| `proc.conversation.compact` | Process DO | Explicitly archives an old prefix of a conversation, inserts a visible system summary marker at the prefix boundary, and records a `compaction` segment. Requires caller-provided `summary` and exactly one selector: `keepLast` or `throughMessageId`. |
+| `proc.conversation.policy.get` | Process DO | Returns the visible context-overflow policy for `conversationId` or `default`. Default policy is manual compaction at 90% pressure with 80 live messages retained if auto-compaction is later enabled. |
+| `proc.conversation.policy.set` | Process DO | Sets the visible context-overflow policy. Supported `overflow` values are `manual`, `auto-compact`, and `fail`; automatic execution is a policy-controlled behavior, not a hidden sweep. |
+| `proc.conversation.compact` | Process DO | Explicitly archives an old prefix of a conversation, inserts a visible system summary marker at the prefix boundary, and records a `compaction` segment. Requires either caller-provided `summary` or `generateSummary: true`, plus exactly one selector: `keepLast` or `throughMessageId`. |
+| `proc.conversation.fork` | Process DO | Restores a compacted segment into a new process-local conversation. By default it restores the archived prefix plus the live suffix that existed at the compaction boundary. |
+| `proc.conversation.segment.read` | Process DO | Reads paged messages from a compacted segment archive without restoring those messages into the live conversation. |
 | `proc.conversation.segments` | Process DO | Lists recorded lifecycle segments for `conversationId` or `default`, including archive paths and summary marker ids. |
 | `proc.reset` | Process DO | Checkpoints workspace, archives every non-empty conversation under `/var/sessions/<username>/<pid>/<archiveId>/`, clears active execution state, queues, process media, and all conversation messages, then increments conversation generations. |
 | `proc.ipc.deliver` | Process DO direct path | Kernel-only through public dispatch. Delivers the validated IPC envelope from the kernel into the target conversation. |
@@ -596,9 +600,29 @@ type ProcessSyscalls = {
     result: { ok: true; pid: string; conversationId: string; generation: number; archivedMessages: number; archivedTo?: string } | OperationError;
   };
 
+  "proc.conversation.policy.get": {
+    args: { pid?: string; conversationId?: string };
+    result: { ok: true; pid: string; policy: ProcConversationContextPolicy } | OperationError;
+  };
+
+  "proc.conversation.policy.set": {
+    args: { pid?: string; conversationId?: string; overflow?: "manual" | "auto-compact" | "fail"; compactAtPressure?: number; keepLast?: number };
+    result: { ok: true; pid: string; policy: ProcConversationContextPolicy } | OperationError;
+  };
+
   "proc.conversation.compact": {
-    args: { pid?: string; conversationId?: string; summary: string; keepLast?: number; throughMessageId?: number };
+    args: { pid?: string; conversationId?: string; summary?: string; generateSummary?: boolean; keepLast?: number; throughMessageId?: number };
     result: { ok: true; pid: string; conversationId: string; segment: ProcConversationSegment; archivedMessages: number; archivedTo: string; summaryMessageId: number } | OperationError;
+  };
+
+  "proc.conversation.fork": {
+    args: { pid?: string; conversationId?: string; segmentId: string; targetConversationId?: string; title?: string; includeLiveSuffix?: boolean };
+    result: { ok: true; pid: string; sourceConversationId: string; targetConversation: ProcConversation; segment: ProcConversationSegment; restoredMessages: number; includedLiveSuffix: boolean } | OperationError;
+  };
+
+  "proc.conversation.segment.read": {
+    args: { pid?: string; conversationId?: string; segmentId: string; limit?: number; offset?: number };
+    result: { ok: true; pid: string; conversationId: string; segment: ProcConversationSegment; messages: ProcHistoryMessage[]; messageCount: number; truncated?: boolean } | OperationError;
   };
 
   "proc.conversation.segments": {
