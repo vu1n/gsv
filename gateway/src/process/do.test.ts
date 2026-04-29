@@ -247,6 +247,95 @@ describe("Process DO — mechanical", () => {
         }),
       });
     });
+
+    it("emits and persists context pressure for a completed model turn", async () => {
+      const pid = "mech-context-pressure";
+      const stub = await initProcess(pid, ROOT_IDENTITY);
+
+      const emitted = await runInDurableObject(stub, async (instance: Process) => {
+        const process = instance as any;
+        const emitted: Array<{ signal: string; payload: unknown }> = [];
+        process.sendSignal = async (signal: string, payload: unknown) => {
+          emitted.push({ signal, payload });
+        };
+        process.generation = {
+          async generate() {
+            return {
+              role: "assistant",
+              content: [{ type: "text", text: "done" }],
+              api: "test",
+              provider: "test",
+              model: "test",
+              usage: {
+                input: 1234,
+                output: 56,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 1290,
+                cost: {
+                  input: 0,
+                  output: 0,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  total: 0,
+                },
+              },
+              stopReason: "stop",
+              timestamp: Date.now(),
+            };
+          },
+          async generateText() {
+            return "done";
+          },
+        };
+
+        process.store.appendMessage("user", "measure context");
+        process.currentRun = {
+          runId: "run-context-pressure",
+          queued: false,
+          conversationId: "default",
+          config: {
+            profile: "task",
+            provider: "workers-ai",
+            model: "@cf/nvidia/nemotron-3-120b-a12b",
+            apiKey: "",
+            reasoning: "off",
+            maxTokens: 8192,
+            contextWindowTokens: 256000,
+            contextWindowSource: "config",
+            maxContextBytes: 32768,
+          },
+          tools: [],
+          devices: [],
+          systemPrompt: "Test system prompt.",
+          approvalPolicy: { default: "auto", rules: [] },
+        };
+        await process.continueAgentLoop("run-context-pressure");
+        return emitted;
+      });
+
+      const history = (await stub.recvFrame(makeReq("proc.history", {}))) as ResponseOkFrame;
+      expect(history.ok).toBe(true);
+      expect((history.data as any).context).toMatchObject({
+        conversationId: "default",
+        provider: "workers-ai",
+        model: "@cf/nvidia/nemotron-3-120b-a12b",
+        contextWindowTokens: 256000,
+        inputTokens: 1234,
+        outputTokens: 56,
+        totalTokens: 1290,
+        source: "provider",
+      });
+
+      const contextSignals = (emitted as Array<{ signal: string; payload: any }>)
+        .filter((entry) => entry.signal === "process.context");
+      expect(contextSignals).toHaveLength(2);
+      expect(contextSignals[0].payload.context.source).toBe("estimate");
+      expect(contextSignals[1].payload.context).toMatchObject({
+        inputTokens: 1234,
+        source: "provider",
+      });
+    });
   });
 
   describe("proc.send", () => {

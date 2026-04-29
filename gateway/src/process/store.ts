@@ -10,7 +10,7 @@
 
 import type { SyscallName } from "../syscalls";
 import { SYSCALL_TOOL_NAMES } from "../syscalls/constants";
-import type { ProcContextFile } from "../syscalls/proc";
+import type { ProcContextFile, ProcContextState } from "../syscalls/proc";
 import type {
   Message,
   UserMessage,
@@ -425,6 +425,7 @@ export class ProcessStore {
   clearAllMessages(): number {
     const count = this.totalMessageCount();
     this.sql.exec("DELETE FROM messages");
+    this.deleteAllContextStates();
     return count;
   }
 
@@ -897,6 +898,7 @@ export class ProcessStore {
     const normalizedConversationId = normalizeConversationId(conversationId);
     const count = this.messageCount(normalizedConversationId);
     this.sql.exec("DELETE FROM messages WHERE conversation_id = ?", normalizedConversationId);
+    this.deleteContextState(normalizedConversationId);
     return count;
   }
 
@@ -922,6 +924,34 @@ export class ProcessStore {
 
   deleteValue(key: string): void {
     this.sql.exec("DELETE FROM process_kv WHERE key = ?", key);
+  }
+
+  getContextState(conversationId: string = DEFAULT_CONVERSATION_ID): ProcContextState | null {
+    const raw = this.getValue(contextStateKey(normalizeConversationId(conversationId)));
+    if (!raw) {
+      return null;
+    }
+    try {
+      const parsed = JSON.parse(raw) as ProcContextState;
+      return parsed && typeof parsed.conversationId === "string" ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  setContextState(state: ProcContextState): void {
+    this.setValue(
+      contextStateKey(normalizeConversationId(state.conversationId)),
+      JSON.stringify(state),
+    );
+  }
+
+  deleteContextState(conversationId: string = DEFAULT_CONVERSATION_ID): void {
+    this.deleteValue(contextStateKey(normalizeConversationId(conversationId)));
+  }
+
+  deleteAllContextStates(): void {
+    this.sql.exec("DELETE FROM process_kv WHERE key LIKE 'contextState:%'");
   }
 
   getProcessContextFiles(): ProcContextFile[] {
@@ -1238,6 +1268,10 @@ function normalizeNullableString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0
     ? value.trim()
     : null;
+}
+
+function contextStateKey(conversationId: string): string {
+  return `contextState:${conversationId}`;
 }
 
 function buildFallbackUserContent(

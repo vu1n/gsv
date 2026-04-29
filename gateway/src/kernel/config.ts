@@ -39,6 +39,8 @@ export const SYSTEM_CONFIG_DEFAULTS: Record<string, string> = {
   "config/ai/reasoning": "off",
   // Max tokens for LLM responses (model-dependent upper bound).
   "config/ai/max_tokens": "8192",
+  // Fallback context window for providers that are not in the local model registry.
+  "config/ai/context_window_tokens": "256000",
   // Profile-specific prompt context. These files are assembled in lexical
   // order and are the authoritative runtime instructions for each profile.
   "config/ai/profile/init/context.d/00-role.md":

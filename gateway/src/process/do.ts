@@ -56,6 +56,7 @@ import type {
   ProcConversationSegmentsArgs,
   ProcConversationSegmentsResult,
   ProcArchiveEntry,
+  ProcContextState,
   ProcResetResult,
   ProcKillResult,
   ProcSpawnAssignment,
@@ -99,6 +100,10 @@ import {
   parseStoredProcessMedia,
   storeIncomingProcessMedia,
 } from "./media";
+import {
+  buildProcContextState,
+  estimateContextInputTokens,
+} from "./context-pressure";
 import { assembleSystemPrompt } from "./context";
 import { sendFrameToKernel } from "../shared/utils";
 import {
@@ -1021,6 +1026,7 @@ export class Process extends Host<Env> {
       messageCount: total,
       truncated: (args.offset ?? 0) + messages.length < total,
       pendingHil: this.toProcHilRequest(this.store.getPendingHil()),
+      context: this.store.getContextState(conversationId),
     };
   }
 
@@ -1538,6 +1544,11 @@ export class Process extends Host<Env> {
       tools: tools.length > 0 ? tools : undefined,
     };
 
+    await this.updateContextState(runId, conversationId, run.config!, context);
+    if (this.handleRunStopped(runId)) {
+      return;
+    }
+
     // Step 6: Call LLM
     let response: AssistantMessage;
     try {
@@ -1575,6 +1586,11 @@ export class Process extends Host<Env> {
         return;
       }
       await this.finishRun("chat.error");
+      return;
+    }
+
+    await this.updateContextState(runId, conversationId, run.config!, context, response.usage);
+    if (this.handleRunStopped(runId)) {
       return;
     }
 
@@ -1652,6 +1668,37 @@ export class Process extends Host<Env> {
     console.log(`[Process] Finished run ${runId}`);
 
     this.promoteNextQueuedRun();
+  }
+
+  private async updateContextState(
+    runId: string,
+    conversationId: string,
+    config: AiConfigResult,
+    context: Context,
+    usage?: AssistantMessage["usage"],
+  ): Promise<ProcContextState> {
+    const state = buildProcContextState({
+      conversationId,
+      runId,
+      provider: config.provider,
+      model: config.model,
+      contextWindowTokens: config.contextWindowTokens,
+      maxOutputTokens: config.maxTokens,
+      estimatedInputTokens: estimateContextInputTokens(context),
+      usage,
+    });
+    this.store.setContextState(state);
+    await this.sendSignal("process.context", {
+      pid: this.pid,
+      context: state,
+    }).catch((error) => {
+      console.warn(
+        `[Process] Failed to emit process.context for ${this.pid}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    });
+    return state;
   }
 
   /**

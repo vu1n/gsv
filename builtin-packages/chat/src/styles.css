@@ -179,6 +179,15 @@
       .stage-title-wrap {
         min-width: 0;
         display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: flex-start;
+        gap: 5px;
+      }
+      .stage-title-line {
+        min-width: 0;
+        max-width: 100%;
+        display: flex;
         align-items: baseline;
         gap: 10px;
       }
@@ -197,6 +206,42 @@
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+      }
+      .context-meter {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        min-width: 180px;
+        max-width: min(420px, 52vw);
+      }
+      .context-meter[hidden] {
+        display: none;
+      }
+      .context-meter-track {
+        position: relative;
+        display: block;
+        width: 128px;
+        height: 5px;
+        border-radius: 999px;
+        overflow: hidden;
+        background: rgba(25, 28, 30, 0.12);
+        flex: 0 0 auto;
+      }
+      .context-meter-fill {
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 0;
+        border-radius: inherit;
+        background: #2f8f5b;
+      }
+      .context-meter.is-warn .context-meter-fill { background: #c88923; }
+      .context-meter.is-critical .context-meter-fill,
+      .context-meter.is-full .context-meter-fill { background: #bf4d3f; }
+      .context-meter.is-unknown .context-meter-fill { background: #7c8792; }
+      .context-meter-label {
+        color: var(--text-muted);
+        font-size: 11px;
+        white-space: nowrap;
       }
       .stage-actions {
         display: flex;

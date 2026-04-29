@@ -28,8 +28,16 @@ const CHAT_LAYOUT = `
     <section class="stage">
       <header class="stage-head">
         <div class="stage-title-wrap">
-          <h1 class="stage-title" id="active-thread-title">New conversation</h1>
-          <p class="stage-meta" id="active-thread-meta">Send a message to start a thread or reopen one from the left.</p>
+          <div class="stage-title-line">
+            <h1 class="stage-title" id="active-thread-title">New conversation</h1>
+            <p class="stage-meta" id="active-thread-meta">Send a message to start a thread or reopen one from the left.</p>
+          </div>
+          <div class="context-meter" id="context-meter" hidden>
+            <span class="context-meter-track" aria-hidden="true">
+              <span class="context-meter-fill" data-context-fill></span>
+            </span>
+            <span class="context-meter-label" data-context-label></span>
+          </div>
         </div>
         <div class="stage-actions">
           <button type="button" class="btn btn-quiet icon-btn" id="open-files" title="Open Files" aria-label="Open Files">
@@ -619,6 +627,55 @@ function setActiveThreadContext(context) {
   return normalized;
 }
 
+function normalizeContextState(value) {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  const level = ["ok", "warn", "critical", "full", "unknown"].includes(record.level)
+    ? record.level
+    : "unknown";
+  return {
+    conversationId: asString(record.conversationId) || "default",
+    provider: asString(record.provider),
+    model: asString(record.model),
+    contextWindowTokens: normalizePositiveNumber(record.contextWindowTokens),
+    maxOutputTokens: normalizePositiveNumber(record.maxOutputTokens) || 0,
+    estimatedInputTokens: normalizePositiveNumber(record.estimatedInputTokens) || 0,
+    inputTokens: normalizePositiveNumber(record.inputTokens) || 0,
+    outputTokens: normalizePositiveNumber(record.outputTokens),
+    totalTokens: normalizePositiveNumber(record.totalTokens),
+    availableInputTokens: normalizePositiveNumber(record.availableInputTokens),
+    pressure: normalizePressure(record.pressure),
+    level,
+    source: record.source === "provider" ? "provider" : "estimate",
+    updatedAt: normalizeTimestampMs(record.updatedAt) || Date.now(),
+  };
+}
+
+function normalizePositiveNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.trunc(value)
+    : null;
+}
+
+function normalizePressure(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function applyContextSignal(payload) {
+  const record = asRecord(payload);
+  if (!record) {
+    return;
+  }
+  const pid = asString(record.pid);
+  if (pid && pid !== getActivePid()) {
+    return;
+  }
+  contextState = normalizeContextState(record.context ?? record);
+  renderStatus();
+}
+
 function deriveThreadLabel(message) {
   const firstLine = String(message ?? "")
     .split("\\n")
@@ -849,6 +906,7 @@ const elements = {
   refreshThreads: document.getElementById("refresh-threads"),
   activeThreadTitle: document.getElementById("active-thread-title"),
   activeThreadMeta: document.getElementById("active-thread-meta"),
+  contextMeter: document.getElementById("context-meter"),
   connectionPill: document.getElementById("connection-pill"),
   chatLog: document.getElementById("chat-log"),
   composeForm: document.getElementById("chat-compose-form"),
@@ -880,6 +938,7 @@ let abortBusy = false;
 let suppressNextAbortedComplete = false;
 let pendingHilRequest = null;
 let hilBusy = false;
+let contextState = null;
 
 function fallbackProfiles() {
   return [
@@ -1404,6 +1463,7 @@ function renderStatus() {
           : activeThreadContext.cwd)
       : draftConversationMeta();
   }
+  renderContextMeter();
   const interactive = client && client.isConnected() && !hostError;
   if (elements.chatInput) {
     elements.chatInput.disabled = !interactive || messageBusy;
@@ -1429,6 +1489,58 @@ function renderStatus() {
   if (elements.newThreadProfile) {
     elements.newThreadProfile.disabled = !interactive || listNewConversationProfiles().length === 0;
   }
+}
+
+function renderContextMeter() {
+  const meter = elements.contextMeter;
+  if (!meter) {
+    return;
+  }
+  const fill = meter.querySelector("[data-context-fill]");
+  const label = meter.querySelector("[data-context-label]");
+  if (!activeThreadContext || !contextState) {
+    meter.hidden = true;
+    meter.title = "";
+    return;
+  }
+  const level = contextState.level || "unknown";
+  meter.hidden = false;
+  meter.className = "context-meter is-" + level;
+
+  const pressure = contextState.pressure;
+  const displayPressure = pressure === null ? 0 : Math.max(0, Math.min(1, pressure));
+  if (fill instanceof HTMLElement) {
+    fill.style.width = Math.round(displayPressure * 100) + "%";
+  }
+
+  const text = formatContextPressure(contextState);
+  if (label) {
+    label.textContent = text;
+  }
+  meter.title = text + " · " + (contextState.source === "provider" ? "provider usage" : "estimated");
+}
+
+function formatContextPressure(state) {
+  if (!state.availableInputTokens || state.pressure === null) {
+    return "context unknown";
+  }
+  const percent = Math.round(state.pressure * 100);
+  return percent + "% context · " +
+    formatCompactTokens(state.inputTokens) + "/" +
+    formatCompactTokens(state.availableInputTokens);
+}
+
+function formatCompactTokens(value) {
+  if (!value || !Number.isFinite(value)) {
+    return "0";
+  }
+  if (value >= 1000000) {
+    return (value / 1000000).toFixed(value >= 10000000 ? 0 : 1).replace(/\.0$/, "") + "M";
+  }
+  if (value >= 1000) {
+    return (value / 1000).toFixed(value >= 10000 ? 0 : 1).replace(/\.0$/, "") + "k";
+  }
+  return String(Math.round(value));
 }
 
 async function loadProfiles() {
@@ -1548,6 +1660,7 @@ async function loadHistory() {
   }
   const pid = getActivePid();
   if (!pid) {
+    contextState = null;
     setLogRows([{ role: "system", text: "No thread selected. Send a message to start a new thread.", timestamp: Date.now() }], { forceBottom: true });
     renderStatus();
     return;
@@ -1565,6 +1678,7 @@ async function loadHistory() {
     }
     if (page === 0) {
       nextPendingHil = normalizeHilRequest(result.pendingHil);
+      contextState = normalizeContextState(result.context);
     }
     merged.push(...result.messages);
     messageCount = result.messageCount;
@@ -1632,6 +1746,7 @@ function activateThreadContext(context) {
     return;
   }
   activeThreadContext = normalized;
+  contextState = null;
   renderThreads();
   renderStatus();
   void loadHistory();
@@ -1670,6 +1785,7 @@ async function openThread(workspaceId) {
 
 function resetToNewThread() {
   activeThreadContext = setActiveThreadContext(null);
+  contextState = null;
   if (client && client.isConnected() && typeof client.setActivePid === "function") {
     void client.setActivePid(null);
   }
@@ -1709,6 +1825,7 @@ async function sendMessage() {
         return;
       }
       activeThreadContext = setActiveThreadContext({ pid: spawnResult.pid, workspaceId: spawnResult.workspaceId, cwd: spawnResult.cwd });
+      contextState = null;
       pid = spawnResult.pid;
       void loadThreads();
     }
@@ -1842,6 +1959,7 @@ function adoptPendingTarget() {
       store.delete(WINDOW_ID);
       if (pending) {
         activeThreadContext = setActiveThreadContext(pending);
+        contextState = null;
       }
     }
   } catch {}
@@ -1866,6 +1984,7 @@ function listenForTargetProcess() {
         return;
       }
       activeThreadContext = setActiveThreadContext(next);
+      contextState = null;
       renderThreads();
       renderStatus();
       void loadHistory();
@@ -2001,6 +2120,8 @@ async function boot() {
         if (!messageBusy && pendingAssistantState === null) {
           setPendingAssistantState("thinking");
         }
+      } else if (signal === "process.context") {
+        applyContextSignal(payload);
       } else if (signal === "chat.tool_call") {
         setPendingHilRequest(null);
         setPendingAssistantState("tool");

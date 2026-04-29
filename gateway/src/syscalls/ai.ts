@@ -69,6 +69,8 @@ export type AiConfigResult = {
   apiKey: string;
   reasoning?: string;
   maxTokens: number;
+  contextWindowTokens: number | null;
+  contextWindowSource: "model" | "config" | "unknown";
   profileContextFiles?: Array<{
     name: string;
     text: string;

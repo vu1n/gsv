@@ -417,7 +417,7 @@ Runtime behavior:
 | `proc.abort` | Process DO | Logical cancellation of the active run. Clears pending HIL and current run, emits `chat.complete` with `aborted: true`, and may promote the next queued run. In-flight external work can still resolve later but stale handling guards state. |
 | `proc.hil` | Process DO | Resolves a pending human-in-the-loop request. `approve` dispatches the original syscall; `deny` appends a synthetic error tool result. |
 | `proc.kill` | Process DO | Checkpoints workspace, optionally archives every non-empty conversation under one archive directory, clears active run, tool state, HIL, queue, media, and all conversation messages, then increments conversation generations. Does not remove the kernel process registry entry in normal syscall use. |
-| `proc.history` | Process DO | Returns paged stored messages for `conversationId` or `default`, plus message count, truncation status, timestamps, and pending HIL. Tool results and assistant metadata are expanded into structured content. |
+| `proc.history` | Process DO | Returns paged stored messages for `conversationId` or `default`, plus message count, truncation status, timestamps, pending HIL, and the latest context-pressure state when available. Tool results and assistant metadata are expanded into structured content. |
 | `proc.conversation.open` | Process DO | Creates or reopens a process-local conversation. If `conversationId` is omitted, the Process DO generates one. Optional `title` is trimmed and stored. |
 | `proc.conversation.list` | Process DO | Lists open conversations by default. `includeClosed: true` includes closed conversations. Each record includes generation, status, title, message count, and timestamps. |
 | `proc.conversation.get` | Process DO | Returns one conversation record for `conversationId` or `default`; unknown conversations return `conversation: null`. |
@@ -568,7 +568,7 @@ type ProcessSyscalls = {
 
   "proc.history": {
     args: { pid?: string; conversationId?: string; limit?: number; offset?: number };
-    result: { ok: true; pid: string; conversationId?: string; messages: Array<{ role: "user" | "assistant" | "system" | "toolResult"; content: unknown; timestamp?: number }>; messageCount: number; truncated?: boolean; pendingHil?: ProcHilRequest | null } | OperationError;
+    result: { ok: true; pid: string; conversationId?: string; messages: Array<{ role: "user" | "assistant" | "system" | "toolResult"; content: unknown; timestamp?: number }>; messageCount: number; truncated?: boolean; pendingHil?: ProcHilRequest | null; context?: ProcContextState | null } | OperationError;
   };
 
   "proc.conversation.open": {
@@ -918,7 +918,7 @@ Runtime behavior:
 | Syscall | Handler | Behavior |
 |---|---|---|
 | `ai.tools` | `handleAiTools` | Process-internal. Lists online accessible devices and filters built-in tool definitions by caller capabilities. Routable filesystem and shell tools are wrapped with required `target`; CodeMode is exposed as a process-local programmable tool. |
-| `ai.config` | `handleAiConfig` | Process-internal. Resolves user override then system AI config. Defaults profile to `task`, provider to `workers-ai`, model to `@cf/nvidia/nemotron-3-120b-a12b`, max tokens to 8192, and context budget to 32768 bytes. Package profiles load manifest context files and approval policy. |
+| `ai.config` | `handleAiConfig` | Process-internal. Resolves user override then system AI config. Defaults profile to `task`, provider to `workers-ai`, model to `@cf/nvidia/nemotron-3-120b-a12b`, max tokens to 8192, context window to provider/model metadata or configured fallback, and context budget to 32768 bytes. Package profiles load manifest context files and approval policy. |
 
 External callers cannot normally invoke `ai.*`; these syscalls are exposed to process-originated calls.
 
@@ -931,7 +931,7 @@ type AiSyscalls = {
 
   "ai.config": {
     args: { profile?: AiContextProfile };
-    result: { profile?: AiContextProfile; provider: string; model: string; apiKey: string; reasoning?: string; maxTokens: number; profileContextFiles?: Array<{ name: string; text: string }>; profileApprovalPolicy?: string | null; maxContextBytes: number };
+    result: { profile?: AiContextProfile; provider: string; model: string; apiKey: string; reasoning?: string; maxTokens: number; contextWindowTokens: number | null; contextWindowSource: "model" | "config" | "unknown"; profileContextFiles?: Array<{ name: string; text: string }>; profileApprovalPolicy?: string | null; maxContextBytes: number };
   };
 };
 ```

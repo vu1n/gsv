@@ -193,6 +193,33 @@ export type ProcHistoryMessage = {
   timestamp?: number;
 };
 
+export type ProcContextPressureLevel =
+  | "unknown"
+  | "ok"
+  | "warn"
+  | "critical"
+  | "full";
+
+export type ProcContextUsageSource = "estimate" | "provider";
+
+export type ProcContextState = {
+  conversationId: string;
+  runId?: string;
+  provider: string;
+  model: string;
+  contextWindowTokens: number | null;
+  maxOutputTokens: number;
+  estimatedInputTokens: number;
+  inputTokens: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  availableInputTokens: number | null;
+  pressure: number | null;
+  level: ProcContextPressureLevel;
+  source: ProcContextUsageSource;
+  updatedAt: number;
+};
+
 export type ProcHistoryResult =
   | {
       ok: true;
@@ -202,6 +229,7 @@ export type ProcHistoryResult =
       messageCount: number;
       truncated?: boolean;
       pendingHil?: ProcHilRequest | null;
+      context?: ProcContextState | null;
     }
   | { ok: false; error: string };
 

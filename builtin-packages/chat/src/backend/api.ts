@@ -8,6 +8,7 @@ type AppBinding = {
 
 const CHAT_RUNTIME_SIGNALS = [
   "process.message",
+  "process.context",
   "chat.tool_call",
   "chat.tool_result",
   "chat.text",
