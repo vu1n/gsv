@@ -761,6 +761,7 @@ export class ProcessStore {
       toolCalls?: string;
       toolCallId?: string;
       media?: string;
+      createdAt?: number;
     },
   ): number {
     const conversationId = normalizeConversationId(opts?.conversationId);
@@ -776,7 +777,7 @@ export class ProcessStore {
       opts?.toolCalls ?? null,
       opts?.toolCallId ?? null,
       opts?.media ?? null,
-      Date.now(),
+      opts?.createdAt ?? Date.now(),
     );
 
     const rows = [...this.sql.exec<{ id: number }>("SELECT last_insert_rowid() as id")];

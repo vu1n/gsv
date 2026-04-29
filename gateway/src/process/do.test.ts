@@ -201,6 +201,52 @@ describe("Process DO — mechanical", () => {
         });
       });
     });
+
+    it("emits live process.message signals for scheduled runtime events", async () => {
+      const pid = "mech-schedule-live-message";
+      const stub = await initProcess(pid, ROOT_IDENTITY);
+
+      const result = await runInDurableObject(stub, async (instance: Process) => {
+        const process = instance as any;
+        const emitted: Array<{ signal: string; payload: unknown }> = [];
+        process.sendSignal = async (signal: string, payload: unknown) => {
+          emitted.push({ signal, payload });
+        };
+
+        await instance.recvFrame({
+          type: "sig",
+          signal: "schedule.event",
+          payload: {
+            scheduleId: "sched-1",
+            scheduleName: "nightly",
+            message: "run the nightly check",
+            scheduledAtMs: 1_000,
+            firedAtMs: 2_000,
+          },
+        } as any);
+
+        const messages = process.store.getMessages();
+        return { emitted, messages };
+      });
+
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages[0]).toMatchObject({
+        role: "system",
+      });
+      expect(result.messages[0].content).toContain("Scheduled event `nightly` fired.");
+      expect(result.emitted).toHaveLength(1);
+      expect(result.emitted[0]).toMatchObject({
+        signal: "process.message",
+        payload: expect.objectContaining({
+          pid,
+          conversationId: "default",
+          messageId: result.messages[0].id,
+          role: "system",
+          content: result.messages[0].content,
+          timestamp: result.messages[0].createdAt,
+        }),
+      });
+    });
   });
 
   describe("proc.send", () => {

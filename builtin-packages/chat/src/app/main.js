@@ -1103,6 +1103,47 @@ function applyAssistantSignal(payload) {
   setLogRows(nextRows, { autoScroll: true });
 }
 
+function applyProcessMessageSignal(payload) {
+  const record = asRecord(payload);
+  const pid = asString(record?.pid);
+  if (pid && pid !== getActivePid()) {
+    return;
+  }
+  const conversationId = asString(record?.conversationId) || "default";
+  if (conversationId !== "default") {
+    return;
+  }
+  const content = asString(record?.content) ?? "";
+  if (!content.trim()) {
+    return;
+  }
+  const messageId = asNumber(record?.messageId);
+  if (messageId && logRows.some((row) => row.messageId === messageId)) {
+    return;
+  }
+
+  const role = record?.role === "user" || record?.role === "assistant"
+    ? record.role
+    : "system";
+  const nextRows = logRows.slice();
+  if (
+    nextRows.length === 1
+    && nextRows[0].kind === "message"
+    && nextRows[0].role === "system"
+    && nextRows[0].text === "No messages yet. Send your first prompt."
+  ) {
+    nextRows.pop();
+  }
+  nextRows.push({
+    kind: "message",
+    role,
+    text: formatMessageContent(content),
+    timestamp: asNumber(record?.timestamp) || Date.now(),
+    messageId: messageId ?? null,
+  });
+  setLogRows(nextRows, { autoScroll: true });
+}
+
 function findToolRowIndex(rows, callId) {
   if (!callId) {
     return -1;
@@ -1955,7 +1996,12 @@ async function boot() {
       }
     });
     client.onSignal((signal, payload) => {
-      if (signal === "chat.tool_call") {
+      if (signal === "process.message") {
+        applyProcessMessageSignal(payload);
+        if (!messageBusy && pendingAssistantState === null) {
+          setPendingAssistantState("thinking");
+        }
+      } else if (signal === "chat.tool_call") {
         setPendingHilRequest(null);
         setPendingAssistantState("tool");
         applyToolCallSignal(payload);

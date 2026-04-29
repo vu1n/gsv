@@ -239,6 +239,7 @@ Current role defaults from `buildSignalList()`:
 
 ### User connections
 
+- `process.message`
 - `chat.text`
 - `chat.tool_call`
 - `chat.tool_result`

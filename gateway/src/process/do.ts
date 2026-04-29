@@ -82,6 +82,7 @@ import {
   ProcessStore,
   parseAssistantMessageMeta,
   stringifyAssistantMessageMeta,
+  type MessageRole,
   type MessageRecord,
   type PendingHilRecord,
 } from "./store";
@@ -1356,8 +1357,35 @@ export class Process extends Host<Env> {
     this.schedule(next, "tick", runId);
   }
 
+  private async appendRuntimeMessage(
+    role: Extract<MessageRole, "system">,
+    content: string,
+    opts?: { conversationId?: string },
+  ): Promise<number> {
+    const conversationId = normalizeConversationId(opts?.conversationId);
+    const timestamp = Date.now();
+    const messageId = this.store.appendMessage(role, content, {
+      conversationId,
+      createdAt: timestamp,
+    });
+    try {
+      await this.sendSignal("process.message", {
+        pid: this.pid,
+        conversationId,
+        messageId,
+        role,
+        content,
+        timestamp,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[Process] Failed to emit process.message for ${this.pid}: ${message}`);
+    }
+    return messageId;
+  }
+
   private async handleWatchedSignalTriggered(signal: string, payload: unknown): Promise<void> {
-    this.store.appendMessage("system", formatWatchedSignalMessage(signal, payload), {
+    await this.appendRuntimeMessage("system", formatWatchedSignalMessage(signal, payload), {
       conversationId: DEFAULT_CONVERSATION_ID,
     });
     if (!this.currentRun) {
@@ -1372,7 +1400,7 @@ export class Process extends Host<Env> {
   }
 
   private async handleIpcSignal(signal: string, payload: unknown): Promise<void> {
-    this.store.appendMessage("system", formatIpcReplyMessage(signal, payload), {
+    await this.appendRuntimeMessage("system", formatIpcReplyMessage(signal, payload), {
       conversationId: DEFAULT_CONVERSATION_ID,
     });
     if (!this.currentRun) {
@@ -1391,7 +1419,7 @@ export class Process extends Host<Env> {
       return;
     }
     const conversationId = normalizeConversationId(payload.conversationId);
-    this.store.appendMessage("system", formatScheduleEventMessage(payload), {
+    await this.appendRuntimeMessage("system", formatScheduleEventMessage(payload), {
       conversationId,
     });
     if (!this.currentRun) {
