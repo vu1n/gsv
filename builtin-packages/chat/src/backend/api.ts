@@ -86,6 +86,15 @@ export async function getHistory(kernel: KernelClient, input: unknown) {
   });
 }
 
+export async function listConversations(kernel: KernelClient, input: unknown) {
+  const args = normalizeArgs(input);
+  const pid = normalizePid(args.pid);
+  return kernel.request("proc.conversation.list", {
+    ...(pid ? { pid } : {}),
+    ...(args.includeClosed === true ? { includeClosed: true } : {}),
+  });
+}
+
 export async function compactConversation(kernel: KernelClient, input: unknown) {
   const args = normalizeArgs(input);
   const pid = normalizePid(args.pid);

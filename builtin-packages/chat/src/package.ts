@@ -19,6 +19,7 @@ export default definePackage({
         "proc.history",
         "proc.conversation.compact",
         "proc.conversation.fork",
+        "proc.conversation.list",
         "proc.conversation.segment.read",
         "proc.conversation.segments",
         "proc.profile.list",
@@ -29,7 +30,7 @@ export default definePackage({
     },
   },
   browser: {
-    entry: "./src/app/main.js",
+    entry: "./src/app/main.tsx",
     assets: ["./src/styles.css"],
   },
   backend: {
