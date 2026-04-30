@@ -1078,6 +1078,15 @@ textarea {
   margin-top: 10px;
 }
 
+.codemode-preview {
+  display: grid;
+  gap: 6px;
+}
+
+.codemode-preview p {
+  margin: 0;
+}
+
 .tool-preview pre,
 .tool-details pre {
   margin: 8px 0 0;
@@ -1096,6 +1105,17 @@ textarea {
 .tool-detail-stack {
   display: grid;
   gap: 8px;
+}
+
+.codemode-details section {
+  min-width: 0;
+}
+
+.codemode-details h4 {
+  margin: 0;
+  color: var(--soft);
+  font-size: 11px;
+  text-transform: uppercase;
 }
 
 .meta-grid {

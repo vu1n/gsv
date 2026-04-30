@@ -440,6 +440,9 @@ function ToolPreview({ row, syscall }: { row: ToolRow; syscall: string | null })
   if (row.ok === false || record?.ok === false) {
     return <p class="tool-error">{row.error || asString(record?.error) || "Tool call failed."}</p>;
   }
+  if (isCodeModeTool(row.toolName, syscall)) {
+    return <CodeModePreview row={row} output={normalized} />;
+  }
   if (row.toolName === "Shell" || syscall === "shell.exec") {
     const stdout = asString(record?.stdout);
     const stderr = asString(record?.stderr);
@@ -469,6 +472,9 @@ function ToolPreview({ row, syscall }: { row: ToolRow; syscall: string | null })
 
 function ToolDetails({ row, syscall }: { row: ToolRow; syscall: string | null }) {
   const normalized = normalizeToolOutput(row.output);
+  if (isCodeModeTool(row.toolName, syscall)) {
+    return <CodeModeDetails row={row} syscall={syscall} output={normalized} />;
+  }
   return (
     <div class="tool-detail-stack">
       <MetaGrid rows={[["call", row.callId], ["syscall", syscall || ""]]} />
@@ -478,6 +484,118 @@ function ToolDetails({ row, syscall }: { row: ToolRow; syscall: string | null })
       ) : null}
     </div>
   );
+}
+
+function isCodeModeTool(toolName: string, syscall: string | null): boolean {
+  return toolName === "CodeMode" || syscall === "codemode.exec" || syscall === "codemode.run";
+}
+
+function CodeModePreview({ row, output }: { row: ToolRow; output: unknown }) {
+  if (row.kind === "toolCall") {
+    return <p>Executing process-local script.</p>;
+  }
+  const record = asRecord(output);
+  const status = asString(record?.status);
+  const logs = normalizeCodeModeLogs(record?.logs);
+  if (status === "failed") {
+    return (
+      <div class="codemode-preview">
+        <p class="tool-error">{asString(record?.error) || row.error || "CodeMode script failed."}</p>
+        {logs.length > 0 ? <p>{logs.length} log {logs.length === 1 ? "line" : "lines"} captured.</p> : null}
+      </div>
+    );
+  }
+  if (status === "completed") {
+    const result = record?.result;
+    return (
+      <div class="codemode-preview">
+        <p>{describeCodeModeResult(result)}</p>
+        {logs.length > 0 ? <p>{logs.length} log {logs.length === 1 ? "line" : "lines"} captured.</p> : null}
+        {renderCodeModePreviewValue(result)}
+      </div>
+    );
+  }
+  return <p>CodeMode completed.</p>;
+}
+
+function CodeModeDetails({ row, syscall, output }: { row: ToolRow; syscall: string | null; output: unknown }) {
+  const args = asRecord(row.args);
+  const code = asString(args?.code);
+  const record = asRecord(output);
+  const status = asString(record?.status);
+  const logs = normalizeCodeModeLogs(record?.logs);
+  return (
+    <div class="tool-detail-stack codemode-details">
+      <MetaGrid rows={[["call", row.callId], ["syscall", syscall || ""], ["status", status || (row.kind === "toolCall" ? "running" : "")]]} />
+      {code ? (
+        <section>
+          <h4>Script</h4>
+          <pre>{truncateBlock(code, 4000)}</pre>
+        </section>
+      ) : null}
+      {logs.length > 0 ? (
+        <section>
+          <h4>Logs</h4>
+          <pre>{truncateBlock(logs.join("\n"), 4000)}</pre>
+        </section>
+      ) : null}
+      {status === "failed" ? (
+        <section>
+          <h4>Error</h4>
+          <pre>{truncateBlock(asString(record?.error) || row.error || "CodeMode script failed.", 2000)}</pre>
+        </section>
+      ) : null}
+      {status === "completed" ? (
+        <section>
+          <h4>Result</h4>
+          {renderCodeModeDetailsValue(record?.result)}
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
+function normalizeCodeModeLogs(value: unknown): string[] {
+  return (Array.isArray(value) ? value : [])
+    .map((item) => typeof item === "string" ? item : prettyJson(item))
+    .filter((item) => item.trim().length > 0);
+}
+
+function describeCodeModeResult(value: unknown): string {
+  if (value === null || value === undefined) return "Completed with no return value.";
+  if (typeof value === "string") return value.trim() ? "Returned text." : "Returned empty text.";
+  if (typeof value === "number" || typeof value === "boolean") return `Returned ${String(value)}.`;
+  if (Array.isArray(value)) return `Returned ${value.length} ${value.length === 1 ? "item" : "items"}.`;
+  const record = asRecord(value);
+  if (record) {
+    const summary = asString(record.summary) || asString(record.message) || asString(record.output);
+    if (summary) return truncateBlock(summary, 180);
+    const keys = Object.keys(record);
+    return keys.length > 0 ? `Returned object with ${keys.length} ${keys.length === 1 ? "field" : "fields"}: ${keys.slice(0, 4).join(", ")}${keys.length > 4 ? ", ..." : ""}.` : "Returned an empty object.";
+  }
+  return "Completed.";
+}
+
+function renderCodeModePreviewValue(value: unknown) {
+  if (typeof value === "string" && value.trim()) {
+    return <pre>{truncateBlock(value, 800)}</pre>;
+  }
+  const record = asRecord(value);
+  const stdout = asString(record?.stdout);
+  const stderr = asString(record?.stderr);
+  if (stdout?.trim()) return <pre>{truncateBlock(stdout, 800)}</pre>;
+  if (stderr?.trim()) return <pre>{truncateBlock(stderr, 800)}</pre>;
+  return null;
+}
+
+function renderCodeModeDetailsValue(value: unknown) {
+  if (value === null || value === undefined) return <p>No return value.</p>;
+  if (typeof value === "string") return value.trim() ? <pre>{truncateBlock(value, 4000)}</pre> : <p>Empty text.</p>;
+  if (typeof value === "number" || typeof value === "boolean") return <p>{String(value)}</p>;
+  if (Array.isArray(value)) {
+    return value.length === 0 ? <p>Empty array.</p> : <pre>{truncateBlock(prettyJson(value), 4000)}</pre>;
+  }
+  return <pre>{truncateBlock(prettyJson(value), 4000)}</pre>;
 }
 
 function MetaGrid({ rows }: { rows: Array<[string, string | number | null | undefined]> }) {

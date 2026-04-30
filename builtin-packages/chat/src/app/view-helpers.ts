@@ -587,6 +587,7 @@ function inferToolSyscall(toolName: string, syscall?: string | null): string | n
     case "Write": return "fs.write";
     case "Edit": return "fs.edit";
     case "Delete": return "fs.delete";
+    case "CodeMode": return "codemode.exec";
     default: return null;
   }
 }
@@ -605,6 +606,10 @@ function describeToolCard(toolName: string, args: unknown, syscall: string | nul
   if (toolName === "Write" || syscall === "fs.write") return { title: path ? "Write " + basenamePath(path) : "Write file", subtitle: path ?? "", target };
   if (toolName === "Edit" || syscall === "fs.edit") return { title: path ? "Edit " + basenamePath(path) : "Edit file", subtitle: path ?? "", target };
   if (toolName === "Delete" || syscall === "fs.delete") return { title: path ? "Delete " + basenamePath(path) : "Delete file", subtitle: path ?? "", target };
+  if (toolName === "CodeMode" || syscall === "codemode.exec" || syscall === "codemode.run") {
+    const code = asString(record?.code)?.trim();
+    return { title: "Run CodeMode script", subtitle: code ? truncateInline(firstCodeLine(code), 72) : "process-local JavaScript", target: "process" };
+  }
   return { title: toolName, subtitle: "", target };
 }
 
@@ -619,7 +624,12 @@ function describeHilSummary(request: HilRequest, syscall: string): string {
   if (request.toolName === "Write" || syscall === "fs.write") return path ? `Write ${path}.` : "Write a file.";
   if (request.toolName === "Edit" || syscall === "fs.edit") return path ? `Edit ${path}.` : "Edit a file.";
   if (request.toolName === "Delete" || syscall === "fs.delete") return path ? `Delete ${path}.` : "Delete a file.";
+  if (request.toolName === "CodeMode" || syscall === "codemode.exec" || syscall === "codemode.run") return "Run a process-local CodeMode script.";
   return "Confirm this tool call before it runs.";
+}
+
+function firstCodeLine(code: string): string {
+  return code.split("\n").map((line) => line.trim()).find(Boolean) || "script";
 }
 
 function resolveToolTarget(args: unknown): string {
