@@ -714,35 +714,12 @@ pub(crate) async fn run_node(
                     }
 
                     if tokio::time::Instant::now() >= next_keepalive_at {
-                        let keepalive = tokio::time::timeout(
-                            keepalive_timeout,
-                            conn.request(
-                                "shell.exec",
-                                Some(json!({
-                                    "input": "echo gsv-keepalive",
-                                })),
-                            ),
-                        )
-                        .await;
+                        let payload = b"gsv-keepalive".to_vec();
+                        let keepalive = tokio::time::timeout(keepalive_timeout, conn.send_ping(payload)).await;
 
                         match keepalive {
-                            Ok(Ok(res)) if res.ok => {
+                            Ok(Ok(())) => {
                                 next_keepalive_at = tokio::time::Instant::now() + keepalive_interval;
-                            }
-                            Ok(Ok(res)) => {
-                                let message = res
-                                    .error
-                                    .map(|e| e.message)
-                                    .unwrap_or_else(|| "unknown response".to_string());
-                                logger.warn(
-                                    "keepalive.failed",
-                                    json!({
-                                        "error": message,
-                                        "retrySeconds": 3,
-                                    }),
-                                );
-                                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-                                break;
                             }
                             Ok(Err(e)) => {
                                 logger.warn(
