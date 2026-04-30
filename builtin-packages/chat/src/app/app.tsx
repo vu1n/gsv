@@ -40,6 +40,7 @@ import {
   asNumber,
   asRecord,
   asString,
+  copyTextToClipboard,
   deriveThreadLabel,
   dropEmptyPlaceholder,
   draftConversationMeta,
@@ -787,10 +788,10 @@ export function App({ backend }: { backend: ChatBackend }) {
     }
   }
 
-  async function copyMessageContent(text: string): Promise<void> {
+  async function copyText(label: string, text: string): Promise<void> {
     try {
-      await navigator.clipboard.writeText(text);
-      setNotice("Copied message.");
+      await copyTextToClipboard(text);
+      setNotice("Copied " + label + ".");
     } catch (error) {
       appendSystem("copy failed: " + formatError(error));
     }
@@ -840,20 +841,11 @@ export function App({ backend }: { backend: ChatBackend }) {
         <header class="chat-stage-head">
           <div class="chat-stage-title">
             <h1>{activeTitle}</h1>
-            <div class={active ? "identity-icons" : "identity-icons is-draft"}>
-              {active ? (
-                <>
-                  <span class="identity-icon" title={`Process: ${active.pid}`} aria-label={`Process: ${active.pid}`}>
-                    <TerminalIcon />
-                  </span>
-                  <span class="identity-icon" title={`Workspace: ${active.cwd}`} aria-label={`Workspace: ${active.cwd}`}>
-                    <FolderIcon />
-                  </span>
-                </>
-              ) : (
+            {!active ? (
+              <div class="identity-icons is-draft">
                 <span class="draft-meta">{draftConversationMeta(draftProfile)}</span>
-              )}
-            </div>
+              </div>
+            ) : null}
             <ContextMeter state={active ? contextState : null} />
             <ConversationBar
               active={active}
@@ -893,6 +885,14 @@ export function App({ backend }: { backend: ChatBackend }) {
                   <TerminalIcon />
                   <span>Shell</span>
                 </button>
+                <button type="button" class="menu-action" disabled={!active} onClick={() => active ? void copyText("process id", active.pid) : undefined}>
+                  <TerminalIcon />
+                  <span>Copy process ID</span>
+                </button>
+                <button type="button" class="menu-action" disabled={!active} onClick={() => active ? void copyText("workspace", active.cwd) : undefined}>
+                  <FolderIcon />
+                  <span>Copy workspace</span>
+                </button>
                 <button type="button" class="menu-action" disabled={!canActOnConversation || compactBusy} onClick={openCompactDialog}>
                   <CompactIcon />
                   <span>{compactBusy ? "Compacting..." : "Compact"}</span>
@@ -921,7 +921,7 @@ export function App({ backend }: { backend: ChatBackend }) {
               hilBusy={hilBusy}
               branchBusy={branchBusy}
               refNode={transcriptRef}
-              onCopy={(text) => void copyMessageContent(text)}
+              onCopy={(text) => void copyText("message", text)}
               onBranch={(messageId) => void branchFromMessage(messageId)}
               onHilDecision={(requestId, decision) => void decidePendingHil(requestId, decision)}
             />

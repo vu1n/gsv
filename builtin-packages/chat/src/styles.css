@@ -605,39 +605,11 @@ textarea {
   font-size: 12px;
 }
 
-.identity-icon {
-  width: 24px;
-  height: 24px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--muted);
-  background: rgba(255, 255, 255, 0.68);
-}
-
-.identity-icon:hover {
-  color: var(--text);
-  border-color: var(--line-strong);
-  background: var(--panel-strong);
-}
-
 .draft-meta {
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-}
-
-.identity-icons svg {
-  width: 13px;
-  height: 13px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.9;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .chat-stage-actions {

@@ -34,6 +34,7 @@ import {
   asRecord,
   asString,
   basenamePath,
+  copyTextToClipboard,
   describeAttachment,
   describeHilSummary,
   describeToolCard,
@@ -784,5 +785,5 @@ function ArchiveRow({ row }: { row: LogRow }) {
   if (row.kind === "toolCall" || row.kind === "toolResult") {
     return <ToolCard row={row} />;
   }
-  return <MessageBubble row={row as MessageRow} branchBusy={false} branchable={false} onCopy={(text) => { void navigator.clipboard.writeText(text).catch(() => {}); }} onBranch={() => {}} />;
+  return <MessageBubble row={row as MessageRow} branchBusy={false} branchable={false} onCopy={(text) => { void copyTextToClipboard(text).catch(() => {}); }} onBranch={() => {}} />;
 }

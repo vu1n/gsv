@@ -701,6 +701,37 @@ function isNearBottom(node: HTMLElement, thresholdPx = 96): boolean {
   return node.scrollHeight - node.scrollTop - node.clientHeight <= thresholdPx;
 }
 
+async function copyTextToClipboard(text: string): Promise<void> {
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // Fall back for iframe runtimes where the Clipboard API exists but is denied.
+    }
+  }
+  if (typeof document === "undefined") {
+    throw new Error("clipboard is unavailable");
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.top = "0";
+  textarea.style.left = "-9999px";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  try {
+    if (!document.execCommand("copy")) {
+      throw new Error("copy command failed");
+    }
+  } finally {
+    document.body.removeChild(textarea);
+  }
+}
+
 function truncateInline(value: unknown, maxLength = 80): string {
   const compact = String(value ?? "").replace(/\s+/g, " ").trim();
   return compact.length <= maxLength ? compact : compact.slice(0, maxLength) + "...";
@@ -775,6 +806,7 @@ export {
   asRecord,
   asString,
   basenamePath,
+  copyTextToClipboard,
   describeAttachment,
   describeHilSummary,
   describeToolCard,
