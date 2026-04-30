@@ -13,8 +13,8 @@ import type {
   LogRow,
   PendingAssistantState,
   Profile,
-  SideView,
   ThreadContext,
+  WorkspaceView,
   WorkspaceEntry,
 } from "./types";
 import {
@@ -22,6 +22,7 @@ import {
   ChatNavigator,
   CompactDialog,
   Composer,
+  ConversationBar,
   ContextMeter,
   Transcript,
 } from "./components";
@@ -93,7 +94,7 @@ export function App({ backend }: { backend: ChatBackend }) {
   const [conversations, setConversations] = useState<ConversationRecord[]>([]);
   const [conversationsLoading, setConversationsLoading] = useState(false);
   const [conversationError, setConversationError] = useState("");
-  const [sideView, setSideView] = useState<SideView>("threads");
+  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("chat");
   const [rows, setRows] = useState<LogRow[]>(() => systemRows("Connecting chat backend."));
   const [messageCount, setMessageCount] = useState(0);
   const [contextState, setContextState] = useState<ContextState | null>(null);
@@ -164,6 +165,7 @@ export function App({ backend }: { backend: ChatBackend }) {
     setPendingAssistant(null);
     setMessageCount(0);
     setArchive(EMPTY_ARCHIVE);
+    setWorkspaceView("chat");
     setNotice("");
   }, []);
 
@@ -442,7 +444,7 @@ export function App({ backend }: { backend: ChatBackend }) {
         if (event === "conversation.compacted" || event === "conversation.forked" || event === "conversation.auto_compacted") {
           void loadConversations(target.pid);
           void loadHistory(target);
-          if (sideView === "archive") {
+          if (event === "conversation.compacted" || event === "conversation.auto_compacted" || workspaceView === "archive") {
             void loadArchiveSegments(true);
           }
         }
@@ -482,7 +484,7 @@ export function App({ backend }: { backend: ChatBackend }) {
         void loadThreads();
       }
     });
-  }, [appendSystem, loadArchiveSegments, loadConversations, loadHistory, loadThreads, sideView, suppressNextAbortedComplete]);
+  }, [appendSystem, loadArchiveSegments, loadConversations, loadHistory, loadThreads, suppressNextAbortedComplete, workspaceView]);
 
   useEffect(() => {
     scrollTranscript("near-bottom");
@@ -554,7 +556,7 @@ export function App({ backend }: { backend: ChatBackend }) {
     setActive(null);
     setComposeText("");
     setAttachments([]);
-    setSideView("conversations");
+    setWorkspaceView("chat");
   }
 
   async function switchConversation(conversation: ConversationRecord): Promise<void> {
@@ -566,6 +568,7 @@ export function App({ backend }: { backend: ChatBackend }) {
       conversationId: conversation.id,
       conversationTitle: conversation.title,
     });
+    setWorkspaceView("chat");
   }
 
   async function sendMessage(): Promise<void> {
@@ -738,9 +741,7 @@ export function App({ backend }: { backend: ChatBackend }) {
       appendSystem("conversation compacted: " + safeText(record.archivedMessages) + " messages archived");
       await loadHistory(target);
       await loadConversations(target.pid);
-      if (sideView === "archive") {
-        await loadArchiveSegments(true);
-      }
+      await loadArchiveSegments(true);
     } catch (error) {
       appendSystem("compact failed: " + formatError(error));
     } finally {
@@ -777,7 +778,7 @@ export function App({ backend }: { backend: ChatBackend }) {
         conversationId: nextConversationId,
         conversationTitle: nextTitle,
       });
-      setSideView("conversations");
+      setWorkspaceView("chat");
       setNotice("Created " + nextTitle + ".");
       await loadConversations(target.pid);
     } catch (error) {
@@ -814,39 +815,20 @@ export function App({ backend }: { backend: ChatBackend }) {
   return (
     <main class="chat-app">
       <ChatNavigator
-        mode={sideView}
         active={active}
         threads={threads}
         threadsLoading={threadsLoading}
         threadsError={threadsError}
         profiles={newConversationProfiles}
         draftProfileId={draftProfile.id}
-        conversations={conversations}
-        conversationsLoading={conversationsLoading}
-        conversationError={conversationError}
-        activeConversationId={activeConversationId}
-        archive={archive}
-        onModeChange={(view) => {
-          setSideView(view);
-          if (view === "conversations" && active?.pid) {
-            void loadConversations(active.pid);
-          }
-          if (view === "archive") {
-            void loadArchiveSegments(true);
-          }
-        }}
         onDraftProfileChange={setDraftProfileId}
         onHome={() => void openHome()}
         onNew={resetToNewThread}
         onRefreshThreads={() => void loadThreads()}
         onOpenThread={(workspaceId) => void openThread(workspaceId)}
-        onConversationSelect={(conversation) => void switchConversation(conversation)}
-        onRefreshConversations={() => active?.pid ? void loadConversations(active.pid) : undefined}
-        onArchiveRefresh={() => void loadArchiveSegments(true)}
-        onArchiveSegmentSelect={(segmentId) => void readArchiveSegment(segmentId)}
       />
 
-      <section class={"chat-stage" + (sideView === "archive" ? " is-archive" : "")}>
+      <section class={"chat-stage" + (workspaceView === "archive" ? " is-archive" : "")}>
         <header class="chat-stage-head">
           <div class="chat-stage-title">
             <h1>{activeTitle}</h1>
@@ -862,6 +844,25 @@ export function App({ backend }: { backend: ChatBackend }) {
               )}
             </div>
             <ContextMeter state={active ? contextState : null} />
+            <ConversationBar
+              active={active}
+              activeConversationId={activeConversationId}
+              conversations={conversations}
+              loading={conversationsLoading}
+              error={conversationError}
+              archiveCount={archive.segments.length}
+              archiveActive={workspaceView === "archive"}
+              onSelect={(conversation) => void switchConversation(conversation)}
+              onRefresh={() => active?.pid ? void loadConversations(active.pid) : undefined}
+              onArchiveToggle={() => {
+                if (workspaceView === "archive") {
+                  setWorkspaceView("chat");
+                  return;
+                }
+                setWorkspaceView("archive");
+                void loadArchiveSegments(true);
+              }}
+            />
           </div>
           <div class="chat-stage-actions">
             <span class={"run-state-chip " + runStateClass} title={statusText}>
@@ -886,8 +887,12 @@ export function App({ backend }: { backend: ChatBackend }) {
           {notice ? <span class="chat-notice">{notice}</span> : null}
         </div>
 
-        {sideView === "archive" ? (
-          <ArchiveWorkspace archive={archive} />
+        {workspaceView === "archive" ? (
+          <ArchiveWorkspace
+            archive={archive}
+            onRefresh={() => void loadArchiveSegments(true)}
+            onSelect={(segmentId) => void readArchiveSegment(segmentId)}
+          />
         ) : (
           <>
             <Transcript

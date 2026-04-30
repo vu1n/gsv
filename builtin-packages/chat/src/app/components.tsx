@@ -8,7 +8,6 @@ import type {
   MessageRow,
   PendingAssistantState,
   Profile,
-  SideView,
   ThreadContext,
   ToolRow,
   WorkspaceEntry,
@@ -23,7 +22,6 @@ import {
   PaperclipIcon,
   PlusIcon,
   RefreshIcon,
-  ThreadsIcon,
   XIcon,
 } from "./icons";
 import {
@@ -50,85 +48,33 @@ import {
 } from "./view-helpers";
 
 export function ChatNavigator(props: {
-  mode: SideView;
   active: ThreadContext | null;
   threads: WorkspaceEntry[];
   threadsLoading: boolean;
   threadsError: string;
   profiles: Profile[];
   draftProfileId: string;
-  conversations: ConversationRecord[];
-  conversationsLoading: boolean;
-  conversationError: string;
-  activeConversationId: string;
-  archive: ArchiveState;
-  onModeChange(mode: SideView): void;
   onDraftProfileChange(profileId: string): void;
   onHome(): void;
   onNew(): void;
   onRefreshThreads(): void;
   onOpenThread(workspaceId: string): void;
-  onConversationSelect(conversation: ConversationRecord): void;
-  onRefreshConversations(): void;
-  onArchiveRefresh(): void;
-  onArchiveSegmentSelect(segmentId: string): void;
 }) {
-  const counts = {
-    threads: props.threads.length + 1,
-    conversations: props.conversations.length,
-    archive: props.archive.segments.length,
-  };
-
   return (
     <aside class="chat-nav">
-      <div class="nav-mode-strip" aria-label="Chat sections">
-        <button type="button" class={modeButtonClass(props.mode, "threads")} title="Threads" aria-label="Threads" onClick={() => props.onModeChange("threads")}>
-          <ThreadsIcon />
-          <span>{counts.threads}</span>
-        </button>
-        <button type="button" class={modeButtonClass(props.mode, "conversations")} title="Branches" aria-label="Branches" disabled={!props.active} onClick={() => props.onModeChange("conversations")}>
-          <BranchIcon />
-          <span>{counts.conversations}</span>
-        </button>
-        <button type="button" class={modeButtonClass(props.mode, "archive")} title="Archive" aria-label="Archive" disabled={!props.active} onClick={() => props.onModeChange("archive")}>
-          <ArchiveIcon />
-          <span>{counts.archive}</span>
-        </button>
-      </div>
-      <div class="nav-content">
-        {props.mode === "threads" ? (
-          <ThreadsPane
-            active={props.active}
-            threads={props.threads}
-            loading={props.threadsLoading}
-            error={props.threadsError}
-            profiles={props.profiles}
-            draftProfileId={props.draftProfileId}
-            onDraftProfileChange={props.onDraftProfileChange}
-            onHome={props.onHome}
-            onNew={props.onNew}
-            onRefresh={props.onRefreshThreads}
-            onOpenThread={props.onOpenThread}
-          />
-        ) : props.mode === "conversations" ? (
-          <BranchesPane
-            active={props.active}
-            activeConversationId={props.activeConversationId}
-            conversations={props.conversations}
-            loading={props.conversationsLoading}
-            error={props.conversationError}
-            onSelect={props.onConversationSelect}
-            onRefresh={props.onRefreshConversations}
-          />
-        ) : (
-          <ArchiveNavPane
-            active={props.active}
-            archive={props.archive}
-            onRefresh={props.onArchiveRefresh}
-            onSelect={props.onArchiveSegmentSelect}
-          />
-        )}
-      </div>
+      <ThreadsPane
+        active={props.active}
+        threads={props.threads}
+        loading={props.threadsLoading}
+        error={props.threadsError}
+        profiles={props.profiles}
+        draftProfileId={props.draftProfileId}
+        onDraftProfileChange={props.onDraftProfileChange}
+        onHome={props.onHome}
+        onNew={props.onNew}
+        onRefresh={props.onRefreshThreads}
+        onOpenThread={props.onOpenThread}
+      />
     </aside>
   );
 }
@@ -150,20 +96,20 @@ function ThreadsPane(props: {
   const activePid = props.active?.pid ?? "";
   const status = props.loading
     ? "Refreshing..."
-    : props.error || (props.threads.length === 0 ? "No task threads yet." : "Task workspaces");
+    : props.error || (props.threads.length === 0 ? "No task processes yet." : "Task processes");
 
   return (
     <section class="nav-pane">
       <header class="nav-pane-header">
         <div>
-          <h1>Threads</h1>
+          <h1>Processes</h1>
           <p>{status}</p>
         </div>
         <div class="nav-pane-actions">
-          <button class="icon-button small" type="button" title="New thread" aria-label="New thread" onClick={props.onNew}>
+          <button class="icon-button small" type="button" title="New process" aria-label="New process" onClick={props.onNew}>
             <PlusIcon />
           </button>
-          <button class="icon-button small" type="button" title="Refresh threads" aria-label="Refresh threads" onClick={props.onRefresh}>
+          <button class="icon-button small" type="button" title="Refresh processes" aria-label="Refresh processes" onClick={props.onRefresh}>
             <RefreshIcon />
           </button>
         </div>
@@ -180,7 +126,7 @@ function ThreadsPane(props: {
         </label>
       </div>
 
-      <nav class="thread-list" aria-label="Chat threads">
+      <nav class="thread-list" aria-label="Chat processes">
         <button type="button" class={"thread-row" + (activePid.startsWith("init:") ? " is-active" : "")} onClick={props.onHome}>
           <span class="row-icon"><HomeIcon /></span>
           <span class="thread-row-title">Home</span>
@@ -196,7 +142,7 @@ function ThreadsPane(props: {
             <span class="row-icon"><MessageIcon /></span>
             <span class="thread-row-title">{displayThreadLabel(thread)}</span>
             <span class="thread-row-meta">
-              {thread.activeProcess ? "Live" : "Stored"}
+              {thread.activeProcess ? "Live process" : "Stored thread"}
               {thread.processCount && thread.processCount > 1 ? ` - ${thread.processCount} agents` : ""}
               {" - "}
               {formatRelativeTime(thread.updatedAt)}
@@ -208,80 +154,88 @@ function ThreadsPane(props: {
   );
 }
 
-function BranchesPane(props: {
+export function ConversationBar(props: {
   active: ThreadContext | null;
   activeConversationId: string;
   conversations: ConversationRecord[];
   loading: boolean;
   error: string;
+  archiveCount: number;
+  archiveActive: boolean;
   onSelect(conversation: ConversationRecord): void;
   onRefresh(): void;
+  onArchiveToggle(): void;
 }) {
   if (!props.active) {
-    return <div class="panel-empty">Open a process to see its conversations and branches.</div>;
+    return null;
   }
   return (
-    <section class="nav-pane">
-      <header class="nav-pane-header">
-        <div>
-          <h1>Branches</h1>
-          <p>{props.loading ? "Loading..." : props.error || `${props.conversations.length} conversations`}</p>
-        </div>
-        <button class="icon-button small" type="button" title="Refresh conversations" aria-label="Refresh conversations" onClick={props.onRefresh}>
-          <RefreshIcon />
-        </button>
-      </header>
-      <div class="conversation-list">
+    <div class="conversation-bar">
+      <div class="conversation-bar-list" aria-label="Conversations">
         {props.conversations.map((conversation) => (
           <button
             key={conversation.id}
             type="button"
-            class={"conversation-row" + (conversation.id === props.activeConversationId ? " is-active" : "")}
+            class={"conversation-chip" + (conversation.id === props.activeConversationId ? " is-active" : "")}
+            title={conversation.title || conversation.id}
             onClick={() => props.onSelect(conversation)}
           >
-            <span class="row-icon"><BranchIcon /></span>
-            <span class="conversation-title">{conversation.title || (conversation.id === "default" ? "Default" : conversation.id)}</span>
-            <span class="conversation-meta">
-              {conversation.id === "default" ? "main" : shortId(conversation.id)}
-              {" - "}
-              {conversation.messageCount} messages
-            </span>
+            <BranchIcon />
+            <span>{conversation.title || (conversation.id === "default" ? "Default" : shortId(conversation.id))}</span>
+            <small>{conversation.messageCount}</small>
           </button>
         ))}
+        {props.conversations.length === 0 ? (
+          <span class="conversation-bar-empty">{props.loading ? "Loading branches..." : props.error || "No branches"}</span>
+        ) : null}
       </div>
-    </section>
+      <div class="conversation-bar-actions">
+        <button class="icon-button small" type="button" title="Refresh branches" aria-label="Refresh branches" onClick={props.onRefresh}>
+          <RefreshIcon />
+        </button>
+        <button
+          class={"archive-toggle" + (props.archiveActive ? " is-active" : "")}
+          type="button"
+          title={props.archiveActive ? "Return to live conversation" : "Open conversation archive"}
+          aria-label={props.archiveActive ? "Return to live conversation" : "Open conversation archive"}
+          onClick={props.onArchiveToggle}
+        >
+          <ArchiveIcon />
+          {props.archiveCount > 0 ? <span>{props.archiveCount}</span> : null}
+        </button>
+      </div>
+    </div>
   );
 }
 
-function ArchiveNavPane(props: {
-  active: ThreadContext | null;
+export function ArchiveWorkspace(props: {
   archive: ArchiveState;
   onRefresh(): void;
   onSelect(segmentId: string): void;
 }) {
-  if (!props.active) {
-    return <div class="panel-empty">Open a process to inspect archived segments.</div>;
-  }
+  const { archive } = props;
+  const selected = archive.segments.find((segment) => segment.id === archive.selectedSegmentId) ?? null;
   return (
-    <section class="nav-pane">
-      <header class="nav-pane-header">
+    <section class="archive-workspace">
+      <header class="archive-workspace-head">
         <div>
-          <h1>Archive</h1>
-          <p>{props.archive.loading ? "Loading..." : props.archive.error || `${props.archive.segments.length} segments`}</p>
+          <span class="archive-eyebrow"><ArchiveIcon /> Conversation archive</span>
+          <h2>{selected ? `Messages ${selected.fromMessageId}-${selected.toMessageId}` : "Archived segments"}</h2>
+          <p>{selected ? `${shortId(selected.id)} - ${formatTimestamp(selected.createdAt)}` : archive.loading ? "Loading..." : archive.error || "Read-only compacted history"}</p>
         </div>
         <button class="icon-button small" type="button" title="Refresh archive" aria-label="Refresh archive" onClick={props.onRefresh}>
           <RefreshIcon />
         </button>
       </header>
-      {props.archive.segments.length === 0 ? (
-        <div class="panel-empty">No compacted segments.</div>
-      ) : (
-        <div class="archive-segments">
-          {props.archive.segments.map((segment) => (
+      <div class="archive-workspace-layout">
+        <div class="archive-segments" aria-label="Archive segments">
+          {archive.segments.length === 0 ? (
+            <div class="panel-empty">{archive.loading ? "Loading archive..." : archive.error || "No compacted segments."}</div>
+          ) : archive.segments.map((segment) => (
             <button
               key={segment.id}
               type="button"
-              class={"archive-row" + (segment.id === props.archive.selectedSegmentId ? " is-active" : "")}
+              class={"archive-row" + (segment.id === archive.selectedSegmentId ? " is-active" : "")}
               onClick={() => props.onSelect(segment.id)}
             >
               <span class="row-icon"><ArchiveIcon /></span>
@@ -290,45 +244,25 @@ function ArchiveNavPane(props: {
             </button>
           ))}
         </div>
-      )}
-    </section>
-  );
-}
-
-export function ArchiveWorkspace({ archive }: { archive: ArchiveState }) {
-  const selected = archive.segments.find((segment) => segment.id === archive.selectedSegmentId) ?? null;
-  if (!selected) {
-    return (
-      <section class="archive-workspace">
-        <div class="archive-empty">
-          <ArchiveIcon />
-          <h2>No archived segment selected</h2>
-          <p>Select a segment from the Archive navigator to read compacted history.</p>
+        <div class="archive-message-list">
+          {selected ? (
+            <>
+              <div class="archive-count">{archive.messages.length}/{archive.messageCount}{archive.truncated ? " shown" : ""}</div>
+              {archive.messages.map((message, index) => (
+                <ArchiveMessage key={index} entry={message} />
+              ))}
+            </>
+          ) : (
+            <div class="archive-empty">
+              <ArchiveIcon />
+              <h2>No archived segment selected</h2>
+              <p>Select a segment to read compacted history for this conversation.</p>
+            </div>
+          )}
         </div>
-      </section>
-    );
-  }
-  return (
-    <section class="archive-workspace">
-      <header class="archive-workspace-head">
-        <div>
-          <span class="archive-eyebrow"><ArchiveIcon /> Read-only segment</span>
-          <h2>Messages {selected.fromMessageId}-{selected.toMessageId}</h2>
-          <p>{shortId(selected.id)} - {formatTimestamp(selected.createdAt)}</p>
-        </div>
-        <span class="archive-count">{archive.messages.length}/{archive.messageCount}{archive.truncated ? " shown" : ""}</span>
-      </header>
-      <div class="archive-message-list">
-        {archive.messages.map((message, index) => (
-          <ArchiveMessage key={index} entry={message} />
-        ))}
       </div>
     </section>
   );
-}
-
-function modeButtonClass(active: SideView, mode: SideView): string {
-  return "nav-mode-button" + (active === mode ? " is-active" : "");
 }
 
 export function Transcript(props: {
