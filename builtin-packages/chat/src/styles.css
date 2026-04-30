@@ -434,7 +434,6 @@
       .message-head {
         display: flex;
         align-items: center;
-        justify-content: space-between;
         gap: 12px;
         margin-bottom: 8px;
         font-size: 11px;
@@ -442,6 +441,38 @@
         letter-spacing: 0.08em;
         text-transform: uppercase;
         color: var(--text-soft);
+      }
+      .message-head-spacer {
+        flex: 1 1 auto;
+      }
+      .message-branch {
+        width: 24px;
+        height: 24px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 0;
+        border-radius: 6px;
+        background: rgba(25, 28, 30, 0.05);
+        color: var(--text-soft);
+        cursor: pointer;
+      }
+      .message-branch:hover {
+        color: var(--primary);
+        background: rgba(0, 52, 102, 0.1);
+      }
+      .message-branch:disabled {
+        opacity: 0.45;
+        cursor: default;
+      }
+      .message-branch svg {
+        width: 14px;
+        height: 14px;
+        stroke: currentColor;
+        fill: none;
+        stroke-width: 1.9;
+        stroke-linecap: round;
+        stroke-linejoin: round;
       }
       .message-body {
         margin: 0;

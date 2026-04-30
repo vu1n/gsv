@@ -604,10 +604,16 @@ function normalizeThreadContext(value) {
   const pid = typeof record.pid === "string" ? record.pid.trim() : "";
   const cwd = typeof record.cwd === "string" ? record.cwd.trim() : "";
   const workspaceId = typeof record.workspaceId === "string" && record.workspaceId.trim().length > 0 ? record.workspaceId.trim() : null;
+  const conversationId = typeof record.conversationId === "string" && record.conversationId.trim().length > 0
+    ? record.conversationId.trim()
+    : "default";
+  const conversationTitle = typeof record.conversationTitle === "string" && record.conversationTitle.trim().length > 0
+    ? record.conversationTitle.trim()
+    : null;
   if (!pid || !cwd) {
     return null;
   }
-  return { pid, cwd, workspaceId };
+  return { pid, cwd, workspaceId, conversationId, conversationTitle };
 }
 
 function getActiveThreadContext() {
@@ -679,7 +685,11 @@ function applyContextSignal(payload) {
   if (pid && pid !== getActivePid()) {
     return;
   }
-  contextState = normalizeContextState(record.context ?? record);
+  const nextContext = normalizeContextState(record.context ?? record);
+  if (nextContext?.conversationId && nextContext.conversationId !== activeConversationId()) {
+    return;
+  }
+  contextState = nextContext;
   renderStatus();
 }
 
@@ -693,7 +703,7 @@ function applyLifecycleSignal(payload) {
     return;
   }
   const event = asString(record.event);
-  if (event === "conversation.compacted" || event === "conversation.forked") {
+  if (event === "conversation.compacted" || event === "conversation.forked" || event === "conversation.auto_compacted") {
     scheduleRefresh({ history: true, threads: true });
     if (archiveOpen) {
       void loadArchiveSegments({ preserveSelection: true });
@@ -895,18 +905,19 @@ function createEmbeddedHostClient(backend) {
       }
       return result;
     },
-    sendMessage: async (message, pid, media) => {
+    sendMessage: async (message, pid, media, conversationId) => {
       if (pid) {
         await watchPid(pid);
       }
       const result = await backend.sendMessage({
         message,
         ...(pid ? { pid } : {}),
+        ...(conversationId ? { conversationId } : {}),
         ...(Array.isArray(media) && media.length > 0 ? { media } : {}),
       });
       return result;
     },
-    getHistory: async (limit, pid, offset) => {
+    getHistory: async (limit, pid, offset, conversationId) => {
       if (pid) {
         await watchPid(pid);
       } else {
@@ -915,6 +926,7 @@ function createEmbeddedHostClient(backend) {
       const result = await backend.getHistory({
         limit: limit || 50,
         ...(pid ? { pid } : {}),
+        ...(conversationId ? { conversationId } : {}),
         ...(typeof offset === "number" ? { offset } : {}),
       });
       return result;
@@ -922,6 +934,7 @@ function createEmbeddedHostClient(backend) {
     compactConversation: async (args) => backend.compactConversation(args),
     listConversationSegments: async (args) => backend.listConversationSegments(args),
     readConversationSegment: async (args) => backend.readConversationSegment(args),
+    forkConversation: async (args) => backend.forkConversation(args),
   };
 }
 
@@ -979,6 +992,8 @@ let selectedArchiveMessages = [];
 let selectedArchiveMessageCount = 0;
 let selectedArchiveTruncated = false;
 let compactBusy = false;
+let branchBusy = false;
+let activeMessageCount = 0;
 
 function fallbackProfiles() {
   return [
@@ -1040,6 +1055,10 @@ function renderProfilePicker() {
 
 function getActivePid() {
   return activeThreadContext?.pid || null;
+}
+
+function activeConversationId() {
+  return activeThreadContext?.conversationId || "default";
 }
 
 function isNearBottom(node, thresholdPx = 72) {
@@ -1209,7 +1228,7 @@ function applyProcessMessageSignal(payload) {
     return;
   }
   const conversationId = asString(record?.conversationId) || "default";
-  if (conversationId !== "default") {
+  if (conversationId !== activeConversationId()) {
     return;
   }
   const content = asString(record?.content) ?? "";
@@ -1366,7 +1385,12 @@ function activeThreadEntry() {
 
 function activeThreadTitle() {
   if (activeThreadContext?.pid && activeThreadContext.pid.startsWith("init:")) {
-    return "Home";
+    return activeConversationId() === "default"
+      ? "Home"
+      : (activeThreadContext.conversationTitle || "Home branch");
+  }
+  if (activeConversationId() !== "default") {
+    return activeThreadContext?.conversationTitle || "Conversation branch";
   }
   const entry = activeThreadEntry();
   const label = typeof entry?.label === "string" ? entry.label.trim() : "";
@@ -1407,11 +1431,16 @@ function renderLog(options = {}) {
         '<span class="message-media-chip">' + escapeHtmlClient(describeAttachment(item)) + '</span>'
       )).join("") + '</div>'
       : "";
+    const branchHtml = row.messageId
+      ? '<button type="button" class="message-branch" data-branch-message-id="' + escapeHtmlClient(String(row.messageId)) + '" title="Branch from here" aria-label="Branch from this message"' + (branchBusy || messageBusy || pendingAssistantState !== null ? " disabled" : "") + '>' +
+          '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3v7a4 4 0 0 0 4 4h8" /><path d="M15 10l4 4-4 4" /><path d="M6 21v-7" /></svg>' +
+        '</button>'
+      : "";
     const bodyHtml = role === "assistant"
       ? '<div class="message-body message-markdown">' + renderMarkdownHtml(row.text) + '</div>'
       : '<pre class="message-body">' + escapeHtmlClient(row.text) + '</pre>';
     return '<article class="message message-' + escapeHtmlClient(role) + '">' +
-      '<div class="message-head"><span>' + escapeHtmlClient(labelForRole(role)) + '</span><span>' + escapeHtmlClient(timestamp) + '</span></div>' +
+      '<div class="message-head"><span>' + escapeHtmlClient(labelForRole(role)) + '</span><span class="message-head-spacer"></span><span>' + escapeHtmlClient(timestamp) + '</span>' + branchHtml + '</div>' +
       thinkingHtml +
       bodyHtml +
       mediaHtml +
@@ -1497,11 +1526,15 @@ function renderStatus() {
       : draftConversationTitle();
   }
   if (elements.activeThreadMeta) {
-    elements.activeThreadMeta.textContent = activeThreadContext
-      ? (activeThreadContext.pid && activeThreadContext.pid.startsWith("init:")
-          ? "Persistent home conversation"
-          : activeThreadContext.cwd)
-      : draftConversationMeta();
+    if (!activeThreadContext) {
+      elements.activeThreadMeta.textContent = draftConversationMeta();
+    } else if (activeConversationId() !== "default") {
+      elements.activeThreadMeta.textContent = "Branch " + activeConversationId() + " · " + activeThreadContext.cwd;
+    } else {
+      elements.activeThreadMeta.textContent = activeThreadContext.pid && activeThreadContext.pid.startsWith("init:")
+        ? "Persistent home conversation"
+        : activeThreadContext.cwd;
+    }
   }
   renderContextMeter();
   const interactive = client && client.isConnected() && !hostError;
@@ -1715,10 +1748,11 @@ function flattenHistory(messages) {
   const rows = [];
   for (const entry of messages) {
     const timestamp = normalizeTimestampMs(entry?.timestamp) || Date.now();
+    const messageId = asNumber(entry?.id);
     if (entry?.role === "assistant") {
       const parsed = extractAssistantHistory(entry.content);
       if ((parsed.text && parsed.text.trim()) || parsed.thinking.length > 0) {
-        rows.push({ kind: "message", role: "assistant", text: parsed.text, thinking: parsed.thinking, timestamp });
+        rows.push({ kind: "message", role: "assistant", text: parsed.text, thinking: parsed.thinking, timestamp, messageId });
       }
       for (const toolCall of parsed.toolCalls) {
         rows.push({
@@ -1767,7 +1801,7 @@ function flattenHistory(messages) {
           });
         }
       } else {
-        rows.push({ kind: "message", role: "system", text: formatMessageContent(entry.content), timestamp });
+        rows.push({ kind: "message", role: "system", text: formatMessageContent(entry.content), timestamp, messageId });
       }
       continue;
     }
@@ -1775,7 +1809,7 @@ function flattenHistory(messages) {
     const contentRecord = asRecord(entry?.content);
     const media = Array.isArray(contentRecord?.media) ? contentRecord.media : [];
     const text = contentRecord ? (asString(contentRecord.text) || formatMessageContent(entry?.content)) : formatMessageContent(entry?.content);
-    rows.push({ kind: "message", role, text, media, timestamp });
+    rows.push({ kind: "message", role, text, media, timestamp, messageId });
   }
   if (rows.length === 0) {
     rows.push({ kind: "message", role: "system", text: "No messages yet. Send your first prompt.", timestamp: Date.now() });
@@ -1790,17 +1824,19 @@ async function loadHistory() {
   const pid = getActivePid();
   if (!pid) {
     contextState = null;
+    activeMessageCount = 0;
     setLogRows([{ role: "system", text: "No thread selected. Send a message to start a new thread.", timestamp: Date.now() }], { forceBottom: true });
     renderStatus();
     return;
   }
+  const conversationId = activeConversationId();
   const merged = [];
   let offset = 0;
   let messageCount = 0;
   let truncated = false;
   let nextPendingHil = null;
   for (let page = 0; page < 20; page += 1) {
-    const result = await client.getHistory(200, pid, offset);
+    const result = await client.getHistory(200, pid, offset, conversationId);
     if (!result.ok) {
       setLogRows([{ role: "system", text: "history error: " + result.error, timestamp: Date.now() }], { forceBottom: true });
       return;
@@ -1818,6 +1854,7 @@ async function loadHistory() {
     }
   }
   const rows = flattenHistory(merged);
+  activeMessageCount = messageCount;
   if (truncated && offset < messageCount) {
     rows.push({ role: "system", text: 'history truncated at ' + offset + '/' + messageCount + ' messages', timestamp: Date.now() });
   }
@@ -1836,14 +1873,30 @@ async function compactActiveConversation() {
   if (!pid) {
     return;
   }
-  const keepLast = contextState?.level === "full" || contextState?.level === "critical" ? 40 : 80;
+  const suggestedKeepLast = contextState?.level === "full" || contextState?.level === "critical"
+    ? Math.min(40, Math.max(1, activeMessageCount - 1))
+    : activeMessageCount > 0 && activeMessageCount <= 80
+      ? Math.max(1, Math.floor(activeMessageCount / 2))
+      : 80;
+  const rawKeepLast = window.prompt(
+    "How many newest messages should stay live?",
+    String(suggestedKeepLast),
+  );
+  if (rawKeepLast === null) {
+    return;
+  }
+  const keepLast = Number.parseInt(rawKeepLast.trim(), 10);
+  if (!Number.isInteger(keepLast) || keepLast < 0) {
+    appendSystemRow("compact failed: keep-last must be a non-negative integer");
+    return;
+  }
   if (!window.confirm("Compact this conversation and keep the newest " + keepLast + " messages live?")) {
     return;
   }
   compactBusy = true;
   renderStatus();
   try {
-    const result = await client.compactConversation({ pid, keepLast, conversationId: "default" });
+    const result = await client.compactConversation({ pid, keepLast, conversationId: activeConversationId() });
     if (!result?.ok) {
       appendSystemRow("compact failed: " + (result?.error || "unknown error"));
       return;
@@ -1857,6 +1910,51 @@ async function compactActiveConversation() {
     appendSystemRow("compact failed: " + (error instanceof Error ? error.message : String(error)));
   } finally {
     compactBusy = false;
+    renderStatus();
+  }
+}
+
+async function branchFromMessage(messageId) {
+  if (!client || !client.isConnected()) {
+    appendSystemRow("session is locked");
+    return;
+  }
+  const pid = getActivePid();
+  if (!pid || !messageId) {
+    return;
+  }
+  const targetConversationId = "branch-" + Date.now().toString(36);
+  const title = "Branch from message " + messageId;
+  branchBusy = true;
+  renderLog();
+  renderStatus();
+  try {
+    const result = await client.forkConversation({
+      pid,
+      conversationId: activeConversationId(),
+      throughMessageId: messageId,
+      targetConversationId,
+      title,
+    });
+    if (!result?.ok) {
+      appendSystemRow("branch failed: " + (result?.error || "unknown error"));
+      return;
+    }
+    const target = asRecord(result.targetConversation);
+    const nextConversationId = asString(target?.id) || targetConversationId;
+    const nextTitle = asString(target?.title) || title;
+    activateThreadContext({
+      ...activeThreadContext,
+      pid,
+      conversationId: nextConversationId,
+      conversationTitle: nextTitle,
+    });
+    appendSystemRow("branched conversation at message " + messageId);
+  } catch (error) {
+    appendSystemRow("branch failed: " + (error instanceof Error ? error.message : String(error)));
+  } finally {
+    branchBusy = false;
+    renderLog();
     renderStatus();
   }
 }
@@ -1889,7 +1987,7 @@ async function loadArchiveSegments(options = {}) {
   archiveError = "";
   renderArchivePanel();
   try {
-    const result = await client.listConversationSegments({ pid, conversationId: "default" });
+    const result = await client.listConversationSegments({ pid, conversationId: activeConversationId() });
     if (!result?.ok) {
       archiveError = result?.error || "archive load failed";
       archiveSegments = [];
@@ -1938,7 +2036,7 @@ async function loadArchiveSegment(segmentId) {
   try {
     const result = await client.readConversationSegment({
       pid,
-      conversationId: "default",
+      conversationId: activeConversationId(),
       segmentId,
       limit: 100,
     });
@@ -2006,6 +2104,7 @@ function activateThreadContext(context) {
   }
   activeThreadContext = normalized;
   contextState = null;
+  activeMessageCount = 0;
   archiveSegments = [];
   selectedArchiveSegmentId = null;
   selectedArchiveMessages = [];
@@ -2051,6 +2150,7 @@ async function openThread(workspaceId) {
 function resetToNewThread() {
   activeThreadContext = setActiveThreadContext(null);
   contextState = null;
+  activeMessageCount = 0;
   archiveOpen = false;
   archiveSegments = [];
   selectedArchiveSegmentId = null;
@@ -2104,7 +2204,7 @@ async function sendMessage() {
     elements.chatInput.value = "";
     clearPendingAttachments();
     renderStatus();
-    const result = await client.sendMessage(message, pid || undefined, attachments);
+    const result = await client.sendMessage(message, pid || undefined, attachments, activeConversationId());
     if (!result.ok) {
       appendSystemRow("send failed: " + result.error);
       return;
@@ -2351,6 +2451,20 @@ function bindUi() {
       return;
     }
     void openThread(workspaceId);
+  });
+  elements.chatLog?.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) {
+      return;
+    }
+    const branchButton = target.closest("[data-branch-message-id]");
+    if (!(branchButton instanceof HTMLElement)) {
+      return;
+    }
+    const messageId = Number.parseInt(branchButton.dataset.branchMessageId || "", 10);
+    if (Number.isInteger(messageId) && messageId > 0) {
+      void branchFromMessage(messageId);
+    }
   });
   elements.openFiles?.addEventListener("click", () => openCompanion("files"));
   elements.openShell?.addEventListener("click", () => openCompanion("shell"));

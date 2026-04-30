@@ -18,6 +18,7 @@ export default definePackage({
         "proc.hil",
         "proc.history",
         "proc.conversation.compact",
+        "proc.conversation.fork",
         "proc.conversation.segment.read",
         "proc.conversation.segments",
         "proc.profile.list",

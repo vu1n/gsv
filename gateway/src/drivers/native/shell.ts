@@ -1507,13 +1507,15 @@ function parseProcCompactCommand(args: string[], ctx: KernelContext): {
 function parseProcForkCommand(args: string[], ctx: KernelContext): {
   pid: string;
   conversationId?: string;
-  segmentId: string;
+  segmentId?: string;
+  throughMessageId?: number;
   targetConversationId?: string;
   title?: string;
   includeLiveSuffix?: boolean;
 } {
   let pid: string | undefined;
   let conversationId: string | undefined;
+  let throughMessageId: number | undefined;
   let targetConversationId: string | undefined;
   let title: string | undefined;
   let includeLiveSuffix = true;
@@ -1529,6 +1531,11 @@ function parseProcForkCommand(args: string[], ctx: KernelContext): {
     if (current === "--conversation") {
       index += 1;
       conversationId = requireProcOptionValue(args[index], current);
+      continue;
+    }
+    if (current === "--message-id") {
+      index += 1;
+      throughMessageId = parsePositiveShellInteger(requireProcOptionValue(args[index], current), current);
       continue;
     }
     if (current === "--target") {
@@ -1549,8 +1556,8 @@ function parseProcForkCommand(args: string[], ctx: KernelContext): {
   }
 
   const segmentId = positional.shift();
-  if (!segmentId) {
-    throw new Error("missing segment id");
+  if (Boolean(segmentId) === (throughMessageId !== undefined)) {
+    throw new Error("provide exactly one of segment id or --message-id");
   }
   if (positional.length > 0) {
     throw new Error(`unexpected argument: ${positional[0]}`);
@@ -1558,7 +1565,8 @@ function parseProcForkCommand(args: string[], ctx: KernelContext): {
 
   return {
     pid: pid ?? requireCurrentProcessId(ctx),
-    segmentId,
+    ...(segmentId ? { segmentId } : {}),
+    ...(throughMessageId !== undefined ? { throughMessageId } : {}),
     ...(conversationId ? { conversationId } : {}),
     ...(targetConversationId ? { targetConversationId } : {}),
     ...(title ? { title } : {}),
@@ -1753,13 +1761,13 @@ function procUsage(): string {
     "  proc policy [--pid PID] [--conversation id] [--overflow manual|auto-compact|fail] [--compact-at N] [--keep-last N]",
     "  proc segment <segment-id> [--pid PID] [--conversation id] [--limit N] [--offset N] [--json]",
     "  proc compact [--pid PID] [--conversation id] (--keep-last N | --through-message-id ID) [--summary TEXT | --generate-summary]",
-    "  proc fork <segment-id> [--pid PID] [--conversation id] [--target id] [--title TITLE] [--segment-only]",
+    "  proc fork (<segment-id> | --message-id ID) [--pid PID] [--conversation id] [--target id] [--title TITLE] [--segment-only]",
     "  proc send <pid> [--conversation id] [--metadata-json json] <message>",
     "  proc call <pid> [--conversation id] [--metadata-json json] [--timeout 60s] <message>",
     "",
     "proc compact archives a conversation prefix and records a segment. Without",
     "--summary, it asks the process model to generate the visible summary.",
-    "proc fork restores a compacted segment into a new conversation.",
+    "proc fork branches a conversation from a message or restores a compacted segment.",
     "",
     "proc send is asynchronous mail. proc call is bounded: the caller receives",
     "an ipc.reply or ipc.timeout message in its default conversation.",

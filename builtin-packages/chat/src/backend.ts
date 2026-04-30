@@ -3,6 +3,7 @@ import {
   abortRun,
   compactConversation,
   decideHil,
+  forkConversation,
   getHistory,
   listConversationSegments,
   listProfiles,
@@ -45,6 +46,10 @@ export default class ChatBackend extends PackageBackendEntrypoint {
 
   async readConversationSegment(args: unknown): Promise<unknown> {
     return readConversationSegment(this.kernel, args);
+  }
+
+  async forkConversation(args: unknown): Promise<unknown> {
+    return forkConversation(this.kernel, args);
   }
 
   async abortRun(args: unknown): Promise<unknown> {

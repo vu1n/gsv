@@ -1123,6 +1123,7 @@ describe("Process DO — mechanical", () => {
       });
       expect(firstPage.messages).toEqual([
         {
+          id: expect.any(Number),
           role: "user",
           content: "old user",
           timestamp: 10,
@@ -1139,6 +1140,7 @@ describe("Process DO — mechanical", () => {
       )) as ResponseOkFrame;
       expect((secondPageRes.data as any).messages).toEqual([
         {
+          id: expect.any(Number),
           role: "assistant",
           content: {
             text: "old assistant",
@@ -1149,6 +1151,82 @@ describe("Process DO — mechanical", () => {
         },
       ]);
       expect((secondPageRes.data as any).truncated).toBe(false);
+    });
+
+    it("forks a live conversation from a message", async () => {
+      const pid = "mech-conversation-fork-message";
+      const stub = await initProcess(pid, ROOT_IDENTITY);
+
+      const messageIds = await runInDurableObject(stub, (instance: Process) => {
+        const process = instance as any;
+        const store = process.store;
+        process.__signals = [];
+        process.sendSignal = async (signal: string, payload: unknown) => {
+          process.__signals.push({ signal, payload });
+        };
+        store.openConversation({ conversationId: "thread", title: "Thread" });
+        return [
+          store.appendMessage("user", "first", { conversationId: "thread" }),
+          store.appendMessage("assistant", "second", { conversationId: "thread" }),
+          store.appendMessage("user", "third", { conversationId: "thread" }),
+        ];
+      });
+
+      const forkRes = (await stub.recvFrame(
+        makeReq("proc.conversation.fork", {
+          conversationId: "thread",
+          throughMessageId: messageIds[1],
+          targetConversationId: "branch",
+          title: "Branch",
+        }),
+      )) as ResponseOkFrame;
+      expect(forkRes.data).toMatchObject({
+        ok: true,
+        pid,
+        sourceConversationId: "thread",
+        throughMessageId: messageIds[1],
+        restoredMessages: 2,
+        includedLiveSuffix: false,
+        targetConversation: {
+          id: "branch",
+          title: "Branch",
+          messageCount: 2,
+        },
+      });
+
+      const historyRes = (await stub.recvFrame(
+        makeReq("proc.history", { conversationId: "branch" }),
+      )) as ResponseOkFrame;
+      expect((historyRes.data as any).messages.map((message: any) => ({
+        id: message.id,
+        role: message.role,
+        content: message.content,
+      }))).toEqual([
+        { id: expect.any(Number), role: "user", content: "first" },
+        { id: expect.any(Number), role: "assistant", content: "second" },
+      ]);
+
+      await runInDurableObject(stub, (instance: Process) => {
+        const process = instance as any;
+        expect(process.store.getMessages({ conversationId: "thread" }).map((message: any) => message.content)).toEqual([
+          "first",
+          "second",
+          "third",
+        ]);
+        expect(process.__signals).toEqual([
+          {
+            signal: "process.lifecycle",
+            payload: expect.objectContaining({
+              event: "conversation.forked",
+              pid,
+              sourceConversationId: "thread",
+              targetConversationId: "branch",
+              throughMessageId: messageIds[1],
+              restoredMessages: 2,
+            }),
+          },
+        ]);
+      });
     });
 
     it("forks a compacted segment into a new conversation", async () => {
@@ -1307,6 +1385,109 @@ describe("Process DO — mechanical", () => {
           keepLast: 42,
         },
       });
+    });
+
+    it("auto-compacts before the model call when policy threshold is crossed", async () => {
+      const pid = "mech-conversation-auto-compact";
+      const stub = await initProcess(pid, ROOT_IDENTITY);
+
+      const emitted = await runInDurableObject(stub, async (instance: Process) => {
+        const process = instance as any;
+        const emitted: Array<{ signal: string; payload: unknown }> = [];
+        process.sendSignal = async (signal: string, payload: unknown) => {
+          emitted.push({ signal, payload });
+        };
+        process.generation = {
+          async generate(request: any) {
+            const serialized = JSON.stringify(request.context);
+            expect(serialized).toContain("Context that must stay live.");
+            expect(serialized).toContain("Auto compact summary.");
+            expect(serialized).not.toContain("old context A");
+            return {
+              role: "assistant",
+              content: [{ type: "text", text: "after compaction" }],
+              api: "test",
+              provider: "test",
+              model: "test",
+              usage: {
+                input: 100,
+                output: 10,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 110,
+                cost: {
+                  input: 0,
+                  output: 0,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  total: 0,
+                },
+              },
+              stopReason: "stop",
+              timestamp: Date.now(),
+            };
+          },
+          async generateText(request: any) {
+            expect(request.purpose).toBe("compaction.summary");
+            expect(JSON.stringify(request.context)).toContain("old context A");
+            return "Auto compact summary.";
+          },
+        };
+
+        process.store.appendMessage("user", "old context A");
+        process.store.appendMessage("assistant", "old context B");
+        process.store.appendMessage("user", "Context that must stay live.");
+        process.store.setValue("conversationPolicy:default", JSON.stringify({
+          conversationId: "default",
+          overflow: "auto-compact",
+          compactAtPressure: 0.01,
+          keepLast: 1,
+          updatedAt: Date.now(),
+        }));
+        process.currentRun = {
+          runId: "run-auto-compact",
+          queued: false,
+          conversationId: "default",
+          config: {
+            profile: "task",
+            provider: "workers-ai",
+            model: "@cf/test/model",
+            apiKey: "",
+            reasoning: "off",
+            maxTokens: 100,
+            contextWindowTokens: 1000,
+            contextWindowSource: "config",
+            maxContextBytes: 32768,
+          },
+          tools: [],
+          devices: [],
+          systemPrompt: "Test system prompt.",
+          approvalPolicy: { default: "auto", rules: [] },
+        };
+        await process.continueAgentLoop("run-auto-compact");
+        return {
+          emitted,
+          messages: process.store.getMessages(),
+          segments: process.store.listConversationSegments(),
+        };
+      });
+
+      expect(emitted.messages.map((message: any) => [message.role, message.content])).toEqual([
+        ["system", expect.stringContaining("Auto compact summary.")],
+        ["user", "Context that must stay live."],
+        ["assistant", "after compaction"],
+      ]);
+      expect(emitted.segments).toHaveLength(1);
+      expect(emitted.segments[0]).toMatchObject({
+        kind: "compaction",
+      });
+      const lifecycleEvents = emitted.emitted
+        .filter((entry) => entry.signal === "process.lifecycle")
+        .map((entry) => (entry.payload as any).event);
+      expect(lifecycleEvents).toEqual([
+        "conversation.compacted",
+        "conversation.auto_compacted",
+      ]);
     });
   });
 

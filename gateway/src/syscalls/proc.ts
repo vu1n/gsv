@@ -188,6 +188,7 @@ export type ProcHistoryArgs = {
 };
 
 export type ProcHistoryMessage = {
+  id?: number;
   role: "user" | "assistant" | "system" | "toolResult";
   content: unknown;
   timestamp?: number;
@@ -394,7 +395,8 @@ export type ProcConversationCompactResult =
 export type ProcConversationForkArgs = {
   pid?: string;
   conversationId?: string;
-  segmentId: string;
+  segmentId?: string;
+  throughMessageId?: number;
   targetConversationId?: string;
   title?: string;
   includeLiveSuffix?: boolean;
@@ -406,7 +408,8 @@ export type ProcConversationForkResult =
       pid: string;
       sourceConversationId: string;
       targetConversation: ProcConversation;
-      segment: ProcConversationSegment;
+      segment?: ProcConversationSegment;
+      throughMessageId?: number;
       restoredMessages: number;
       includedLiveSuffix: boolean;
     }

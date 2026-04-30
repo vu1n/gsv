@@ -59,10 +59,14 @@ export async function sendMessage(kernel: KernelClient, input: unknown) {
   const args = normalizeArgs(input);
   const message = typeof args.message === "string" ? args.message : "";
   const pid = normalizePid(args.pid);
+  const conversationId = typeof args.conversationId === "string" && args.conversationId.trim()
+    ? args.conversationId.trim()
+    : undefined;
   const media = Array.isArray(args.media) ? args.media : [];
   return kernel.request("proc.send", {
     message,
     ...(pid ? { pid } : {}),
+    ...(conversationId ? { conversationId } : {}),
     ...(media.length > 0 ? { media } : {}),
   });
 }
@@ -122,6 +126,29 @@ export async function readConversationSegment(kernel: KernelClient, input: unkno
       ? { conversationId: args.conversationId.trim() }
       : {}),
     ...(typeof offset === "number" ? { offset } : {}),
+  });
+}
+
+export async function forkConversation(kernel: KernelClient, input: unknown) {
+  const args = normalizeArgs(input);
+  const pid = normalizePid(args.pid);
+  const throughMessageId = typeof args.throughMessageId === "number" && Number.isFinite(args.throughMessageId)
+    ? Math.floor(args.throughMessageId)
+    : undefined;
+  const targetConversationId = typeof args.targetConversationId === "string" && args.targetConversationId.trim()
+    ? args.targetConversationId.trim()
+    : undefined;
+  const title = typeof args.title === "string" && args.title.trim()
+    ? args.title.trim()
+    : undefined;
+  return kernel.request("proc.conversation.fork", {
+    ...(pid ? { pid } : {}),
+    ...(typeof args.conversationId === "string" && args.conversationId.trim()
+      ? { conversationId: args.conversationId.trim() }
+      : {}),
+    ...(throughMessageId !== undefined ? { throughMessageId } : {}),
+    ...(targetConversationId ? { targetConversationId } : {}),
+    ...(title ? { title } : {}),
   });
 }
 

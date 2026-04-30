@@ -164,6 +164,7 @@ type ProcessArchiveResult = {
 };
 
 type ArchivedMessageRecord = {
+  id?: number;
   role: MessageRole;
   content: string;
   toolCalls?: ToolCall[];
@@ -1071,6 +1072,7 @@ export class Process extends Host<Env> {
         }
 
         return {
+          id: r.id,
           role: r.role,
           content: {
             toolName: meta.toolName ?? "unknown",
@@ -1085,6 +1087,7 @@ export class Process extends Host<Env> {
       if (r.role === "assistant" && r.toolCalls) {
         const meta = parseAssistantMessageMeta(r.toolCalls);
         return {
+          id: r.id,
           role: r.role,
           content: {
             text: r.content,
@@ -1098,6 +1101,7 @@ export class Process extends Host<Env> {
       if (r.role === "user" && r.media) {
         const media = parseStoredProcessMedia(r.media);
         return {
+          id: r.id,
           role: r.role,
           content: {
             text: r.content,
@@ -1108,6 +1112,7 @@ export class Process extends Host<Env> {
       }
 
       return {
+        id: r.id,
         role: r.role,
         content: r.content,
         timestamp: r.createdAt,
@@ -1296,6 +1301,7 @@ export class Process extends Host<Env> {
 
   private async handleConversationCompact(
     args: ProcConversationCompactArgs,
+    options: { allowActive?: boolean; reason?: string } = {},
   ): Promise<ProcConversationCompactResult> {
     const pid = this.pid;
     const conversationId = normalizeConversationId(args.conversationId);
@@ -1320,7 +1326,7 @@ export class Process extends Host<Env> {
       return { ok: false, error: "proc.conversation.compact throughMessageId must be a positive integer" };
     }
 
-    if (this.currentRun?.conversationId === conversationId) {
+    if (!options.allowActive && this.currentRun?.conversationId === conversationId) {
       return { ok: false, error: `Conversation is active: ${conversationId}` };
     }
 
@@ -1389,6 +1395,7 @@ export class Process extends Host<Env> {
       archivedMessages: selected.length,
       archivedTo,
       summaryMessageId,
+      ...(options.reason ? { reason: options.reason } : {}),
     });
 
     return {
@@ -1426,14 +1433,15 @@ export class Process extends Host<Env> {
   ): Promise<ProcConversationForkResult> {
     const pid = this.pid;
     const sourceConversationId = normalizeConversationId(args.conversationId);
-    const segmentId = normalizeRequiredText(args.segmentId);
-    if (!segmentId) {
-      return { ok: false, error: "proc.conversation.fork requires segmentId" };
+    const segmentId = normalizeOptionalString(args.segmentId);
+    const throughMessageId = args.throughMessageId;
+    const hasSegmentId = Boolean(segmentId);
+    const hasThroughMessageId = throughMessageId !== undefined;
+    if (hasSegmentId === hasThroughMessageId) {
+      return { ok: false, error: "proc.conversation.fork requires exactly one of segmentId or throughMessageId" };
     }
-
-    const segment = this.store.getConversationSegment(sourceConversationId, segmentId);
-    if (!segment) {
-      return { ok: false, error: `Conversation segment not found: ${segmentId}` };
+    if (hasThroughMessageId && !isPositiveInteger(throughMessageId)) {
+      return { ok: false, error: "proc.conversation.fork throughMessageId must be a positive integer" };
     }
 
     const targetConversationId = normalizeConversationId(
@@ -1444,27 +1452,46 @@ export class Process extends Host<Env> {
       return { ok: false, error: `Target conversation already has messages: ${targetConversationId}` };
     }
 
-    let archivedMessages: ArchivedMessageRecord[];
-    try {
-      archivedMessages = await this.readArchivedMessageRecords(segment.archivePath);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return { ok: false, error: `Failed to read segment archive: ${message}` };
+    const includeLiveSuffix = hasSegmentId ? args.includeLiveSuffix !== false : false;
+    let segment: ReturnType<ProcessStore["getConversationSegment"]> = null;
+    let archivedMessages: ArchivedMessageRecord[] = [];
+    let liveMessages: MessageRecord[] = [];
+
+    if (segmentId) {
+      segment = this.store.getConversationSegment(sourceConversationId, segmentId);
+      if (!segment) {
+        return { ok: false, error: `Conversation segment not found: ${segmentId}` };
+      }
+      try {
+        archivedMessages = await this.readArchivedMessageRecords(segment.archivePath);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return { ok: false, error: `Failed to read segment archive: ${message}` };
+      }
+      liveMessages = includeLiveSuffix
+        ? this.store.getMessagesForGenerationAfter({
+            conversationId: sourceConversationId,
+            generation: segment.generation,
+            afterMessageId: segment.toMessageId,
+            throughCreatedAt: segment.createdAt,
+          })
+        : [];
+    } else {
+      liveMessages = this.store.getConversationPrefixMessages({
+        conversationId: sourceConversationId,
+        throughMessageId,
+      });
+      if (liveMessages.length === 0 || liveMessages[liveMessages.length - 1]?.id !== throughMessageId) {
+        return { ok: false, error: `Message not found in conversation: ${throughMessageId}` };
+      }
     }
-    const includeLiveSuffix = args.includeLiveSuffix !== false;
-    const suffixMessages = includeLiveSuffix
-      ? this.store.getMessagesForGenerationAfter({
-          conversationId: sourceConversationId,
-          generation: segment.generation,
-          afterMessageId: segment.toMessageId,
-          throughCreatedAt: segment.createdAt,
-        })
-      : [];
 
     const { conversation } = this.store.openConversation({
       conversationId: targetConversationId,
       title: normalizeOptionalString(args.title) ??
-        `Fork of ${sourceConversationId} at ${segment.id.slice(0, 8)}`,
+        `Fork of ${sourceConversationId} at ${
+          segment ? segment.id.slice(0, 8) : `message ${throughMessageId}`
+        }`,
     });
     const targetGeneration = conversation.generation;
     let restoredMessages = 0;
@@ -1474,15 +1501,8 @@ export class Process extends Host<Env> {
       restoredMessages += 1;
     }
 
-    for (const message of suffixMessages) {
-      this.store.appendMessage(message.role, message.content, {
-        conversationId: targetConversationId,
-        generation: targetGeneration,
-        toolCalls: message.toolCalls ?? undefined,
-        toolCallId: message.toolCallId ?? undefined,
-        media: message.media ?? undefined,
-        createdAt: message.createdAt,
-      });
+    for (const message of liveMessages) {
+      this.appendRestoredLiveMessage(message, targetConversationId, targetGeneration);
       restoredMessages += 1;
     }
 
@@ -1491,7 +1511,8 @@ export class Process extends Host<Env> {
       pid,
       sourceConversationId,
       targetConversationId,
-      segment: this.toProcConversationSegment(segment),
+      ...(segment ? { segment: this.toProcConversationSegment(segment) } : {}),
+      ...(throughMessageId !== undefined ? { throughMessageId } : {}),
       restoredMessages,
       includedLiveSuffix: includeLiveSuffix,
     });
@@ -1501,7 +1522,8 @@ export class Process extends Host<Env> {
       pid,
       sourceConversationId,
       targetConversation: this.toProcConversation(this.store.getConversation(targetConversationId) ?? conversation),
-      segment: this.toProcConversationSegment(segment),
+      ...(segment ? { segment: this.toProcConversationSegment(segment) } : {}),
+      ...(throughMessageId !== undefined ? { throughMessageId } : {}),
       restoredMessages,
       includedLiveSuffix: includeLiveSuffix,
     };
@@ -1539,6 +1561,21 @@ export class Process extends Host<Env> {
       toolCalls,
       toolCallId: message.toolCallId,
       media: message.media === undefined ? undefined : JSON.stringify(message.media),
+      createdAt: message.createdAt,
+    });
+  }
+
+  private appendRestoredLiveMessage(
+    message: MessageRecord,
+    conversationId: string,
+    generation: number,
+  ): number {
+    return this.store.appendMessage(message.role, message.content, {
+      conversationId,
+      generation,
+      toolCalls: message.toolCalls ?? undefined,
+      toolCallId: message.toolCallId ?? undefined,
+      media: message.media ?? undefined,
       createdAt: message.createdAt,
     });
   }
@@ -1590,6 +1627,7 @@ export class Process extends Host<Env> {
   private toProcHistoryMessageFromArchive(message: ArchivedMessageRecord): ProcHistoryMessage {
     if (message.role === "toolResult") {
       return {
+        id: message.id,
         role: message.role,
         content: {
           toolName: "unknown",
@@ -1603,6 +1641,7 @@ export class Process extends Host<Env> {
 
     if (message.role === "assistant") {
       return {
+        id: message.id,
         role: message.role,
         content: {
           text: message.content,
@@ -1615,6 +1654,7 @@ export class Process extends Host<Env> {
 
     if (message.role === "user" && message.media !== undefined) {
       return {
+        id: message.id,
         role: message.role,
         content: {
           text: message.content,
@@ -1625,6 +1665,7 @@ export class Process extends Host<Env> {
     }
 
     return {
+      id: message.id,
       role: message.role,
       content: message.content,
       timestamp: message.createdAt,
@@ -1969,22 +2010,47 @@ export class Process extends Host<Env> {
     }
 
     // Step 5: Build pi-ai Context
-    const piMessages = await this.buildContextMessages(conversationId);
+    let piMessages = await this.buildContextMessages(conversationId);
     const tools: Tool[] = (run.tools ?? []).map((t) => ({
       name: t.name,
       description: t.description,
       parameters: t.inputSchema as Tool["parameters"],
     }));
 
-    const context: Context = {
+    let context: Context = {
       systemPrompt: run.systemPrompt,
       messages: piMessages,
       tools: tools.length > 0 ? tools : undefined,
     };
 
-    await this.updateContextState(runId, conversationId, run.config!, context);
+    const initialContextState = await this.updateContextState(runId, conversationId, run.config!, context);
     if (this.handleRunStopped(runId)) {
       return;
+    }
+
+    const contextPreflight = await this.applyConversationContextPolicy(
+      runId,
+      conversationId,
+      run.config!,
+      initialContextState,
+    );
+    if (contextPreflight === "stopped") {
+      return;
+    }
+    if (contextPreflight === "compacted") {
+      if (this.handleRunStopped(runId)) {
+        return;
+      }
+      piMessages = await this.buildContextMessages(conversationId);
+      context = {
+        systemPrompt: run.systemPrompt,
+        messages: piMessages,
+        tools: tools.length > 0 ? tools : undefined,
+      };
+      await this.updateContextState(runId, conversationId, run.config!, context);
+      if (this.handleRunStopped(runId)) {
+        return;
+      }
     }
 
     // Step 6: Call LLM
@@ -2106,6 +2172,106 @@ export class Process extends Host<Env> {
     console.log(`[Process] Finished run ${runId}`);
 
     this.promoteNextQueuedRun();
+  }
+
+  private async applyConversationContextPolicy(
+    runId: string,
+    conversationId: string,
+    config: AiConfigResult,
+    state: ProcContextState,
+  ): Promise<"ready" | "compacted" | "stopped"> {
+    const pressure = state.pressure;
+    if (pressure === null || !Number.isFinite(pressure)) {
+      return "ready";
+    }
+
+    const policy = this.getConversationContextPolicy(conversationId);
+    if (pressure < policy.compactAtPressure) {
+      return "ready";
+    }
+
+    if (policy.overflow === "manual") {
+      return "ready";
+    }
+
+    if (policy.overflow === "fail") {
+      const message = [
+        "Context limit policy stopped this run.",
+        `Policy: fail at ${Math.round(policy.compactAtPressure * 100)}% context pressure.`,
+        `Current estimate: ${Math.round(pressure * 100)}%.`,
+        "Compact or reset the conversation before sending more work.",
+      ].join("\n");
+      this.store.appendMessage("system", message, { conversationId });
+      await this.sendSignal("chat.complete", {
+        text: null,
+        error: message,
+        pid: this.pid,
+        runId,
+      });
+      await this.finishRun("context.policy.fail");
+      return "stopped";
+    }
+
+    const selected = this.store.getConversationPrefixMessages({
+      conversationId,
+      keepLast: policy.keepLast,
+    });
+    if (selected.length === 0) {
+      if (pressure < 1) {
+        return "ready";
+      }
+      const message = [
+        "Context limit reached, but auto-compaction could not archive any older messages.",
+        `Policy keeps the newest ${policy.keepLast} messages live.`,
+        "Lower the keep-last value, compact manually, or reset this conversation.",
+      ].join("\n");
+      this.store.appendMessage("system", message, { conversationId });
+      await this.sendSignal("chat.complete", {
+        text: null,
+        error: message,
+        pid: this.pid,
+        runId,
+      });
+      await this.finishRun("context.auto_compact.empty");
+      return "stopped";
+    }
+
+    const result = await this.handleConversationCompact(
+      {
+        conversationId,
+        keepLast: policy.keepLast,
+        generateSummary: true,
+      },
+      {
+        allowActive: true,
+        reason: "auto-compact",
+      },
+    );
+    if (!result.ok) {
+      const message = `Auto-compaction failed before model call: ${result.error}`;
+      this.store.appendMessage("system", message, { conversationId });
+      await this.sendSignal("chat.complete", {
+        text: null,
+        error: message,
+        pid: this.pid,
+        runId,
+      });
+      await this.finishRun("context.auto_compact.failed");
+      return "stopped";
+    }
+
+    await this.emitProcessLifecycle({
+      event: "conversation.auto_compacted",
+      pid: this.pid,
+      conversationId,
+      provider: config.provider,
+      model: config.model,
+      pressure,
+      policy,
+      segment: result.segment,
+      archivedMessages: result.archivedMessages,
+    });
+    return "compacted";
   }
 
   private async updateContextState(
@@ -3117,6 +3283,7 @@ function serializeArchivedMessage(message: MessageRecord): Record<string, unknow
   if (message.role === "assistant") {
     const meta = parseAssistantMessageMeta(message.toolCalls);
     return {
+      id: message.id,
       conversation_id: message.conversationId,
       generation: message.generation,
       role: message.role,
@@ -3129,6 +3296,7 @@ function serializeArchivedMessage(message: MessageRecord): Record<string, unknow
   }
 
   return {
+    id: message.id,
     conversation_id: message.conversationId,
     generation: message.generation,
     role: message.role,
@@ -3153,8 +3321,12 @@ function parseArchivedMessageRecord(value: unknown): ArchivedMessageRecord {
   const createdAt = typeof record.ts === "number" && Number.isFinite(record.ts)
     ? record.ts
     : undefined;
+  const id = typeof record.id === "number" && Number.isInteger(record.id) && record.id > 0
+    ? record.id
+    : undefined;
 
   return {
+    id,
     role,
     content,
     toolCalls: Array.isArray(record.tool_calls)

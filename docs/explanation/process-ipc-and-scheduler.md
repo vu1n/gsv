@@ -252,6 +252,11 @@ Compaction should be callable explicitly:
 - `proc.conversation.segment.read`
 - `proc.conversation.segments`
 
+`proc.conversation.fork` is the user-facing branch operation. Given a live
+message id it duplicates the conversation through that message into a new
+process-local conversation. Given a compacted segment id it restores archived
+history into a new conversation.
+
 It may also run automatically under a visible conversation policy, but that
 policy must be part of process/conversation state.
 
@@ -266,8 +271,9 @@ type ConversationContextPolicy = {
 ```
 
 `proc.conversation.policy.get` and `proc.conversation.policy.set` expose this
-policy. The default is manual; automatic compaction should only happen when the
-conversation policy explicitly opts into `auto-compact`.
+policy. The default is manual; automatic compaction only happens when the
+conversation policy explicitly opts into `auto-compact`, and it runs as part of
+the normal process run preflight before a model call.
 
 Automatic compaction is acceptable when it is policy-driven, recorded, and
 visible. It should not be a secret background subsystem.
@@ -505,9 +511,10 @@ archives an old prefix of active messages, inserts a visible summary marker at
 the prefix boundary, and records a `compaction` segment that can be listed with
 `proc.conversation.segments`. `proc.conversation.segment.read` pages archived
 messages out of a compacted segment without restoring them. `proc.conversation.fork`
-can restore a compacted segment into a new conversation, including the live suffix
-that existed at the compaction boundary by default. Compaction and fork emit
-`process.lifecycle` so UI clients can refresh without polling. Process-wide
+can branch a live conversation through a message id, or restore a compacted
+segment into a new conversation, including the live suffix that existed at the
+compaction boundary by default. Compaction and fork emit `process.lifecycle` so
+UI clients can refresh without polling. Process-wide
 `proc.reset` and `proc.kill` archive every non-empty conversation into a
 directory with one generation file per conversation before clearing all
 conversation messages and runtime state.
