@@ -40,6 +40,8 @@ import {
   asNumber,
   asRecord,
   asString,
+  closeChatMenus,
+  closeContainingChatMenu,
   copyTextToClipboard,
   deriveThreadLabel,
   dropEmptyPlaceholder,
@@ -50,6 +52,7 @@ import {
   formatError,
   getStatusText,
   getStoredThreadContext,
+  isInsideChatMenu,
   isNearBottom,
   normalizeContextSignal,
   normalizeContextState,
@@ -384,6 +387,16 @@ export function App({ backend }: { backend: ChatBackend }) {
     setRows(systemRows(draftConversationMeta(draftProfile)));
     return undefined;
   }, [active?.pid, active?.conversationId, backend, draftProfile, loadConversations, loadHistory]);
+
+  useEffect(() => {
+    function handlePointerDown(event: PointerEvent): void {
+      if (!isInsideChatMenu(event.target)) {
+        closeChatMenus();
+      }
+    }
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, []);
 
   useEffect(() => {
     function handleTargetEvent(event: Event) {
@@ -873,27 +886,35 @@ export function App({ backend }: { backend: ChatBackend }) {
             </span>
             <span class="connection-dot is-connected" title="connected" aria-label="connected" />
             <details class="process-menu">
-              <summary class="icon-button" title="Process actions" aria-label="Process actions">
+              <summary class="icon-button" title="Process actions" aria-label="Process actions" onClick={(event) => {
+                closeChatMenus((event.currentTarget as HTMLElement).closest("details") as HTMLDetailsElement | null);
+              }}>
                 <MoreIcon />
               </summary>
               <div class="process-menu-popover">
-                <button type="button" class="menu-action" disabled={!active} onClick={() => openCompanion("files")}>
+                <button type="button" class="menu-action" disabled={!active} onClick={(event) => { closeContainingChatMenu(event.currentTarget); openCompanion("files"); }}>
                   <FolderIcon />
                   <span>Files</span>
                 </button>
-                <button type="button" class="menu-action" disabled={!active} onClick={() => openCompanion("shell")}>
+                <button type="button" class="menu-action" disabled={!active} onClick={(event) => { closeContainingChatMenu(event.currentTarget); openCompanion("shell"); }}>
                   <TerminalIcon />
                   <span>Shell</span>
                 </button>
-                <button type="button" class="menu-action" disabled={!active} onClick={() => active ? void copyText("process id", active.pid) : undefined}>
+                <button type="button" class="menu-action" disabled={!active} onClick={(event) => {
+                  closeContainingChatMenu(event.currentTarget);
+                  if (active) void copyText("process id", active.pid);
+                }}>
                   <TerminalIcon />
                   <span>Copy process ID</span>
                 </button>
-                <button type="button" class="menu-action" disabled={!active} onClick={() => active ? void copyText("workspace", active.cwd) : undefined}>
+                <button type="button" class="menu-action" disabled={!active} onClick={(event) => {
+                  closeContainingChatMenu(event.currentTarget);
+                  if (active) void copyText("workspace", active.cwd);
+                }}>
                   <FolderIcon />
                   <span>Copy workspace</span>
                 </button>
-                <button type="button" class="menu-action" disabled={!canActOnConversation || compactBusy} onClick={openCompactDialog}>
+                <button type="button" class="menu-action" disabled={!canActOnConversation || compactBusy} onClick={(event) => { closeContainingChatMenu(event.currentTarget); openCompactDialog(); }}>
                   <CompactIcon />
                   <span>{compactBusy ? "Compacting..." : "Compact"}</span>
                 </button>

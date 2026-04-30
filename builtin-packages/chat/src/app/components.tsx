@@ -34,6 +34,8 @@ import {
   asRecord,
   asString,
   basenamePath,
+  closeChatMenus,
+  closeContainingChatMenu,
   copyTextToClipboard,
   describeAttachment,
   describeHilSummary,
@@ -379,11 +381,13 @@ function MessageBubble({ row, branchBusy, branchable = true, onCopy, onBranch }:
         <span class="message-spacer" />
         <span>{formatTimestamp(row.timestamp)}</span>
         <details class="message-menu">
-          <summary class="message-action" title="Message actions" aria-label="Message actions">
+          <summary class="message-action" title="Message actions" aria-label="Message actions" onClick={(event) => {
+            closeChatMenus((event.currentTarget as HTMLElement).closest("details") as HTMLDetailsElement | null);
+          }}>
             <MoreIcon />
           </summary>
           <div class="message-menu-popover">
-            <button type="button" class="menu-action" onClick={() => onCopy(row.text)}>
+            <button type="button" class="menu-action" onClick={(event) => { closeContainingChatMenu(event.currentTarget); onCopy(row.text); }}>
               <CopyIcon />
               <span>Copy</span>
             </button>
@@ -392,7 +396,7 @@ function MessageBubble({ row, branchBusy, branchable = true, onCopy, onBranch }:
                 type="button"
                 class="menu-action"
                 disabled={branchBusy}
-                onClick={() => onBranch(row.messageId as number)}
+                onClick={(event) => { closeContainingChatMenu(event.currentTarget); onBranch(row.messageId as number); }}
               >
                 <BranchIcon />
                 <span>Branch</span>

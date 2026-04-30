@@ -701,6 +701,32 @@ function isNearBottom(node: HTMLElement, thresholdPx = 96): boolean {
   return node.scrollHeight - node.scrollTop - node.clientHeight <= thresholdPx;
 }
 
+const CHAT_MENU_SELECTOR = "details.process-menu, details.message-menu";
+
+function closeChatMenus(except?: HTMLDetailsElement | null): void {
+  if (typeof document === "undefined") {
+    return;
+  }
+  document.querySelectorAll<HTMLDetailsElement>(`${CHAT_MENU_SELECTOR}[open]`).forEach((menu) => {
+    if (menu !== except) {
+      menu.open = false;
+    }
+  });
+}
+
+function closeContainingChatMenu(target: EventTarget | null): void {
+  const element = target instanceof Element ? target : null;
+  const menu = element?.closest(CHAT_MENU_SELECTOR);
+  if (menu instanceof HTMLDetailsElement) {
+    menu.open = false;
+  }
+}
+
+function isInsideChatMenu(target: EventTarget | null): boolean {
+  const element = target instanceof Element ? target : null;
+  return Boolean(element?.closest(CHAT_MENU_SELECTOR));
+}
+
 async function copyTextToClipboard(text: string): Promise<void> {
   if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
     try {
@@ -806,6 +832,8 @@ export {
   asRecord,
   asString,
   basenamePath,
+  closeChatMenus,
+  closeContainingChatMenu,
   copyTextToClipboard,
   describeAttachment,
   describeHilSummary,
@@ -825,6 +853,7 @@ export {
   getStatusText,
   getStoredThreadContext,
   inferToolSyscall,
+  isInsideChatMenu,
   isNearBottom,
   labelForRole,
   normalizeContextSignal,
