@@ -487,7 +487,7 @@ function getStatusText(args: {
   if (args.abortBusy) return "Stopping active run...";
   if (args.messageBusy) return "Run in progress. Responses will refresh as signals arrive.";
   if (args.pendingAssistant) return "Run active. Send to queue another message or stop it.";
-  if (args.active) return args.active.pid.startsWith("init:") ? "Attached to Home." : "Attached to active process.";
+  if (args.active) return "Ready";
   return draftConversationMeta(args.draftProfile);
 }
 

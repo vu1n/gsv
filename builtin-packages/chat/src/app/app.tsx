@@ -27,7 +27,6 @@ import {
   Transcript,
 } from "./components";
 import {
-  BranchIcon,
   CompactIcon,
   FolderIcon,
   MoreIcon,
@@ -62,7 +61,6 @@ import {
   readAttachmentFile,
   safeText,
   setStoredThreadContext,
-  shortId,
   sortConversations,
   systemRow,
   systemRows,
@@ -789,6 +787,15 @@ export function App({ backend }: { backend: ChatBackend }) {
     }
   }
 
+  async function copyMessageContent(text: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(text);
+      setNotice("Copied message.");
+    } catch (error) {
+      appendSystem("copy failed: " + formatError(error));
+    }
+  }
+
   async function readAttachments(files: FileList | null): Promise<void> {
     const selected = Array.from(files || []);
     if (selected.length === 0) {
@@ -833,15 +840,18 @@ export function App({ backend }: { backend: ChatBackend }) {
         <header class="chat-stage-head">
           <div class="chat-stage-title">
             <h1>{activeTitle}</h1>
-            <div class="identity-chips">
+            <div class={active ? "identity-icons" : "identity-icons is-draft"}>
               {active ? (
                 <>
-                  <span title={active.pid}><TerminalIcon />{shortId(active.pid)}</span>
-                  <span><FolderIcon />{active.cwd}</span>
-                  <span><BranchIcon />{activeConversation?.title || active.conversationTitle || activeConversationId}</span>
+                  <span class="identity-icon" title={`Process: ${active.pid}`} aria-label={`Process: ${active.pid}`}>
+                    <TerminalIcon />
+                  </span>
+                  <span class="identity-icon" title={`Workspace: ${active.cwd}`} aria-label={`Workspace: ${active.cwd}`}>
+                    <FolderIcon />
+                  </span>
                 </>
               ) : (
-                <span>{draftConversationMeta(draftProfile)}</span>
+                <span class="draft-meta">{draftConversationMeta(draftProfile)}</span>
               )}
             </div>
             <ContextMeter state={active ? contextState : null} />
@@ -866,12 +876,9 @@ export function App({ backend }: { backend: ChatBackend }) {
             />
           </div>
           <div class="chat-stage-actions">
-            {workspaceView === "archive" ? (
-              <span class={"run-state-chip " + runStateClass} title={statusText}>
-                <span />
-                {runStateLabel}
-              </span>
-            ) : null}
+            <span class={"run-status " + runStateClass} title={`${runStateLabel}: ${statusText}`} aria-label={`${runStateLabel}: ${statusText}`}>
+              <TerminalIcon />
+            </span>
             <span class="connection-dot is-connected" title="connected" aria-label="connected" />
             <details class="process-menu">
               <summary class="icon-button" title="Process actions" aria-label="Process actions">
@@ -914,6 +921,7 @@ export function App({ backend }: { backend: ChatBackend }) {
               hilBusy={hilBusy}
               branchBusy={branchBusy}
               refNode={transcriptRef}
+              onCopy={(text) => void copyMessageContent(text)}
               onBranch={(messageId) => void branchFromMessage(messageId)}
               onHilDecision={(requestId, decision) => void decidePendingHil(requestId, decision)}
             />
@@ -925,9 +933,6 @@ export function App({ backend }: { backend: ChatBackend }) {
               canSend={canSend}
               canStop={canStop}
               stopBusy={abortBusy}
-              runStateClass={runStateClass}
-              runStateLabel={runStateLabel}
-              statusText={statusText}
               onValueChange={setComposeText}
               onSubmit={() => void sendMessage()}
               onStop={() => void abortActiveRun()}

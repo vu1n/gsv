@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "preact/hooks";
 import type {
   ArchiveState,
   Attachment,
@@ -16,9 +17,11 @@ import {
   ArchiveIcon,
   BranchIcon,
   CheckIcon,
+  CopyIcon,
   GaugeIcon,
   HomeIcon,
   MessageIcon,
+  MoreIcon,
   PaperclipIcon,
   PlusIcon,
   RefreshIcon,
@@ -327,6 +330,7 @@ export function Transcript(props: {
   hilBusy: boolean;
   branchBusy: boolean;
   refNode: { current: HTMLDivElement | null };
+  onCopy(text: string): void;
   onBranch(messageId: number): void;
   onHilDecision(requestId: string, decision: "approve" | "deny"): void;
 }) {
@@ -350,7 +354,7 @@ export function Transcript(props: {
           return <ToolCard key={`${row.callId}:${index}`} row={row} />;
         }
         const messageRow = row as MessageRow;
-        return <MessageBubble key={`${messageRow.messageId ?? index}:${messageRow.timestamp}`} row={messageRow} branchBusy={props.branchBusy} onBranch={props.onBranch} />;
+        return <MessageBubble key={`${messageRow.messageId ?? index}:${messageRow.timestamp}`} row={messageRow} branchBusy={props.branchBusy} onCopy={props.onCopy} onBranch={props.onBranch} />;
       })}
       {props.pendingHil && !hilRendered ? (
         <HilCard request={props.pendingHil} busy={props.hilBusy} onDecision={props.onHilDecision} />
@@ -365,7 +369,7 @@ export function Transcript(props: {
   );
 }
 
-function MessageBubble({ row, branchBusy, branchable = true, onBranch }: { row: MessageRow; branchBusy: boolean; branchable?: boolean; onBranch(messageId: number): void }) {
+function MessageBubble({ row, branchBusy, branchable = true, onCopy, onBranch }: { row: MessageRow; branchBusy: boolean; branchable?: boolean; onCopy(text: string): void; onBranch(messageId: number): void }) {
   const thinking = row.thinking?.filter(Boolean) ?? [];
   return (
     <article class={`message message-${row.role}`}>
@@ -373,18 +377,28 @@ function MessageBubble({ row, branchBusy, branchable = true, onBranch }: { row: 
         <span>{labelForRole(row.role)}</span>
         <span class="message-spacer" />
         <span>{formatTimestamp(row.timestamp)}</span>
-        {branchable && row.messageId ? (
-          <button
-            type="button"
-            class="message-action"
-            title="Branch from this message"
-            aria-label="Branch from this message"
-            disabled={branchBusy}
-            onClick={() => onBranch(row.messageId as number)}
-          >
-            <BranchIcon />
-          </button>
-        ) : null}
+        <details class="message-menu">
+          <summary class="message-action" title="Message actions" aria-label="Message actions">
+            <MoreIcon />
+          </summary>
+          <div class="message-menu-popover">
+            <button type="button" class="menu-action" onClick={() => onCopy(row.text)}>
+              <CopyIcon />
+              <span>Copy</span>
+            </button>
+            {branchable && row.messageId ? (
+              <button
+                type="button"
+                class="menu-action"
+                disabled={branchBusy}
+                onClick={() => onBranch(row.messageId as number)}
+              >
+                <BranchIcon />
+                <span>Branch</span>
+              </button>
+            ) : null}
+          </div>
+        </details>
       </div>
       {thinking.length > 0 ? (
         <details class="message-thinking">
@@ -656,11 +670,20 @@ export function Composer(props: {
   onStop(): void;
   onFiles(files: FileList | null): void;
   onRemoveAttachment(index: number): void;
-  runStateClass: string;
-  runStateLabel: string;
-  statusText: string;
 }) {
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const actionLabel = props.canStop ? (props.stopBusy ? "Stopping..." : "Stop") : "Send";
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) {
+      return;
+    }
+    const maxHeight = 176;
+    textarea.style.height = "auto";
+    const nextHeight = Math.min(maxHeight, Math.max(42, textarea.scrollHeight));
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+  }, [props.value]);
   return (
     <form class="composer" onSubmit={(event) => { event.preventDefault(); props.onSubmit(); }}>
       {props.attachments.length > 0 ? (
@@ -683,6 +706,8 @@ export function Composer(props: {
           }} />
         </label>
         <textarea
+          ref={textareaRef}
+          rows={1}
           value={props.value}
           disabled={props.disabled}
           placeholder="Ask, continue the thread, or describe work for this process."
@@ -695,23 +720,15 @@ export function Composer(props: {
           }}
         />
         <button
-          class={props.canStop ? "composer-action danger" : "composer-action"}
+          class={props.canStop ? "composer-action icon-button danger" : "composer-action icon-button"}
           type={props.canStop ? "button" : "submit"}
+          title={actionLabel}
+          aria-label={actionLabel}
           disabled={props.canStop ? props.stopBusy : !props.canSend}
           onClick={props.canStop ? props.onStop : undefined}
         >
           {props.canStop ? <StopIcon /> : <SendIcon />}
-          <span>{actionLabel}</span>
         </button>
-      </div>
-      <div class="composer-foot">
-        <div class="composer-status">
-          <span class={"run-state-chip " + props.runStateClass} title={props.statusText}>
-            <span />
-            {props.runStateLabel}
-          </span>
-          <span>{props.statusText}</span>
-        </div>
       </div>
     </form>
   );
@@ -767,5 +784,5 @@ function ArchiveRow({ row }: { row: LogRow }) {
   if (row.kind === "toolCall" || row.kind === "toolResult") {
     return <ToolCard row={row} />;
   }
-  return <MessageBubble row={row as MessageRow} branchBusy={false} branchable={false} onBranch={() => {}} />;
+  return <MessageBubble row={row as MessageRow} branchBusy={false} branchable={false} onCopy={(text) => { void navigator.clipboard.writeText(text).catch(() => {}); }} onBranch={() => {}} />;
 }

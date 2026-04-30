@@ -593,34 +593,46 @@ textarea {
   cursor: pointer;
 }
 
-.identity-chips {
+.identity-icons {
   min-width: 0;
   display: flex;
-  flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
 }
 
-.identity-chips span {
-  max-width: min(38vw, 420px);
-  min-width: 0;
+.identity-icons.is-draft {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.identity-icon {
+  width: 24px;
+  height: 24px;
   border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 3px 8px;
+  border-radius: 7px;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  justify-content: center;
   color: var(--muted);
   background: rgba(255, 255, 255, 0.68);
-  font: 11px/1.2 var(--mono);
+}
+
+.identity-icon:hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+  background: var(--panel-strong);
+}
+
+.draft-meta {
+  min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
-.identity-chips svg {
-  flex: 0 0 auto;
-  width: 12px;
-  height: 12px;
+.identity-icons svg {
+  width: 13px;
+  height: 13px;
   stroke: currentColor;
   fill: none;
   stroke-width: 1.9;
@@ -633,24 +645,83 @@ textarea {
   justify-content: flex-end;
 }
 
-.process-menu {
+.run-status {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.68);
+}
+
+.run-status::after {
+  content: "";
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 7px;
+  height: 7px;
+  border: 1px solid var(--panel-strong);
+  border-radius: 999px;
+  background: var(--green);
+}
+
+.run-status svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.run-status.is-running {
+  color: var(--blue);
+}
+
+.run-status.is-running::after {
+  background: var(--blue);
+  box-shadow: 0 0 0 4px rgba(31, 92, 153, 0.1);
+}
+
+.run-status.is-waiting::after {
+  background: var(--yellow);
+}
+
+.run-status.is-error {
+  color: var(--red);
+}
+
+.run-status.is-error::after {
+  background: var(--red);
+}
+
+.process-menu,
+.message-menu {
   position: relative;
 }
 
-.process-menu > summary {
+.process-menu > summary,
+.message-menu > summary {
   list-style: none;
 }
 
-.process-menu > summary::-webkit-details-marker {
+.process-menu > summary::-webkit-details-marker,
+.message-menu > summary::-webkit-details-marker {
   display: none;
 }
 
-.process-menu-popover {
+.process-menu-popover,
+.message-menu-popover {
   position: absolute;
   z-index: 20;
   top: calc(100% + 8px);
   right: 0;
-  width: 178px;
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 6px;
@@ -660,6 +731,14 @@ textarea {
   box-shadow: 0 14px 30px rgba(24, 32, 40, 0.16);
 }
 
+.process-menu-popover {
+  width: 178px;
+}
+
+.message-menu-popover {
+  width: 132px;
+}
+
 .menu-action {
   width: 100%;
   border: 0;
@@ -667,7 +746,7 @@ textarea {
   padding: 8px 9px;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 5px;
   color: var(--text);
   background: transparent;
   text-align: left;
@@ -700,39 +779,6 @@ textarea {
   border-radius: 999px;
   background: var(--green);
   border: 1px solid rgba(45, 124, 85, 0.2);
-}
-
-.run-state-chip {
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 5px 9px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--muted);
-  background: rgba(255, 255, 255, 0.68);
-  font-size: 11px;
-  font-weight: 800;
-}
-
-.run-state-chip > span {
-  width: 7px;
-  height: 7px;
-  border-radius: 999px;
-  background: var(--green);
-}
-
-.run-state-chip.is-running > span {
-  background: var(--blue);
-  box-shadow: 0 0 0 4px rgba(31, 92, 153, 0.1);
-}
-
-.run-state-chip.is-waiting > span {
-  background: var(--yellow);
-}
-
-.run-state-chip.is-error > span {
-  background: var(--red);
 }
 
 .chat-notice-row {
@@ -809,7 +855,7 @@ textarea {
 .transcript {
   min-height: 0;
   overflow: auto;
-  padding: 14px 14px 184px;
+  padding: 14px 14px 238px;
   display: grid;
   align-content: start;
   gap: 10px;
@@ -855,6 +901,15 @@ textarea {
   flex: 1;
 }
 
+.message-menu {
+  position: relative;
+}
+
+.message-menu[open] .message-action {
+  color: var(--blue);
+  background: var(--blue-soft);
+}
+
 .message-action {
   width: 25px;
   height: 25px;
@@ -867,11 +922,16 @@ textarea {
   background: rgba(24, 32, 40, 0.05);
   color: var(--soft);
   cursor: pointer;
+  list-style: none;
 }
 
 .message-action:hover:not(:disabled) {
   color: var(--blue);
   background: var(--blue-soft);
+}
+
+.message-action::-webkit-details-marker {
+  display: none;
 }
 
 .message-action svg {
@@ -1223,7 +1283,7 @@ textarea {
   width: auto;
   min-width: 0;
   min-height: 42px;
-  max-height: 160px;
+  max-height: 176px;
   resize: none;
   border: 0;
   border-radius: 10px;
@@ -1231,35 +1291,26 @@ textarea {
   outline: none;
   color: var(--text);
   background: transparent;
+  overflow: hidden;
 }
 
 .composer textarea:focus {
   box-shadow: none;
 }
 
-.composer-foot {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
 .composer-action {
-  min-width: 72px;
-  height: 36px;
+  width: 38px;
+  min-width: 38px;
+  height: 38px;
   border: 1px solid var(--blue);
   border-radius: 9px;
-  padding: 0 13px;
+  padding: 0;
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
   color: #fff;
   background: var(--blue);
-  font-weight: 800;
   cursor: pointer;
 }
 
@@ -1281,21 +1332,6 @@ textarea {
 .composer-action:disabled {
   opacity: 0.48;
   cursor: default;
-}
-
-.composer-status {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.composer-status > span:last-child {
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
 }
 
 .primary-button,
@@ -1396,8 +1432,7 @@ textarea {
     display: none;
   }
 
-  .chat-stage-head,
-  .composer-foot {
+  .chat-stage-head {
     align-items: stretch;
     flex-direction: column;
   }
@@ -1407,7 +1442,7 @@ textarea {
   }
 
   .transcript {
-    padding: 12px 10px 204px;
+    padding: 12px 10px 252px;
   }
 
   .composer {
@@ -1417,17 +1452,9 @@ textarea {
     width: calc(100% - 20px);
   }
 
-  .composer-foot {
-    gap: 6px;
-  }
-
   .composer-action {
-    min-width: 44px;
-    padding: 0 11px;
-  }
-
-  .composer-action span {
-    display: none;
+    width: 38px;
+    min-width: 38px;
   }
 
   .conversation-bar {
