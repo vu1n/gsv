@@ -863,6 +863,11 @@ textarea {
   border-color: var(--blue);
 }
 
+.primary-button.danger {
+  background: var(--red);
+  border-color: var(--red);
+}
+
 .secondary-button {
   color: var(--text);
   background: var(--panel-strong);

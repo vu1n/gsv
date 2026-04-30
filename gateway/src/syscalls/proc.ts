@@ -206,6 +206,8 @@ export type ProcContextUsageSource = "estimate" | "provider";
 export type ProcContextState = {
   conversationId: string;
   runId?: string;
+  messageCount?: number;
+  lastMessageId?: number | null;
   provider: string;
   model: string;
   contextWindowTokens: number | null;

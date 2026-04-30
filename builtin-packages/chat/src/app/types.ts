@@ -58,6 +58,8 @@ export type ConversationRecord = {
 
 export type ContextState = {
   conversationId: string;
+  messageCount?: number;
+  lastMessageId?: number | null;
   provider: string | null;
   model: string | null;
   contextWindowTokens: number | null;
@@ -126,6 +128,12 @@ export type ConversationSegment = {
   summaryMessageId: number | null;
   createdAt: number;
 };
+
+export type SideView = "conversations" | "archive";
+
+export type PendingAssistantState = "thinking" | "tool" | null;
+
+export type CompactDialogState = { keepLast: string; suggested: number } | null;
 
 export type ArchiveState = {
   loading: boolean;

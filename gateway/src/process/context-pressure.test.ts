@@ -65,7 +65,7 @@ describe("context pressure", () => {
       updatedAt: 1,
     });
 
-    expect(state.inputTokens).toBe(920);
+    expect(state.inputTokens).toBe(1000);
     expect(state.outputTokens).toBe(80);
     expect(state.totalTokens).toBe(1000);
     expect(state.level).toBe("full");

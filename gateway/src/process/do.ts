@@ -672,7 +672,7 @@ export class Process extends Host<Env> {
           );
           break;
         case "proc.history":
-          data = this.handleProcHistory(
+          data = await this.handleProcHistory(
             frame.args as ProcHistoryArgs,
           );
           break;
@@ -1049,7 +1049,7 @@ export class Process extends Host<Env> {
     };
   }
 
-  private handleProcHistory(args: ProcHistoryArgs): ProcHistoryResult {
+  private async handleProcHistory(args: ProcHistoryArgs): Promise<ProcHistoryResult> {
     const pid = this.pid;
     const conversationId = normalizeConversationId(args.conversationId);
     this.store.ensureConversation(conversationId);
@@ -1127,8 +1127,46 @@ export class Process extends Host<Env> {
       messageCount: total,
       truncated: (args.offset ?? 0) + messages.length < total,
       pendingHil: this.toProcHilRequest(this.store.getPendingHil()),
-      context: this.store.getContextState(conversationId),
+      context: await this.getContextStateForHistory(conversationId),
     };
+  }
+
+  private async getContextStateForHistory(conversationId: string): Promise<ProcContextState | null> {
+    const stored = this.store.getContextState(conversationId);
+    const records = this.store.getMessages({ conversationId });
+    const messageCount = records.length;
+    const lastMessageId = records[messageCount - 1]?.id ?? null;
+    if (
+      stored
+      && stored.messageCount === messageCount
+      && stored.lastMessageId === lastMessageId
+    ) {
+      return stored;
+    }
+
+    const config = stored ? null : await this.resolveCheckpointConfig();
+    const provider = stored?.provider ?? config?.provider;
+    const model = stored?.model ?? config?.model;
+    if (!provider || !model) {
+      return stored;
+    }
+
+    const context: Context = {
+      systemPrompt: "",
+      messages: this.store.toMessages({ conversationId }),
+    };
+    const state = buildProcContextState({
+      conversationId,
+      messageCount,
+      lastMessageId,
+      provider,
+      model,
+      contextWindowTokens: stored?.contextWindowTokens ?? config?.contextWindowTokens ?? null,
+      maxOutputTokens: stored?.maxOutputTokens ?? config?.maxTokens ?? 0,
+      estimatedInputTokens: estimateContextInputTokens(context),
+    });
+    this.store.setContextState(state);
+    return state;
   }
 
   private handleConversationOpen(args: ProcConversationOpenArgs): ProcConversationOpenResult {
@@ -2093,11 +2131,6 @@ export class Process extends Host<Env> {
       return;
     }
 
-    await this.updateContextState(runId, conversationId, run.config!, context, response.usage);
-    if (this.handleRunStopped(runId)) {
-      return;
-    }
-
     if (!response.content || response.content.length === 0) {
       const errorMsg = response.errorMessage ?? "LLM returned empty response";
       const displayError = formatGenerationFailure(errorMsg);
@@ -2142,6 +2175,17 @@ export class Process extends Host<Env> {
         toolCalls,
       }),
     });
+
+    piMessages = await this.buildContextMessages(conversationId);
+    context = {
+      systemPrompt: run.systemPrompt,
+      messages: piMessages,
+      tools: tools.length > 0 ? tools : undefined,
+    };
+    await this.updateContextState(runId, conversationId, run.config!, context, response.usage);
+    if (this.handleRunStopped(runId)) {
+      return;
+    }
 
     if (toolCalls.length > 0) {
       const pendingHil = await this.processToolCalls(runId, toolCalls);
@@ -2281,9 +2325,14 @@ export class Process extends Host<Env> {
     context: Context,
     usage?: AssistantMessage["usage"],
   ): Promise<ProcContextState> {
+    const messages = this.store.getMessages({ conversationId });
+    const messageCount = messages.length;
+    const lastMessageId = messages[messageCount - 1]?.id ?? null;
     const state = buildProcContextState({
       conversationId,
       runId,
+      messageCount,
+      lastMessageId,
       provider: config.provider,
       model: config.model,
       contextWindowTokens: config.contextWindowTokens,

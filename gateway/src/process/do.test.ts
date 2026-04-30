@@ -321,7 +321,7 @@ describe("Process DO — mechanical", () => {
         provider: "workers-ai",
         model: "@cf/nvidia/nemotron-3-120b-a12b",
         contextWindowTokens: 256000,
-        inputTokens: 1234,
+        inputTokens: 1290,
         outputTokens: 56,
         totalTokens: 1290,
         source: "provider",
@@ -332,7 +332,7 @@ describe("Process DO — mechanical", () => {
       expect(contextSignals).toHaveLength(2);
       expect(contextSignals[0].payload.context.source).toBe("estimate");
       expect(contextSignals[1].payload.context).toMatchObject({
-        inputTokens: 1234,
+        inputTokens: 1290,
         source: "provider",
       });
     });

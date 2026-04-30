@@ -19,6 +19,8 @@ export function estimateContextInputTokens(context: Context): number {
 export function buildProcContextState(input: {
   conversationId: string;
   runId?: string;
+  messageCount?: number;
+  lastMessageId?: number | null;
   provider: string;
   model: string;
   contextWindowTokens?: number | null;
@@ -33,7 +35,11 @@ export function buildProcContextState(input: {
   const providerInputTokens = normalizePositiveInt(input.usage?.input);
   const providerOutputTokens = normalizePositiveInt(input.usage?.output);
   const providerTotalTokens = normalizePositiveInt(input.usage?.totalTokens);
-  const inputTokens = providerInputTokens ?? estimatedInputTokens;
+  const providerLiveInputTokens = providerTotalTokens
+    ?? (providerInputTokens !== null && providerOutputTokens !== null
+      ? providerInputTokens + providerOutputTokens
+      : providerInputTokens);
+  const inputTokens = providerLiveInputTokens ?? estimatedInputTokens;
   const availableInputTokens = contextWindowTokens === null
     ? null
     : Math.max(1, contextWindowTokens - maxOutputTokens);
@@ -42,6 +48,8 @@ export function buildProcContextState(input: {
   return {
     conversationId: input.conversationId,
     ...(input.runId ? { runId: input.runId } : {}),
+    ...(typeof input.messageCount === "number" ? { messageCount: input.messageCount } : {}),
+    ...(input.lastMessageId !== undefined ? { lastMessageId: input.lastMessageId } : {}),
     provider: input.provider,
     model: input.model,
     contextWindowTokens,
