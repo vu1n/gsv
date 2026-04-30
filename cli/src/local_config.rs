@@ -5,6 +5,31 @@ use gsv::config::{self, CliConfig};
 use crate::auth_flow::format_unix_ms;
 use crate::cli::LocalConfigAction;
 
+fn mask_secret_edges(value: &str, prefix_chars: usize, suffix_chars: usize) -> String {
+    let chars = value.chars().collect::<Vec<_>>();
+    if chars.len() <= prefix_chars + suffix_chars {
+        return "****".to_string();
+    }
+
+    let prefix = chars.iter().take(prefix_chars).copied().collect::<String>();
+    let suffix = chars
+        .iter()
+        .skip(chars.len() - suffix_chars)
+        .copied()
+        .collect::<String>();
+    format!("{}...{}", prefix, suffix)
+}
+
+fn mask_secret_prefix(value: &str, prefix_chars: usize) -> String {
+    let chars = value.chars().collect::<Vec<_>>();
+    if chars.len() <= prefix_chars {
+        return "****".to_string();
+    }
+
+    let prefix = chars.iter().take(prefix_chars).copied().collect::<String>();
+    format!("{}...", prefix)
+}
+
 pub(crate) fn run_local_config(
     action: LocalConfigAction,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -14,21 +39,11 @@ pub(crate) fn run_local_config(
             let value = match key.as_str() {
                 "gateway.url" => cfg.gateway.url.map(|s| s.to_string()),
                 "gateway.username" => cfg.gateway.username.map(|s| s.to_string()),
-                "gateway.token" => cfg.gateway.token.map(|s| {
-                    // Mask token for security
-                    if s.len() > 8 {
-                        format!("{}...{}", &s[..4], &s[s.len() - 4..])
-                    } else {
-                        "****".to_string()
-                    }
-                }),
-                "gateway.session_token" => cfg.gateway.session_token.map(|s| {
-                    if s.len() > 8 {
-                        format!("{}...{}", &s[..4], &s[s.len() - 4..])
-                    } else {
-                        "****".to_string()
-                    }
-                }),
+                "gateway.token" => cfg.gateway.token.map(|s| mask_secret_edges(&s, 4, 4)),
+                "gateway.session_token" => cfg
+                    .gateway
+                    .session_token
+                    .map(|s| mask_secret_edges(&s, 4, 4)),
                 "gateway.session_token_id" => cfg.gateway.session_token_id,
                 "gateway.session_expires_at" => cfg.gateway.session_expires_at.map(format_unix_ms),
                 "gateway.session_expires_at_ms" => cfg
@@ -36,32 +51,17 @@ pub(crate) fn run_local_config(
                     .session_expires_at
                     .map(|value| value.to_string()),
                 "cloudflare.account_id" => cfg.cloudflare.account_id,
-                "cloudflare.api_token" => cfg.cloudflare.api_token.map(|s| {
-                    if s.len() > 8 {
-                        format!("{}...{}", &s[..4], &s[s.len() - 4..])
-                    } else {
-                        "****".to_string()
-                    }
-                }),
+                "cloudflare.api_token" => cfg
+                    .cloudflare
+                    .api_token
+                    .map(|s| mask_secret_edges(&s, 4, 4)),
                 "release.channel" => cfg.release.channel,
                 "r2.account_id" => cfg.r2.account_id,
-                "r2.access_key_id" => cfg.r2.access_key_id.map(|s| {
-                    if s.len() > 8 {
-                        format!("{}...", &s[..8])
-                    } else {
-                        "****".to_string()
-                    }
-                }),
+                "r2.access_key_id" => cfg.r2.access_key_id.map(|s| mask_secret_prefix(&s, 8)),
                 "r2.bucket" => cfg.r2.bucket,
                 "session.default_key" => cfg.session.default_key,
                 "node.id" => cfg.node.id,
-                "node.token" => cfg.node.token.map(|s| {
-                    if s.len() > 8 {
-                        format!("{}...{}", &s[..4], &s[s.len() - 4..])
-                    } else {
-                        "****".to_string()
-                    }
-                }),
+                "node.token" => cfg.node.token.map(|s| mask_secret_edges(&s, 4, 4)),
                 "node.workspace" => cfg.node.workspace.map(|path| path.display().to_string()),
                 _ => {
                     eprintln!("Unknown config key: {}", key);
@@ -93,10 +93,12 @@ pub(crate) fn run_local_config(
                 "gateway.session_token" => cfg.gateway.session_token = Some(value.clone()),
                 "gateway.session_token_id" => cfg.gateway.session_token_id = Some(value.clone()),
                 "gateway.session_expires_at" | "gateway.session_expires_at_ms" => {
-                    let parsed = value
-                        .trim()
-                        .parse::<i64>()
-                        .map_err(|_| "gateway.session_expires_at must be unix ms integer")?;
+                    let parsed = value.trim().parse::<i64>().map_err(|error| {
+                        format!(
+                            "gateway.session_expires_at must be unix ms integer: {}",
+                            error
+                        )
+                    })?;
                     cfg.gateway.session_expires_at = Some(parsed);
                 }
                 "cloudflare.account_id" => cfg.cloudflare.account_id = Some(value.clone()),

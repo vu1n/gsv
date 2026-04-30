@@ -127,7 +127,7 @@ async fn test_shell_tool_cwd() {
         custom_cwd.display()
     );
 
-    fs::remove_dir_all(&workspace).ok();
+    let _ = fs::remove_dir_all(&workspace);
 }
 
 #[tokio::test]
@@ -253,7 +253,7 @@ async fn test_read_tool() {
     assert_eq!(result["lines"], 3);
 
     // Cleanup
-    std::fs::remove_file(&test_file).ok();
+    let _ = std::fs::remove_file(&test_file);
 }
 
 #[tokio::test]
@@ -278,7 +278,7 @@ async fn test_read_tool_directory() {
     assert_eq!(result["directories"][0], "nested");
     assert_eq!(result["files"][0], "file.txt");
 
-    std::fs::remove_dir_all(&workspace).ok();
+    let _ = std::fs::remove_dir_all(&workspace);
 }
 
 #[tokio::test]
@@ -318,7 +318,7 @@ async fn test_read_tool_with_offset_limit() {
     assert_eq!(result["lines"], 3);
 
     // Cleanup
-    std::fs::remove_file(&test_file).ok();
+    let _ = std::fs::remove_file(&test_file);
 }
 
 #[tokio::test]
@@ -348,7 +348,7 @@ async fn test_write_tool() {
     assert_eq!(content, "test content\nline 2");
 
     // Cleanup
-    std::fs::remove_file(&test_file).ok();
+    let _ = std::fs::remove_file(&test_file);
 }
 
 #[tokio::test]
@@ -386,7 +386,7 @@ async fn test_edit_tool() {
     assert!(!content.contains("hello world"));
 
     // Cleanup
-    std::fs::remove_file(&test_file).ok();
+    let _ = std::fs::remove_file(&test_file);
 }
 
 #[tokio::test]
@@ -439,7 +439,7 @@ async fn test_search_tool() {
     assert_eq!(literal_matches[0]["content"], "a.c");
 
     // Cleanup
-    std::fs::remove_dir_all(&workspace).ok();
+    let _ = std::fs::remove_dir_all(&workspace);
 }
 
 #[test]

@@ -9,6 +9,38 @@ use crate::auth_flow::{can_prompt_interactively, prompt_secret, prompt_yes_no};
 use crate::cli::{DeviceServiceAction, InfraAction};
 use crate::device::run_node_service;
 
+struct DeployCommandOptions {
+    version: String,
+    component: Vec<String>,
+    all: bool,
+    force_fetch: bool,
+    bundle_dir: Option<PathBuf>,
+    api_token: Option<String>,
+    account_id: Option<String>,
+    discord_bot_token: Option<String>,
+}
+
+struct DestroyCommandOptions {
+    component: Vec<String>,
+    all: bool,
+    delete_bucket: bool,
+    purge_bucket: bool,
+    wizard: bool,
+    api_token: Option<String>,
+    account_id: Option<String>,
+    keep_node: bool,
+}
+
+struct DestroyDeployOptions {
+    component: Vec<String>,
+    all: bool,
+    delete_bucket: bool,
+    purge_bucket: bool,
+    wizard: bool,
+    api_token: Option<String>,
+    account_id: Option<String>,
+}
+
 pub(crate) async fn run_infra(
     action: InfraAction,
     cfg: &CliConfig,
@@ -26,14 +58,16 @@ pub(crate) async fn run_infra(
         } => {
             run_deploy_command(
                 cfg,
-                version,
-                component,
-                all,
-                force_fetch,
-                bundle_dir,
-                api_token,
-                account_id,
-                discord_bot_token,
+                DeployCommandOptions {
+                    version,
+                    component,
+                    all,
+                    force_fetch,
+                    bundle_dir,
+                    api_token,
+                    account_id,
+                    discord_bot_token,
+                },
             )
             .await
         }
@@ -49,14 +83,16 @@ pub(crate) async fn run_infra(
         } => {
             run_upgrade_command(
                 cfg,
-                version,
-                component,
-                all,
-                force_fetch,
-                bundle_dir,
-                api_token,
-                account_id,
-                discord_bot_token,
+                DeployCommandOptions {
+                    version,
+                    component,
+                    all,
+                    force_fetch,
+                    bundle_dir,
+                    api_token,
+                    account_id,
+                    discord_bot_token,
+                },
             )
             .await
         }
@@ -72,14 +108,16 @@ pub(crate) async fn run_infra(
         } => {
             run_destroy_command(
                 cfg,
-                component,
-                all,
-                delete_bucket,
-                purge_bucket,
-                wizard,
-                api_token,
-                account_id,
-                keep_node,
+                DestroyCommandOptions {
+                    component,
+                    all,
+                    delete_bucket,
+                    purge_bucket,
+                    wizard,
+                    api_token,
+                    account_id,
+                    keep_node,
+                },
             )
             .await
         }
@@ -233,83 +271,53 @@ fn is_mutable_release_ref(version: &str) -> bool {
 
 async fn run_deploy_command(
     cfg: &CliConfig,
-    version: String,
-    component: Vec<String>,
-    all: bool,
-    force_fetch: bool,
-    bundle_dir: Option<PathBuf>,
-    api_token: Option<String>,
-    account_id: Option<String>,
-    discord_bot_token: Option<String>,
+    mut options: DeployCommandOptions,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (version, version_channel_source) = resolve_channel_aware_version(cfg, &version);
+    let (version, version_channel_source) = resolve_channel_aware_version(cfg, &options.version);
     if let Some(source) = version_channel_source {
         println!("Using release channel '{}' from {}.", version, source);
     }
+    options.version = version;
 
-    apply_deploy(
-        cfg,
-        version,
-        component,
-        all,
-        force_fetch,
-        bundle_dir,
-        api_token,
-        account_id,
-        discord_bot_token,
-    )
-    .await
+    apply_deploy(cfg, options).await
 }
 
 async fn run_upgrade_command(
     cfg: &CliConfig,
-    version: String,
-    component: Vec<String>,
-    all: bool,
-    force_fetch: bool,
-    bundle_dir: Option<PathBuf>,
-    api_token: Option<String>,
-    account_id: Option<String>,
-    discord_bot_token: Option<String>,
+    mut options: DeployCommandOptions,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (version, version_channel_source) = resolve_channel_aware_version(cfg, &version);
+    let (version, version_channel_source) = resolve_channel_aware_version(cfg, &options.version);
     if let Some(source) = version_channel_source {
         println!("Using release channel '{}' from {}.", version, source);
     }
 
-    let effective_force_fetch = force_fetch || is_mutable_release_ref(&version);
-    if effective_force_fetch && !force_fetch && is_mutable_release_ref(&version) {
+    let effective_force_fetch = options.force_fetch || is_mutable_release_ref(&version);
+    if effective_force_fetch && !options.force_fetch && is_mutable_release_ref(&version) {
         println!(
             "Refresh enabled for mutable release ref '{}' (dev/stable/latest).",
             version
         );
     }
+    options.version = version;
+    options.force_fetch = effective_force_fetch;
 
-    apply_deploy(
-        cfg,
-        version,
-        component,
-        all,
-        effective_force_fetch,
-        bundle_dir,
-        api_token,
-        account_id,
-        discord_bot_token,
-    )
-    .await
+    apply_deploy(cfg, options).await
 }
 
 async fn run_destroy_command(
     cfg: &CliConfig,
-    component: Vec<String>,
-    all: bool,
-    delete_bucket: bool,
-    purge_bucket: bool,
-    wizard: bool,
-    api_token: Option<String>,
-    account_id: Option<String>,
-    keep_node: bool,
+    options: DestroyCommandOptions,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let DestroyCommandOptions {
+        component,
+        all,
+        delete_bucket,
+        purge_bucket,
+        wizard,
+        api_token,
+        account_id,
+        keep_node,
+    } = options;
     let all = if !all && component.is_empty() {
         true
     } else {
@@ -318,13 +326,15 @@ async fn run_destroy_command(
 
     destroy_deploy(
         cfg,
-        component,
-        all,
-        delete_bucket,
-        purge_bucket,
-        wizard,
-        api_token,
-        account_id,
+        DestroyDeployOptions {
+            component,
+            all,
+            delete_bucket,
+            purge_bucket,
+            wizard,
+            api_token,
+            account_id,
+        },
     )
     .await?;
 
@@ -352,15 +362,18 @@ async fn run_destroy_command(
 
 async fn apply_deploy(
     cfg: &CliConfig,
-    version: String,
-    component: Vec<String>,
-    all: bool,
-    force_fetch: bool,
-    bundle_dir: Option<PathBuf>,
-    api_token: Option<String>,
-    account_id: Option<String>,
-    discord_bot_token: Option<String>,
+    options: DeployCommandOptions,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let DeployCommandOptions {
+        version,
+        component,
+        all,
+        force_fetch,
+        bundle_dir,
+        api_token,
+        account_id,
+        discord_bot_token,
+    } = options;
     deploy::set_notification_output(false);
 
     if all && !component.is_empty() {
@@ -447,14 +460,17 @@ async fn apply_deploy(
 
 async fn destroy_deploy(
     cfg: &CliConfig,
-    component: Vec<String>,
-    all: bool,
-    delete_bucket: bool,
-    purge_bucket: bool,
-    wizard: bool,
-    api_token: Option<String>,
-    account_id: Option<String>,
+    options: DestroyDeployOptions,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let DestroyDeployOptions {
+        component,
+        all,
+        delete_bucket,
+        purge_bucket,
+        wizard,
+        api_token,
+        account_id,
+    } = options;
     deploy::set_notification_output(false);
 
     if all && !component.is_empty() {

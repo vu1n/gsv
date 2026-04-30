@@ -5,7 +5,8 @@ use crate::protocol::{
     TransferCompleteParams, TransferDoneParams, TransferMetaParams, TransferReceivePayload,
     TransferSendPayload,
 };
-use serde_json::json;
+use serde::Serialize;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -13,6 +14,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot};
 
 const TRANSFER_CHUNK_SIZE: usize = 256 * 1024;
+const START_SIGNALS_POISONED: &str = "transfer start signal mutex poisoned";
+const CHUNK_SENDERS_POISONED: &str = "transfer chunk sender mutex poisoned";
 
 pub struct TransferCoordinator {
     start_signals: std::sync::Mutex<HashMap<u32, oneshot::Sender<()>>>,
@@ -29,38 +32,64 @@ impl TransferCoordinator {
 
     pub fn register_start_signal(&self, transfer_id: u32) -> oneshot::Receiver<()> {
         let (tx, rx) = oneshot::channel();
-        self.start_signals.lock().unwrap().insert(transfer_id, tx);
+        self.start_signals
+            .lock()
+            .expect(START_SIGNALS_POISONED)
+            .insert(transfer_id, tx);
         rx
     }
 
     pub fn fire_start_signal(&self, transfer_id: u32) {
-        if let Some(tx) = self.start_signals.lock().unwrap().remove(&transfer_id) {
+        if let Some(tx) = self
+            .start_signals
+            .lock()
+            .expect(START_SIGNALS_POISONED)
+            .remove(&transfer_id)
+        {
             let _ = tx.send(());
         }
     }
 
     pub fn register_chunk_receiver(&self, transfer_id: u32) -> mpsc::UnboundedReceiver<Vec<u8>> {
         let (tx, rx) = mpsc::unbounded_channel();
-        self.chunk_senders.lock().unwrap().insert(transfer_id, tx);
+        self.chunk_senders
+            .lock()
+            .expect(CHUNK_SENDERS_POISONED)
+            .insert(transfer_id, tx);
         rx
     }
 
     pub fn close_chunk_sender(&self, transfer_id: u32) {
-        self.chunk_senders.lock().unwrap().remove(&transfer_id);
+        self.chunk_senders
+            .lock()
+            .expect(CHUNK_SENDERS_POISONED)
+            .remove(&transfer_id);
     }
 
     pub fn cleanup(&self, transfer_id: u32) {
-        self.start_signals.lock().unwrap().remove(&transfer_id);
-        self.chunk_senders.lock().unwrap().remove(&transfer_id);
+        self.start_signals
+            .lock()
+            .expect(START_SIGNALS_POISONED)
+            .remove(&transfer_id);
+        self.chunk_senders
+            .lock()
+            .expect(CHUNK_SENDERS_POISONED)
+            .remove(&transfer_id);
     }
 
     pub fn route_binary_frame(&self, data: &[u8]) {
         if let Some((transfer_id, chunk)) = parse_transfer_binary_frame(data) {
-            let senders = self.chunk_senders.lock().unwrap();
+            let senders = self.chunk_senders.lock().expect(CHUNK_SENDERS_POISONED);
             if let Some(tx) = senders.get(&transfer_id) {
                 let _ = tx.send(chunk.to_vec());
             }
         }
+    }
+}
+
+impl Default for TransferCoordinator {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -71,6 +100,10 @@ fn resolve_transfer_path(path: &str, workspace: &Path) -> PathBuf {
     } else {
         workspace.join(p)
     }
+}
+
+fn transfer_params_value<T: Serialize>(params: &T) -> Value {
+    serde_json::to_value(params).expect("transfer params should serialize")
 }
 
 pub async fn handle_transfer_send(
@@ -113,10 +146,7 @@ pub async fn handle_transfer_send(
                 )),
             };
             let _ = conn
-                .request(
-                    "transfer.meta",
-                    Some(serde_json::to_value(&params).unwrap()),
-                )
+                .request("transfer.meta", Some(transfer_params_value(&params)))
                 .await;
             coordinator.cleanup(transfer_id);
             return;
@@ -142,10 +172,7 @@ pub async fn handle_transfer_send(
         error: None,
     };
     if let Err(e) = conn
-        .request(
-            "transfer.meta",
-            Some(serde_json::to_value(&params).unwrap()),
-        )
+        .request("transfer.meta", Some(transfer_params_value(&params)))
         .await
     {
         logger.error(
@@ -237,10 +264,7 @@ pub async fn handle_transfer_send(
 
     let params = TransferCompleteParams { transfer_id };
     if let Err(e) = conn
-        .request(
-            "transfer.complete",
-            Some(serde_json::to_value(&params).unwrap()),
-        )
+        .request("transfer.complete", Some(transfer_params_value(&params)))
         .await
     {
         logger.error(
@@ -294,10 +318,7 @@ pub async fn handle_transfer_receive(
                 )),
             };
             let _ = conn
-                .request(
-                    "transfer.accept",
-                    Some(serde_json::to_value(&params).unwrap()),
-                )
+                .request("transfer.accept", Some(transfer_params_value(&params)))
                 .await;
             coordinator.cleanup(transfer_id);
             return;
@@ -324,10 +345,7 @@ pub async fn handle_transfer_receive(
                 )),
             };
             let _ = conn
-                .request(
-                    "transfer.accept",
-                    Some(serde_json::to_value(&params).unwrap()),
-                )
+                .request("transfer.accept", Some(transfer_params_value(&params)))
                 .await;
             coordinator.cleanup(transfer_id);
             return;
@@ -341,10 +359,7 @@ pub async fn handle_transfer_receive(
         error: None,
     };
     if let Err(e) = conn
-        .request(
-            "transfer.accept",
-            Some(serde_json::to_value(&params).unwrap()),
-        )
+        .request("transfer.accept", Some(transfer_params_value(&params)))
         .await
     {
         logger.error(
@@ -403,10 +418,7 @@ pub async fn handle_transfer_receive(
         error: write_error,
     };
     if let Err(e) = conn
-        .request(
-            "transfer.done",
-            Some(serde_json::to_value(&params).unwrap()),
-        )
+        .request("transfer.done", Some(transfer_params_value(&params)))
         .await
     {
         logger.error(

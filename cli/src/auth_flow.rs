@@ -8,6 +8,29 @@ use serde_json::json;
 use std::future::Future;
 use std::io::{self, IsTerminal};
 
+#[derive(Default)]
+pub(crate) struct AuthSetupOptions {
+    pub(crate) username: Option<String>,
+    pub(crate) password: Option<String>,
+    pub(crate) root_password: Option<String>,
+    pub(crate) ai_provider: Option<String>,
+    pub(crate) ai_model: Option<String>,
+    pub(crate) ai_api_key: Option<String>,
+    pub(crate) node_id: Option<String>,
+    pub(crate) node_label: Option<String>,
+    pub(crate) node_expires_at: Option<i64>,
+}
+
+struct LoginRetryOptions<'a> {
+    url: &'a str,
+    cfg: &'a CliConfig,
+    cli_token: Option<String>,
+    cli_username: Option<String>,
+    cli_password: Option<String>,
+    command_name: &'a str,
+    has_explicit_token: bool,
+}
+
 fn is_setup_required_error(error: &(dyn std::error::Error + 'static)) -> bool {
     error
         .downcast_ref::<GatewayRpcError>()
@@ -83,15 +106,11 @@ where
         run_auth_setup(
             url,
             cfg,
-            setup_username.clone(),
-            setup_password.clone(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
+            AuthSetupOptions {
+                username: setup_username.clone(),
+                password: setup_password.clone(),
+                ..AuthSetupOptions::default()
+            },
         )
         .await?;
     }
@@ -115,15 +134,11 @@ where
             run_auth_setup(
                 url,
                 cfg,
-                setup_username,
-                setup_password,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
+                AuthSetupOptions {
+                    username: setup_username,
+                    password: setup_password,
+                    ..AuthSetupOptions::default()
+                },
             )
             .await?;
 
@@ -159,27 +174,25 @@ where
         run_auth_setup(
             url,
             cfg,
-            cli_username.clone(),
-            cli_password.clone(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
+            AuthSetupOptions {
+                username: cli_username.clone(),
+                password: cli_password.clone(),
+                ..AuthSetupOptions::default()
+            },
         )
         .await?;
     }
 
     match attempt_user_command_with_login_retry(
-        url,
-        cfg,
-        cli_token.clone(),
-        cli_username.clone(),
-        cli_password.clone(),
-        command_name,
-        has_explicit_token,
+        LoginRetryOptions {
+            url,
+            cfg,
+            cli_token: cli_token.clone(),
+            cli_username: cli_username.clone(),
+            cli_password: cli_password.clone(),
+            command_name,
+            has_explicit_token,
+        },
         &mut run_with_auth,
     )
     .await
@@ -201,26 +214,24 @@ where
             run_auth_setup(
                 url,
                 cfg,
-                cli_username.clone(),
-                cli_password.clone(),
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
+                AuthSetupOptions {
+                    username: cli_username.clone(),
+                    password: cli_password.clone(),
+                    ..AuthSetupOptions::default()
+                },
             )
             .await?;
 
             attempt_user_command_with_login_retry(
-                url,
-                cfg,
-                cli_token,
-                cli_username,
-                cli_password,
-                command_name,
-                has_explicit_token,
+                LoginRetryOptions {
+                    url,
+                    cfg,
+                    cli_token,
+                    cli_username,
+                    cli_password,
+                    command_name,
+                    has_explicit_token,
+                },
                 &mut run_with_auth,
             )
             .await
@@ -229,13 +240,7 @@ where
 }
 
 async fn attempt_user_command_with_login_retry<F, Fut>(
-    url: &str,
-    cfg: &CliConfig,
-    cli_token: Option<String>,
-    cli_username: Option<String>,
-    cli_password: Option<String>,
-    command_name: &str,
-    has_explicit_token: bool,
+    options: LoginRetryOptions<'_>,
     run_with_auth: &mut F,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
@@ -243,30 +248,30 @@ where
     Fut: Future<Output = Result<(), Box<dyn std::error::Error>>>,
 {
     let auth = resolve_interactive_gateway_auth(
-        url,
-        cfg,
-        cli_token.clone(),
-        cli_username.clone(),
-        cli_password.clone(),
-        command_name,
+        options.url,
+        options.cfg,
+        options.cli_token.clone(),
+        options.cli_username.clone(),
+        options.cli_password.clone(),
+        options.command_name,
     )
     .await?;
 
     match run_with_auth(auth).await {
         Ok(()) => Ok(()),
         Err(error) => {
-            if !is_auth_failed_error(error.as_ref()) || has_explicit_token {
+            if !is_auth_failed_error(error.as_ref()) || options.has_explicit_token {
                 return Err(error);
             }
 
             clear_cached_user_session_token()?;
             let refreshed = resolve_interactive_gateway_auth(
-                url,
-                cfg,
-                cli_token,
-                cli_username,
-                cli_password,
-                command_name,
+                options.url,
+                options.cfg,
+                options.cli_token,
+                options.cli_username,
+                options.cli_password,
+                options.command_name,
             )
             .await?;
             run_with_auth(refreshed).await
@@ -361,7 +366,12 @@ async fn issue_and_store_user_session_token(
         .await?;
 
     let issued = serde_json::from_value::<LoginTokenCreatePayload>(payload)
-        .map_err(|_| "Failed to parse sys.token.create response for login")?
+        .map_err(|error| {
+            format!(
+                "Failed to parse sys.token.create response for login: {}",
+                error
+            )
+        })?
         .token;
 
     let mut local_cfg = CliConfig::load();
@@ -500,16 +510,19 @@ pub(crate) fn resolve_node_gateway_auth(
 pub(crate) async fn run_auth_setup(
     url: &str,
     cfg: &CliConfig,
-    username: Option<String>,
-    password: Option<String>,
-    root_password: Option<String>,
-    ai_provider: Option<String>,
-    ai_model: Option<String>,
-    ai_api_key: Option<String>,
-    node_id: Option<String>,
-    node_label: Option<String>,
-    node_expires_at: Option<i64>,
+    options: AuthSetupOptions,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let AuthSetupOptions {
+        username,
+        password,
+        root_password,
+        ai_provider,
+        ai_model,
+        ai_api_key,
+        node_id,
+        node_label,
+        node_expires_at,
+    } = options;
     let cli_username = normalize_auth_field(username);
     let cfg_username = normalize_auth_field(cfg.gateway_username());
     let mut username = cli_username.clone().or_else(|| cfg_username.clone());
@@ -617,9 +630,9 @@ pub(crate) async fn run_auth_setup(
                     None,
                 )?;
                 if let Some(days_raw) = expiry_days {
-                    let days: i64 = days_raw
-                        .parse()
-                        .map_err(|_| "Expiry days must be a positive integer")?;
+                    let days: i64 = days_raw.parse().map_err(|error| {
+                        format!("Expiry days must be a positive integer: {}", error)
+                    })?;
                     if days <= 0 {
                         return Err("Expiry days must be greater than zero".into());
                     }

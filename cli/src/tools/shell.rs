@@ -271,9 +271,9 @@ fn is_executable_file(path: &Path) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        return std::fs::metadata(path)
+        std::fs::metadata(path)
             .map(|meta| (meta.permissions().mode() & 0o111) != 0)
-            .unwrap_or(false);
+            .unwrap_or(false)
     }
     #[cfg(not(unix))]
     {
@@ -587,8 +587,7 @@ async fn wait_for_shell_result(handle: &ProcessHandle, yield_ms: u64) -> Value {
 fn normalize_yield_ms(yield_ms: Option<u64>) -> u64 {
     yield_ms
         .unwrap_or(DEFAULT_YIELD_MS)
-        .max(MIN_YIELD_MS)
-        .min(MAX_YIELD_MS)
+        .clamp(MIN_YIELD_MS, MAX_YIELD_MS)
 }
 
 impl ShellTool {

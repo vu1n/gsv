@@ -62,7 +62,7 @@ pub struct WhatsAppChannelConfig {
     pub token: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct GatewayConfig {
     /// WebSocket URL for the gateway
     pub url: Option<String>,
@@ -81,19 +81,6 @@ pub struct GatewayConfig {
 
     /// Expiration timestamp (unix ms) for cached user session token
     pub session_expires_at: Option<i64>,
-}
-
-impl Default for GatewayConfig {
-    fn default() -> Self {
-        Self {
-            url: None,
-            username: None,
-            token: None,
-            session_token: None,
-            session_token_id: None,
-            session_expires_at: None,
-        }
-    }
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]

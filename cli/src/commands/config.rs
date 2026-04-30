@@ -86,9 +86,16 @@ fn is_sensitive_config_key(key: &str) -> bool {
 }
 
 fn mask_secret(value: &str) -> String {
-    if value.len() > 8 {
-        format!("{}...{}", &value[..4], &value[value.len() - 4..])
-    } else {
-        "****".to_string()
+    let chars = value.chars().collect::<Vec<_>>();
+    if chars.len() <= 8 {
+        return "****".to_string();
     }
+
+    let prefix = chars.iter().take(4).copied().collect::<String>();
+    let suffix = chars
+        .iter()
+        .skip(chars.len() - 4)
+        .copied()
+        .collect::<String>();
+    format!("{}...{}", prefix, suffix)
 }

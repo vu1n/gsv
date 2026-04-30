@@ -11,9 +11,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // (required for rustls 0.23+ - must happen before any TLS operations)
     #[cfg(feature = "rustls")]
     {
-        rustls_crate::crypto::ring::default_provider()
+        if rustls_crate::crypto::ring::default_provider()
             .install_default()
-            .expect("Failed to install rustls crypto provider");
+            .is_err()
+        {
+            return Err("Failed to install rustls crypto provider".into());
+        }
     }
 
     // Now start tokio runtime and run async main

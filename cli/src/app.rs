@@ -3,7 +3,7 @@ use gsv::config::CliConfig;
 
 use crate::auth_flow::{
     resolve_node_gateway_auth, run_auth_login, run_auth_logout, run_auth_setup,
-    run_with_auto_setup_and_login_retry, run_with_auto_setup_retry,
+    run_with_auto_setup_and_login_retry, run_with_auto_setup_retry, AuthSetupOptions,
 };
 use crate::cli::{
     AuthAction, Cli, Commands, ConfigAction, DeviceAction, DeviceServiceAction, LocalConfigAction,
@@ -121,15 +121,17 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 run_auth_setup(
                     &url,
                     &cfg,
-                    username,
-                    new_password,
-                    root_password,
-                    ai_provider,
-                    ai_model,
-                    ai_api_key,
-                    node_id,
-                    node_label,
-                    node_expires_at,
+                    AuthSetupOptions {
+                        username,
+                        password: new_password,
+                        root_password,
+                        ai_provider,
+                        ai_model,
+                        ai_api_key,
+                        node_id,
+                        node_label,
+                        node_expires_at,
+                    },
                 )
                 .await
             }

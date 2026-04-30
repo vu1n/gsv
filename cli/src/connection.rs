@@ -388,7 +388,7 @@ impl Connection {
 
         let res = rx
             .await
-            .map_err(|_| "Connection closed while waiting for response")?;
+            .map_err(|error| format!("Connection closed while waiting for response: {}", error))?;
         Ok(res)
     }
 }

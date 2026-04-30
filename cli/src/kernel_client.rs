@@ -31,7 +31,6 @@ pub struct ProcSendResult {
     pub run_id: String,
     #[serde(default)]
     pub queued: bool,
-    #[allow(dead_code)]
     pub error: Option<String>,
 }
 

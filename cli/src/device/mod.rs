@@ -367,14 +367,11 @@ async fn handle_driver_request(
 ) {
     let args = req.args.clone().unwrap_or(serde_json::Value::Null);
 
-    let result: Result<serde_json::Value, String> = match req.call.as_str() {
-        call => {
-            if let Some(tool_name) = syscall_to_tool_name(call) {
-                execute_tool_by_name(tools, tool_name, args).await
-            } else {
-                Err(format!("unknown syscall: {}", call))
-            }
-        }
+    let call = req.call.as_str();
+    let result = if let Some(tool_name) = syscall_to_tool_name(call) {
+        execute_tool_by_name(tools, tool_name, args).await
+    } else {
+        Err(format!("unknown syscall: {}", call))
     };
 
     let response = match result {
@@ -473,7 +470,7 @@ pub(crate) async fn run_shell(
         eprint!("gsv$ ");
         {
             use std::io::Write;
-            std::io::stderr().flush().ok();
+            let _ = std::io::stderr().flush();
         }
 
         let mut line = String::new();

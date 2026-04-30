@@ -1,7 +1,7 @@
 use serde_json::json;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 const DEFAULT_NODE_LOG_MAX_BYTES: u64 = 10 * 1024 * 1024;
@@ -34,7 +34,7 @@ pub fn node_log_max_files() -> usize {
     parse_env_usize("GSV_NODE_LOG_MAX_FILES").unwrap_or(DEFAULT_NODE_LOG_MAX_FILES)
 }
 
-pub fn rotated_log_path(base: &PathBuf, index: usize) -> PathBuf {
+pub fn rotated_log_path(base: &Path, index: usize) -> PathBuf {
     PathBuf::from(format!("{}.{}", base.to_string_lossy(), index))
 }
 
@@ -48,7 +48,7 @@ struct NodeLoggerInner {
 
 impl NodeLoggerInner {
     fn open(
-        path: &PathBuf,
+        path: &Path,
         max_bytes: u64,
         max_files: usize,
     ) -> Result<Self, Box<dyn std::error::Error>> {
@@ -60,7 +60,7 @@ impl NodeLoggerInner {
         let current_size = file.metadata().map(|m| m.len()).unwrap_or(0);
 
         Ok(Self {
-            path: path.clone(),
+            path: path.to_path_buf(),
             file,
             current_size,
             max_bytes,
@@ -124,7 +124,7 @@ pub struct NodeLogger {
 }
 
 impl NodeLogger {
-    pub fn new(node_id: &str, workspace: &PathBuf) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(node_id: &str, workspace: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         let path = node_log_path()?;
         let inner = NodeLoggerInner::open(&path, node_log_max_bytes(), node_log_max_files())?;
         Ok(Self {
@@ -137,7 +137,7 @@ impl NodeLogger {
     pub fn with_path(
         node_id: &str,
         workspace: &str,
-        path: &PathBuf,
+        path: &Path,
         max_bytes: u64,
         max_files: usize,
     ) -> Result<Self, Box<dyn std::error::Error>> {

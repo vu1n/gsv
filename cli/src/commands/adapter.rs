@@ -23,7 +23,7 @@ pub(crate) async fn run_adapter(
             let config = match config_json {
                 Some(raw) => {
                     let parsed: Value = serde_json::from_str(&raw)
-                        .map_err(|_| "--config-json must be valid JSON")?;
+                        .map_err(|error| format!("--config-json must be valid JSON: {}", error))?;
                     if !parsed.is_object() {
                         return Err("--config-json must be a JSON object".into());
                     }
