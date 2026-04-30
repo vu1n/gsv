@@ -22,6 +22,8 @@ import {
   PaperclipIcon,
   PlusIcon,
   RefreshIcon,
+  SendIcon,
+  StopIcon,
   XIcon,
 } from "./icons";
 import {
@@ -661,15 +663,7 @@ export function Composer(props: {
   const actionLabel = props.canStop ? (props.stopBusy ? "Stopping..." : "Stop") : "Send";
   return (
     <form class="composer" onSubmit={(event) => { event.preventDefault(); props.onSubmit(); }}>
-      <div class="composer-top">
-        <label class="icon-button attach" title="Attach files" aria-label="Attach files">
-          <PaperclipIcon />
-          <input type="file" multiple disabled={props.disabled} onChange={(event) => {
-            const input = event.currentTarget as HTMLInputElement;
-            props.onFiles(input.files);
-            input.value = "";
-          }} />
-        </label>
+      {props.attachments.length > 0 ? (
         <div class="attachment-list">
           {props.attachments.map((attachment, index) => (
             <span class="attachment-chip" key={`${attachment.filename ?? "file"}:${index}`}>
@@ -678,19 +672,38 @@ export function Composer(props: {
             </span>
           ))}
         </div>
+      ) : null}
+      <div class="composer-shell">
+        <label class="icon-button attach" title="Attach files" aria-label="Attach files">
+          <PaperclipIcon />
+          <input type="file" multiple disabled={props.disabled} onChange={(event) => {
+            const input = event.currentTarget as HTMLInputElement;
+            props.onFiles(input.files);
+            input.value = "";
+          }} />
+        </label>
+        <textarea
+          value={props.value}
+          disabled={props.disabled}
+          placeholder="Ask, continue the thread, or describe work for this process."
+          onInput={(event) => props.onValueChange((event.currentTarget as HTMLTextAreaElement).value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+              props.onSubmit();
+            }
+          }}
+        />
+        <button
+          class={props.canStop ? "composer-action danger" : "composer-action"}
+          type={props.canStop ? "button" : "submit"}
+          disabled={props.canStop ? props.stopBusy : !props.canSend}
+          onClick={props.canStop ? props.onStop : undefined}
+        >
+          {props.canStop ? <StopIcon /> : <SendIcon />}
+          <span>{actionLabel}</span>
+        </button>
       </div>
-      <textarea
-        value={props.value}
-        disabled={props.disabled}
-        placeholder="Ask, continue the thread, or describe work for this process."
-        onInput={(event) => props.onValueChange((event.currentTarget as HTMLTextAreaElement).value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" && !event.shiftKey) {
-            event.preventDefault();
-            props.onSubmit();
-          }
-        }}
-      />
       <div class="composer-foot">
         <div class="composer-status">
           <span class={"run-state-chip " + props.runStateClass} title={props.statusText}>
@@ -699,14 +712,6 @@ export function Composer(props: {
           </span>
           <span>{props.statusText}</span>
         </div>
-        <button
-          class={props.canStop ? "primary-button danger" : "primary-button"}
-          type={props.canStop ? "button" : "submit"}
-          disabled={props.canStop ? props.stopBusy : !props.canSend}
-          onClick={props.canStop ? props.onStop : undefined}
-        >
-          {actionLabel}
-        </button>
       </div>
     </form>
   );

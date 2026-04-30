@@ -31,6 +31,9 @@ export function TerminalIcon() {
 export function StopIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5" /></svg>;
 }
+export function SendIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12 20 4l-4 16-4-7-8-1z" /><path d="m12 13 8-9" /></svg>;
+}
 export function CompactIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4v5H3" /><path d="M16 20v-5h5" /><path d="M3 9l6-6" /><path d="M21 15l-6 6" /></svg>;
 }
