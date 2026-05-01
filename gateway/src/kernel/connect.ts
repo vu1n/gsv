@@ -17,6 +17,7 @@ import type {
   ProcessIdentity,
 } from "@gsv/protocol/syscalls/system";
 import type { AuthTokenRole } from "./auth-store";
+import type { CapabilityStore } from "./capabilities";
 import { isValidCapability } from "./capabilities";
 import type { KernelContext } from "./context";
 import { ensureHomeStorageLayout } from "./home-knowledge";
@@ -26,6 +27,9 @@ export type ConnectOutcome =
   | { ok: false; code: number; message: string; details?: unknown };
 
 export const SETUP_REQUIRED_ERROR_CODE = 425;
+
+const DRIVER_CONNECTION_CAPABILITIES: string[] = [];
+const SERVICE_CAPABILITY_GIDS = [102];
 
 export function setupRequiredDetails(): { setupMode: true; next: "sys.setup" } {
   return { setupMode: true, next: "sys.setup" };
@@ -79,8 +83,7 @@ export async function handleConnect(
   }
   const identity = process.identity;
 
-  // Resolve capabilities
-  const capabilities = caps.resolve(identity.gids);
+  const capabilities = resolveConnectionCapabilities(role, identity, caps);
 
   // Build ConnectionIdentity based on role
   let connectionIdentity: ConnectionIdentity;
@@ -179,6 +182,21 @@ function withDefaultProcessContext(identity: {
     cwd: identity.home,
     workspaceId: null,
   };
+}
+
+function resolveConnectionCapabilities(
+  role: ConnectArgs["client"]["role"],
+  identity: ProcessIdentity,
+  caps: CapabilityStore,
+): string[] {
+  switch (role) {
+    case "user":
+      return caps.resolve(identity.gids);
+    case "driver":
+      return [...DRIVER_CONNECTION_CAPABILITIES];
+    case "service":
+      return caps.resolve(SERVICE_CAPABILITY_GIDS);
+  }
 }
 
 async function resolveIdentity(

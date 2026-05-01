@@ -271,9 +271,9 @@ fn is_executable_file(path: &Path) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        return std::fs::metadata(path)
+        std::fs::metadata(path)
             .map(|meta| (meta.permissions().mode() & 0o111) != 0)
-            .unwrap_or(false);
+            .unwrap_or(false)
     }
     #[cfg(not(unix))]
     {
@@ -557,7 +557,7 @@ async fn launch_managed_process(
     Ok(handle)
 }
 
-pub struct BashTool {
+pub struct ShellTool {
     workspace: PathBuf,
 }
 
@@ -587,11 +587,10 @@ async fn wait_for_shell_result(handle: &ProcessHandle, yield_ms: u64) -> Value {
 fn normalize_yield_ms(yield_ms: Option<u64>) -> u64 {
     yield_ms
         .unwrap_or(DEFAULT_YIELD_MS)
-        .max(MIN_YIELD_MS)
-        .min(MAX_YIELD_MS)
+        .clamp(MIN_YIELD_MS, MAX_YIELD_MS)
 }
 
-impl BashTool {
+impl ShellTool {
     pub fn new(workspace: PathBuf) -> Self {
         Self { workspace }
     }
@@ -608,7 +607,7 @@ impl BashTool {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct BashArgs {
+struct ShellArgs {
     #[serde(default)]
     input: Option<String>,
     #[serde(default)]
@@ -624,11 +623,11 @@ struct BashArgs {
 }
 
 #[async_trait]
-impl Tool for BashTool {
+impl Tool for ShellTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
-            name: "Bash".to_string(),
-            description: "Execute shell commands. Supports async background mode.".to_string(),
+            name: "Shell".to_string(),
+            description: "Run a shell command or continue a running shell session.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -651,7 +650,7 @@ impl Tool for BashTool {
     }
 
     async fn execute(&self, args: Value) -> Result<Value, String> {
-        let args: BashArgs =
+        let args: ShellArgs =
             serde_json::from_value(args).map_err(|e| format!("Invalid arguments: {}", e))?;
 
         if let Some(session_id) = args

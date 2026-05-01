@@ -248,6 +248,11 @@ impl Connection {
         Ok(())
     }
 
+    pub async fn send_ping(&self, payload: Vec<u8>) -> Result<(), Box<dyn std::error::Error>> {
+        self.tx.send(Message::Ping(payload)).await?;
+        Ok(())
+    }
+
     pub fn is_disconnected(&self) -> bool {
         self.disconnected.load(Ordering::SeqCst)
     }
@@ -388,7 +393,7 @@ impl Connection {
 
         let res = rx
             .await
-            .map_err(|_| "Connection closed while waiting for response")?;
+            .map_err(|error| format!("Connection closed while waiting for response: {}", error))?;
         Ok(res)
     }
 }

@@ -384,6 +384,25 @@ struct PreparedBundle {
     source_map: Option<(String, Vec<u8>)>,
 }
 
+struct WorkerScriptUpload<'a> {
+    script_name: &'a str,
+    metadata: Value,
+    entrypoint_part_name: &'a str,
+    entrypoint_bytes: Vec<u8>,
+    additional_modules: &'a [WorkerModuleUpload],
+    source_map: Option<(String, Vec<u8>)>,
+}
+
+struct UploadMetadataOptions<'a> {
+    selected_components: &'a HashSet<String>,
+    available_scripts: &'a HashSet<String>,
+    existing_migration_tag: Option<&'a str>,
+    include_migrations: bool,
+    script_exists: bool,
+    uploaded_assets: Option<&'a UploadedAssets>,
+    keep_assets: bool,
+}
+
 #[derive(Debug, Clone)]
 struct WorkerModuleUpload {
     part_name: String,
@@ -630,16 +649,17 @@ fn exchange_component_dirs(
     use std::os::unix::ffi::OsStrExt;
 
     fn path_to_cstring(path: &Path) -> Result<CString, io::Error> {
-        CString::new(path.as_os_str().as_bytes()).map_err(|_| {
+        CString::new(path.as_os_str().as_bytes()).map_err(|error| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("path contains a NUL byte: {}", path.display()),
+                format!("path contains a NUL byte: {} ({})", path.display(), error),
             )
         })
     }
 
     let staged = path_to_cstring(staged_component_dir)?;
     let current = path_to_cstring(component_dir)?;
+    // SAFETY: both paths are valid NUL-terminated C strings and renameat2 does not retain them.
     let result = unsafe {
         libc::syscall(
             libc::SYS_renameat2,
@@ -889,14 +909,12 @@ Use a newer release tag or publish a release that includes Cloudflare bundles.",
         let bundle_url = release_download_url(&tag, bundle_file);
         let component_dir = version_root.join(component);
 
-        if component_dir.exists() {
-            if !(force || refresh_mutable_dev) {
-                println!(
-                    "Skipping {} (already exists, use --force to overwrite)",
-                    component
-                );
-                continue;
-            }
+        if component_dir.exists() && !(force || refresh_mutable_dev) {
+            println!(
+                "Skipping {} (already exists, use --force to overwrite)",
+                component
+            );
+            continue;
         }
 
         let expected = checksums.get(bundle_file).ok_or_else(|| {
@@ -1387,13 +1405,16 @@ async fn upload_worker_script(
     client: &reqwest::Client,
     account_id: &str,
     api_token: &str,
-    script_name: &str,
-    metadata: Value,
-    entrypoint_part_name: &str,
-    entrypoint_bytes: Vec<u8>,
-    additional_modules: &[WorkerModuleUpload],
-    source_map: Option<(String, Vec<u8>)>,
+    upload: WorkerScriptUpload<'_>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let WorkerScriptUpload {
+        script_name,
+        metadata,
+        entrypoint_part_name,
+        entrypoint_bytes,
+        additional_modules,
+        source_map,
+    } = upload;
     let metadata_text = metadata.to_string();
     let url = cloudflare_api_url(&format!(
         "/accounts/{}/workers/scripts/{}",
@@ -1842,10 +1863,11 @@ fn collect_additional_worker_modules(
             entrypoint_path.display()
         )
     })?;
-    let entrypoint_within_worker = entrypoint_path.strip_prefix(worker_root).map_err(|_| {
+    let entrypoint_within_worker = entrypoint_path.strip_prefix(worker_root).map_err(|error| {
         format!(
-            "Could not resolve worker-relative entrypoint path from {}",
-            entrypoint_path.display()
+            "Could not resolve worker-relative entrypoint path from {}: {}",
+            entrypoint_path.display(),
+            error
         )
     })?;
 
@@ -1857,10 +1879,11 @@ fn collect_additional_worker_modules(
         }
 
         let absolute_path = entry.path();
-        let relative_path = absolute_path.strip_prefix(worker_root).map_err(|_| {
+        let relative_path = absolute_path.strip_prefix(worker_root).map_err(|error| {
             format!(
-                "Could not resolve worker-relative module path from {}",
-                absolute_path.display()
+                "Could not resolve worker-relative module path from {}: {}",
+                absolute_path.display(),
+                error
             )
         })?;
         if is_skippable_bundle_file(relative_path)
@@ -2147,10 +2170,11 @@ fn collect_asset_files(
         let absolute_path = entry.path().to_path_buf();
         let relative = absolute_path
             .strip_prefix(assets_dir)
-            .map_err(|_| {
+            .map_err(|error| {
                 format!(
-                    "Failed to resolve relative asset path for {}",
-                    absolute_path.display()
+                    "Failed to resolve relative asset path for {}: {}",
+                    absolute_path.display(),
+                    error
                 )
             })?
             .to_path_buf();
@@ -2401,13 +2425,7 @@ async fn sync_assets_for_bundle(
 
 fn build_upload_metadata(
     bundle: &PreparedBundle,
-    selected_components: &HashSet<String>,
-    available_scripts: &HashSet<String>,
-    existing_migration_tag: Option<&str>,
-    include_migrations: bool,
-    script_exists: bool,
-    uploaded_assets: Option<&UploadedAssets>,
-    keep_assets: bool,
+    options: UploadMetadataOptions<'_>,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     let compatibility_date = bundle
         .wrangler
@@ -2452,7 +2470,11 @@ fn build_upload_metadata(
         metadata_bindings.push(value);
     }
 
-    for service in service_bindings_for_bundle(bundle, selected_components, available_scripts) {
+    for service in service_bindings_for_bundle(
+        bundle,
+        options.selected_components,
+        options.available_scripts,
+    ) {
         let mut value = json!({
             "name": service.binding,
             "type": "service",
@@ -2504,12 +2526,12 @@ fn build_upload_metadata(
         metadata["compatibility_flags"] = json!(bundle.wrangler.compatibility_flags);
     }
 
-    if include_migrations {
+    if options.include_migrations {
         if let Some(migrations) =
-            build_migrations_payload(&bundle.wrangler.migrations, existing_migration_tag)
+            build_migrations_payload(&bundle.wrangler.migrations, options.existing_migration_tag)
         {
             metadata["migrations"] = migrations;
-        } else if !script_exists {
+        } else if !options.script_exists {
             if let Some(migrations) = build_inferred_do_migration(&bundle.wrangler) {
                 println!(
                     "Warning: {} has Durable Objects but no explicit migrations; using inferred migration tag auto-v1.",
@@ -2524,14 +2546,14 @@ fn build_upload_metadata(
         metadata["observability"] = observability.clone();
     }
 
-    if let Some(uploaded_assets) = uploaded_assets {
+    if let Some(uploaded_assets) = options.uploaded_assets {
         metadata["assets"] = json!({
             "jwt": uploaded_assets.jwt,
             "config": uploaded_assets.config
         });
     }
 
-    if keep_assets {
+    if options.keep_assets {
         metadata["keep_assets"] = json!(true);
     }
 
@@ -2641,15 +2663,17 @@ pub async fn apply_deploy(
 
         let metadata = build_upload_metadata(
             bundle,
-            &selected_components,
-            &available_scripts,
-            existing_scripts_with_migrations
-                .get(&bundle.script_name)
-                .and_then(|tag| tag.as_deref()),
-            true,
-            existing_scripts_with_migrations.contains_key(&bundle.script_name),
-            uploaded_assets_by_script.get(&bundle.script_name),
-            false,
+            UploadMetadataOptions {
+                selected_components: &selected_components,
+                available_scripts: &available_scripts,
+                existing_migration_tag: existing_scripts_with_migrations
+                    .get(&bundle.script_name)
+                    .and_then(|tag| tag.as_deref()),
+                include_migrations: true,
+                script_exists: existing_scripts_with_migrations.contains_key(&bundle.script_name),
+                uploaded_assets: uploaded_assets_by_script.get(&bundle.script_name),
+                keep_assets: false,
+            },
         )?;
         let source_map_for_upload = bundle.source_map.as_ref().and_then(|(name, bytes)| {
             if bytes.len() <= MAX_SOURCE_MAP_UPLOAD_BYTES {
@@ -2669,12 +2693,14 @@ pub async fn apply_deploy(
             &client,
             account_id,
             api_token,
-            &bundle.script_name,
-            metadata,
-            &bundle.entrypoint_part_name,
-            bundle.entrypoint_bytes.clone(),
-            &bundle.additional_modules,
-            source_map_for_upload,
+            WorkerScriptUpload {
+                script_name: &bundle.script_name,
+                metadata,
+                entrypoint_part_name: &bundle.entrypoint_part_name,
+                entrypoint_bytes: bundle.entrypoint_bytes.clone(),
+                additional_modules: &bundle.additional_modules,
+                source_map: source_map_for_upload,
+            },
         )
         .await?;
         println!("Uploaded {}", bundle.script_name);
@@ -2708,13 +2734,15 @@ pub async fn apply_deploy(
         println!("Finalizing {} ({})", bundle.component, bundle.script_name);
         let metadata = build_upload_metadata(
             bundle,
-            &selected_components,
-            &available_scripts,
-            None,
-            false,
-            true,
-            None,
-            bundle.manifest.assets_dir.is_some(),
+            UploadMetadataOptions {
+                selected_components: &selected_components,
+                available_scripts: &available_scripts,
+                existing_migration_tag: None,
+                include_migrations: false,
+                script_exists: true,
+                uploaded_assets: None,
+                keep_assets: bundle.manifest.assets_dir.is_some(),
+            },
         )?;
         let source_map_for_upload = bundle.source_map.as_ref().and_then(|(name, bytes)| {
             if bytes.len() <= MAX_SOURCE_MAP_UPLOAD_BYTES {
@@ -2728,12 +2756,14 @@ pub async fn apply_deploy(
             &client,
             account_id,
             api_token,
-            &bundle.script_name,
-            metadata,
-            &bundle.entrypoint_part_name,
-            bundle.entrypoint_bytes.clone(),
-            &bundle.additional_modules,
-            source_map_for_upload,
+            WorkerScriptUpload {
+                script_name: &bundle.script_name,
+                metadata,
+                entrypoint_part_name: &bundle.entrypoint_part_name,
+                entrypoint_bytes: bundle.entrypoint_bytes.clone(),
+                additional_modules: &bundle.additional_modules,
+                source_map: source_map_for_upload,
+            },
         )
         .await?;
         println!("Updated bindings for {}", bundle.script_name);
@@ -3364,13 +3394,15 @@ bindings = [{ name = "REPOSITORY", class_name = "Repository" }]
 
         let metadata = build_upload_metadata(
             &bundle,
-            &HashSet::new(),
-            &HashSet::new(),
-            None,
-            false,
-            false,
-            None,
-            false,
+            UploadMetadataOptions {
+                selected_components: &HashSet::new(),
+                available_scripts: &HashSet::new(),
+                existing_migration_tag: None,
+                include_migrations: false,
+                script_exists: false,
+                uploaded_assets: None,
+                keep_assets: false,
+            },
         )
         .unwrap();
 

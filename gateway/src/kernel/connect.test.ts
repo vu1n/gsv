@@ -514,11 +514,50 @@ describe("handleConnect", () => {
       if (result.identity.role === "driver") {
         expect(result.identity.device).toBe("macbook");
         expect(result.identity.implements).toEqual(["fs.*", "proc.*"]);
+        expect(result.identity.capabilities).toEqual([]);
       }
+      expect(result.result.syscalls).toEqual([]);
 
       const device = ctx.devices.get("macbook");
       expect(device).not.toBeNull();
       expect(device!.online).toBe(true);
+    }
+  });
+
+  it("driver role does not inherit owner capabilities", async () => {
+    const ctx = makeCtx(sql);
+    const hash = await hashPassword("root-password");
+    await ctx.auth.bootstrap();
+    ctx.caps.seed();
+    await ctx.auth.setPassword("root", hash);
+    const issued = await ctx.auth.issueToken({
+      uid: 0,
+      kind: "node",
+      label: "macbook",
+      allowedDeviceId: "macbook",
+    });
+
+    const result = await handleConnect(
+      {
+        protocol: 1,
+        client: { id: "macbook", version: "1", platform: "darwin-arm64", role: "driver" },
+        driver: { implements: ["fs.*", "shell.exec"] },
+        auth: { username: "root", token: issued.token },
+      },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.identity.process.uid).toBe(0);
+      expect(result.identity.capabilities).toEqual([]);
+      expect(result.result.syscalls).toEqual([]);
+      expect(result.identity.capabilities).not.toContain("*");
+      expect(result.identity.capabilities).not.toContain("fs.*");
+      expect(result.identity.capabilities).not.toContain("shell.exec");
+      expect(result.identity.capabilities).not.toContain("sys.token.create");
+      expect(result.identity.capabilities).not.toContain("pkg.install");
+      expect(result.identity.capabilities).not.toContain("proc.send");
     }
   });
 
@@ -585,7 +624,9 @@ describe("handleConnect", () => {
       expect(result.identity.role).toBe("service");
       if (result.identity.role === "service") {
         expect(result.identity.channel).toBe("whatsapp");
+        expect(result.identity.capabilities).toEqual(["adapter.*"]);
       }
+      expect(result.result.syscalls).toEqual(["adapter.*"]);
     }
   });
 

@@ -102,24 +102,26 @@ fn require_platform_service_manager() -> Result<Box<dyn DeviceServiceManager>, D
     platform_service_manager().ok_or_else(|| unsupported_message().into())
 }
 
-#[allow(unreachable_code)]
 fn platform_service_manager() -> Option<Box<dyn DeviceServiceManager>> {
     #[cfg(target_os = "linux")]
     {
-        return Some(Box::new(SystemdUserServiceManager));
+        Some(Box::new(SystemdUserServiceManager))
     }
 
     #[cfg(target_os = "macos")]
     {
-        return Some(Box::new(LaunchdUserServiceManager));
+        Some(Box::new(LaunchdUserServiceManager))
     }
 
     #[cfg(target_os = "windows")]
     {
-        return Some(Box::new(WindowsTaskServiceManager));
+        Some(Box::new(WindowsTaskServiceManager))
     }
 
-    None
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        None
+    }
 }
 
 fn unsupported_message() -> &'static str {
@@ -214,9 +216,9 @@ fn is_executable_file(path: &Path) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        return fs::metadata(path)
+        fs::metadata(path)
             .map(|meta| (meta.permissions().mode() & 0o111) != 0)
-            .unwrap_or(false);
+            .unwrap_or(false)
     }
     #[cfg(not(unix))]
     {
@@ -278,7 +280,7 @@ fn select_service_path(
 fn node_service_path() -> Option<String> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        return select_service_path(probe_path_from_login_shell(), std::env::var_os("PATH"));
+        select_service_path(probe_path_from_login_shell(), std::env::var_os("PATH"))
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
