@@ -75,7 +75,7 @@ import type {
   SchedulerRunResult,
 } from "../syscalls/scheduler";
 
-const SERVER_VERSION = "0.1.1";
+const SERVER_VERSION = "0.1.2";
 
 type ConnectionState = {
   step: "pending" | "connected";
