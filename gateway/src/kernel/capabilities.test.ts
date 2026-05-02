@@ -185,6 +185,7 @@ describe("CapabilityStore", () => {
       "fs.*",
       "notification.*",
       "pkg.checkout",
+      "pkg.create",
       "pkg.install",
       "pkg.list",
       "pkg.public.list",

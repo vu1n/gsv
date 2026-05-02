@@ -25,7 +25,7 @@ The native `fs.*` and `shell.exec` handlers use `GsvFs`, a Linux-like virtual fi
 | `~/knowledge/*` | ripgit home repo | Durable knowledge databases. |
 | Other home files | R2 | Stored as ordinary objects with uid/gid/mode metadata. |
 | `/workspaces/{workspaceId}` | ripgit workspace repo | Mutable, versioned task workspace. |
-| `/src/package`, `/src/repo` | ripgit package source mounts | Read-only process mounts. |
+| `/src/packages/{packageName}` | ripgit package source plus R2 overlay | Visible installed package source. Writable owned sources stage process-local edits in R2 until explicit commit. |
 | `/usr/local/bin/*` | package mount | Read-only package command shims. |
 | Everything else | R2 | Default object-backed filesystem. |
 
@@ -76,6 +76,8 @@ R2 remains the byte store. The current runtime uses these key families:
 | `downloads/cli/{channel}/{asset}` | `sys.bootstrap` CLI mirroring | Downloadable CLI binaries. |
 | `downloads/cli/{channel}/{asset}.sha256` | `sys.bootstrap` CLI mirroring | CLI checksums. |
 | `downloads/cli/default-channel.txt` | `sys.bootstrap` | Default CLI release channel. |
+| `process-source-overlays/{pid}/{packageId}/manifest.json` | Package source mount, `pkg source` | Manifest of staged package source edits for one process/package. |
+| `process-source-overlays/{pid}/{packageId}/files/{path}` | Package source mount, `pkg source` | Staged file content for package source puts. |
 
 Process media is deleted by prefix when the process is reset or killed. Package artifacts are content-addressed by hash and referenced from the Kernel `packages` table.
 
@@ -87,7 +89,7 @@ ripgit stores versioned content. It is used anywhere history, diffs, search, or 
 |---|---|---|---|
 | `{username}/home` | `homeKnowledgeRepoRef(username)` | `~/CONSTITUTION.md`, `~/context.d`, `~/knowledge` | Home context and knowledge databases. |
 | `{username}/{workspaceId}` | `workspaceRepoRef(workspaceId, username)` | `/workspaces/{workspaceId}` | Task workspace files and checkpoints. |
-| Package source repos, for example `root/gsv` or `{owner}/{repo}` | package manifest `source.repo` | `/src/package`, `/src/repo`, `repo.*` | Installed package source, review context, and generic repo operations. |
+| Package source repos, for example `root/gsv` or `{owner}/{repo}` | package manifest `source.repo` | `/src/packages/{packageName}`, `repo.*` | Installed package source, review context, and generic repo operations. |
 
 Workspace repos contain platform metadata under `.gsv/`:
 
@@ -98,7 +100,7 @@ Workspace repos contain platform metadata under `.gsv/`:
 .gsv/processes/{pid}/chat.jsonl
 ```
 
-Package source mounts are read-only inside processes. Workspace and home knowledge repos are writable through the filesystem; generic repository operations use `repo.*`, and Wiki-specific behavior uses the higher-level knowledge interface.
+Package source mounts are always visible for installed packages the process identity can see. Sources owned by the current user are writable through a process-local R2 overlay; `pkg source status`, `pkg source diff`, `pkg source commit`, and `pkg source discard` make commit/discard explicit. Other package sources are read-only. Workspace and home knowledge repos are writable through the filesystem; generic repository operations use `repo.*`, and Wiki-specific behavior uses the higher-level knowledge interface.
 
 ## Package Runtime Storage
 

@@ -56,7 +56,6 @@ function makePackage(partial?: Partial<InstalledPackageRecord>): InstalledPackag
 
 function makeContext(options?: {
   capabilities?: string[];
-  mounts?: Array<{ mountPath: string; packageId: string }>;
   pkg?: InstalledPackageRecord;
   procs?: Partial<KernelContext["procs"]>;
   schedules?: KernelContext["schedules"];
@@ -83,15 +82,7 @@ function makeContext(options?: {
     devices: null as never,
     procs: {
       getMounts() {
-        return (options?.mounts ?? []).map((mount) => ({
-          kind: "ripgit-source",
-          mountPath: mount.mountPath,
-          packageId: mount.packageId,
-          repo: pkg.manifest.source.repo,
-          ref: pkg.manifest.source.ref,
-          resolvedCommit: pkg.manifest.source.resolvedCommit ?? null,
-          subdir: mount.mountPath === "/src/package" ? pkg.manifest.source.subdir : ".",
-        }));
+        return [];
       },
       ...(options?.procs ?? {}),
     } as never,
@@ -338,10 +329,10 @@ describe("pkg shell command", () => {
     expect(result.stdout).toContain("error\tProcess not found: missing");
   });
 
-  it("defaults to the mounted package for manifest inspection", async () => {
+  it("defaults to the current package source for manifest inspection", async () => {
     const result = await handleShellExec(
-      { input: "pkg manifest", cwd: "/src/package" },
-      makeContext({ mounts: [{ mountPath: "/src/package", packageId: "import:root/pkg-test:." }] }),
+      { input: "pkg manifest", cwd: "/src/packages/ascii-starfield" },
+      makeContext(),
     );
 
     expect(result.ok).toBe(true);
@@ -362,10 +353,9 @@ describe("pkg shell command", () => {
 
   it("enables an approved package through pkg enable", async () => {
     const result = await handleShellExec(
-      { input: "pkg enable" },
+      { input: "pkg enable", cwd: "/src/packages/ascii-starfield" },
       makeContext({
         capabilities: ["pkg.install"],
-        mounts: [{ mountPath: "/src/package", packageId: "import:root/pkg-test:." }],
         pkg: makePackage({
           scope: { kind: "user", uid: 1000 },
           reviewedAt: 100,
