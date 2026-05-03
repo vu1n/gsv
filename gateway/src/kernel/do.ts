@@ -76,6 +76,7 @@ import type {
 } from "../syscalls/scheduler";
 
 const SERVER_VERSION = "0.1.2";
+const APP_CLIENT_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 
 type ConnectionState = {
   step: "pending" | "connected";
@@ -451,7 +452,7 @@ export class Kernel extends Host<Env> {
       entrypointName: entrypoint.name,
       routeBase,
       clientId: input.clientId?.trim() || crypto.randomUUID(),
-      ttlMs: 30 * 60 * 1000,
+      ttlMs: APP_CLIENT_SESSION_TTL_MS,
     });
 
     return {
