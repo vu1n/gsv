@@ -9,7 +9,7 @@ vi.mock("../shared/utils", () => ({
 }));
 
 import { sendFrameToProcess } from "../shared/utils";
-import { handleProcIpcCall } from "./proc-handlers";
+import { handleProcIpcCall, handleProcSpawn } from "./proc-handlers";
 
 const IDENTITY: ProcessIdentity = {
   uid: 1000,
@@ -71,6 +71,49 @@ describe("proc handlers", () => {
     expect(ipcCalls.attachRun).not.toHaveBeenCalled();
     expect(ctx.scheduleIpcCallTimeout).not.toHaveBeenCalled();
   });
+
+  it("rejects colliding package source mount paths", async () => {
+    const pkgA = makePackage("pkg-a", "Demo Tool", "sam/demo-a");
+    const pkgB = makePackage("pkg-b", "demo-tool", "sam/demo-b");
+    const ctx = {
+      env: {},
+      identity: {
+        process: IDENTITY,
+        capabilities: ["*"],
+      },
+      procs: {
+        get: vi.fn(() => null),
+        spawn: vi.fn(),
+      },
+      workspaces: {
+        get: vi.fn(),
+        touch: vi.fn(),
+      },
+      packages: {
+        resolve: vi.fn((packageId: string) => {
+          if (packageId === "pkg-a") return pkgA;
+          if (packageId === "pkg-b") return pkgB;
+          return null;
+        }),
+        list: vi.fn(() => [pkgA, pkgB]),
+      },
+    } as unknown as KernelContext;
+
+    const result = await handleProcSpawn({
+      profile: "task",
+      mounts: [
+        { kind: "package-source", packageId: "pkg-a" },
+        { kind: "package-source", packageId: "pkg-b" },
+      ],
+    }, ctx);
+
+    expect(result).toEqual({
+      ok: false,
+      error: "Conflicting package source mount path: /src/packages/demo-tool",
+    });
+    expect(ctx.procs.spawn).not.toHaveBeenCalled();
+    expect(sendFrameToProcessMock).not.toHaveBeenCalled();
+  });
 });
 
 function makeIpcCallContext() {
@@ -97,4 +140,30 @@ function makeIpcCallContext() {
   } as unknown as KernelContext;
 
   return { ctx, ipcCalls };
+}
+
+function makePackage(packageId: string, name: string, repo: string) {
+  return {
+    packageId,
+    scope: { kind: "user", uid: IDENTITY.uid },
+    manifest: {
+      name,
+      description: name,
+      version: "0.1.0",
+      runtime: "web-ui",
+      source: {
+        repo,
+        ref: "main",
+        subdir: ".",
+        resolvedCommit: "base123",
+      },
+      entrypoints: [],
+    },
+    artifact: { hash: "hash", mainModule: "main.js", modulePaths: ["main.js"] },
+    enabled: true,
+    reviewRequired: false,
+    reviewedAt: 1,
+    installedAt: 1,
+    updatedAt: 1,
+  };
 }

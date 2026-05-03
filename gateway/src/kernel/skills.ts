@@ -656,7 +656,8 @@ function packageSourceWritable(record: InstalledPackageRecord, identity: Process
   if (identity.uid === 0) {
     return true;
   }
-  return record.scope.kind === "user" && record.scope.uid === identity.uid;
+  const [owner, repo, ...rest] = record.manifest.source.repo.split("/");
+  return Boolean(owner && repo && rest.length === 0 && owner === identity.username);
 }
 
 function parseFrontmatter(content: string): { frontmatter: Map<string, string>; body: string } {

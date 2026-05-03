@@ -718,7 +718,7 @@ function materializeSpawnMounts(
       return { ok: false, error: `Unsupported mount path: ${mountPath}` };
     }
     if (seen.has(mountPath)) {
-      continue;
+      return { ok: false, error: `Conflicting package source mount path: ${mountPath}` };
     }
     seen.add(mountPath);
 
