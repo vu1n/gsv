@@ -1,7 +1,8 @@
-export type PackagesView = "installed" | "updates" | "review" | "sources";
+export type PackagesView = "inventory" | "updates" | "review" | "sources" | "discover" | "remotes" | "create";
 export type PackageScopeFilter = "all" | "mine" | "system";
-export type PackageDetailTab = "overview" | "permissions" | "code" | "commits" | "changes" | "review";
+export type PackageDetailTab = "summary" | "source" | "permissions" | "review";
 export type PackageRepoRoot = "package" | "repo";
+export type PackageCreateTemplate = "web-ui" | "command";
 
 export type PackageEntrypoint = {
   name: string;
@@ -203,6 +204,18 @@ export type PackagesBackend = {
   loadState(args: { packageId?: string }): Promise<PackagesState>;
   syncSources(): Promise<{ ok: boolean }>;
   importPackage(args: { source: string; ref?: string; subdir?: string }): Promise<{ package: PackageRecord }>;
+  createPackage(args: {
+    repo: string;
+    ref?: string;
+    subdir?: string;
+    name?: string;
+    displayName?: string;
+    description?: string;
+    template?: PackageCreateTemplate;
+    command?: string;
+    enable?: boolean;
+    overwrite?: boolean;
+  }): Promise<{ package: PackageRecord; created: boolean; files: string[] }>;
   addRemote(args: { name: string; baseUrl: string }): Promise<unknown>;
   removeRemote(args: { name: string }): Promise<unknown>;
   enablePackage(args: { packageId: string }): Promise<unknown>;

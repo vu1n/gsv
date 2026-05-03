@@ -3,6 +3,7 @@ import {
   addRemote,
   approveReview,
   checkoutPackage,
+  createPackage,
   diffRepo,
   disablePackage,
   enablePackage,
@@ -29,6 +30,10 @@ export default class PackagesBackend extends PackageBackendEntrypoint {
 
   async importPackage(args: unknown): Promise<unknown> {
     return importPackage(this.kernel, args as never);
+  }
+
+  async createPackage(args: unknown): Promise<unknown> {
+    return createPackage(this.kernel, args as never);
   }
 
   async addRemote(args: unknown): Promise<unknown> {

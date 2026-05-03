@@ -15,6 +15,7 @@ export default definePackage({
       kernel: [
         "pkg.list",
         "pkg.add",
+        "pkg.create",
         "pkg.sync",
         "pkg.checkout",
         "pkg.install",

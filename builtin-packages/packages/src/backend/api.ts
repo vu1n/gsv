@@ -413,6 +413,35 @@ export async function importPackage(
   });
 }
 
+export async function createPackage(
+  kernel: KernelClientLike,
+  args: {
+    repo: string;
+    ref?: string;
+    subdir?: string;
+    name?: string;
+    displayName?: string;
+    description?: string;
+    template?: "web-ui" | "command";
+    command?: string;
+    enable?: boolean;
+    overwrite?: boolean;
+  },
+) {
+  return kernel.request("pkg.create", {
+    repo: asString(args.repo),
+    ref: asString(args.ref) || undefined,
+    subdir: asString(args.subdir) || undefined,
+    name: asString(args.name) || undefined,
+    displayName: asString(args.displayName) || undefined,
+    description: asString(args.description) || undefined,
+    template: args.template === "command" ? "command" : "web-ui",
+    command: asString(args.command) || undefined,
+    enable: args.enable === true,
+    overwrite: args.overwrite === true,
+  });
+}
+
 export async function addRemote(
   kernel: KernelClientLike,
   args: { name: string; baseUrl: string },
