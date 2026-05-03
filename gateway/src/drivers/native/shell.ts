@@ -175,6 +175,7 @@ function createBash(ctx: KernelContext, identity: ProcessIdentity, cwd: string):
     storage: ctx.env.STORAGE,
     ripgit: ctx.env.RIPGIT ? new RipgitClient(ctx.env.RIPGIT) : null,
     packages: ctx.packages.list({ scopes: visiblePackageScopesForActor(identity) }),
+    mounts: ctx.processId ? ctx.procs.getMounts(ctx.processId) : null,
     processId: ctx.processId ?? null,
     config: ctx.config,
   });
@@ -2430,6 +2431,7 @@ function processSourceOptions(ctx: KernelContext) {
     storage: ctx.env.STORAGE,
     ripgit: ctx.env.RIPGIT ? new RipgitClient(ctx.env.RIPGIT) : null,
     packages: ctx.packages.list({ scopes: visiblePackageScopesForActor(identity) }),
+    mounts: ctx.processId ? ctx.procs.getMounts(ctx.processId) : null,
     processId: ctx.processId ?? null,
     config: ctx.config,
   };

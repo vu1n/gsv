@@ -357,6 +357,73 @@ describe("createProcessSourceBackend", () => {
     expect(applyCalls[1][4][0].path).toBe("packages/two/src/index.ts");
   });
 
+  it("scopes source mounts and honors repo-root package mounts", async () => {
+    const app = makePackage({
+      packageId: "import:sam/mono:packages/app",
+      manifest: {
+        ...makePackage().manifest,
+        name: "Demo App",
+        source: {
+          repo: "sam/mono",
+          ref: "main",
+          subdir: "packages/app",
+          resolvedCommit: "base123",
+        },
+      },
+    });
+    const other = makePackage({
+      packageId: "import:sam/mono:packages/other",
+      manifest: {
+        ...makePackage().manifest,
+        name: "Other Tool",
+        source: {
+          repo: "sam/mono",
+          ref: "main",
+          subdir: "packages/other",
+          resolvedCommit: "otherbase123",
+        },
+      },
+    });
+    const readCalls: Array<{ repo: unknown; path: string }> = [];
+    const backend = createProcessSourceBackend({
+      identity: IDENTITY,
+      storage: makeBucket(),
+      packages: [app, other],
+      mounts: [{
+        kind: "ripgit-source",
+        mountPath: "/src/packages/demo-app",
+        packageId: app.packageId,
+        repo: "sam/mono",
+        ref: "main",
+        resolvedCommit: "base123",
+        subdir: ".",
+      }],
+      processId: "task:source",
+      config: makeConfig(),
+      ripgit: {
+        readPath: async (repo: unknown, path: string) => {
+          readCalls.push({ repo, path });
+          return {
+            kind: "file",
+            bytes: new TextEncoder().encode(`from ${path}\n`),
+            size: path.length + 6,
+          };
+        },
+      } as any,
+    });
+
+    await expect(backend!.readdir("/src/packages")).resolves.toEqual(["demo-app"]);
+    await expect(backend!.readFile("/src/packages/demo-app/package.json")).resolves.toContain("package.json");
+    await expect(backend!.readFile("/src/packages/other-tool/package.json")).rejects.toThrow("no such package source");
+
+    expect(readCalls).toEqual([
+      {
+        repo: { owner: "sam", repo: "mono", branch: "base123" },
+        path: "package.json",
+      },
+    ]);
+  });
+
   it("does not reuse expectedHead when committing to a different branch", async () => {
     const config = makeConfig();
     const storage = makeBucket();

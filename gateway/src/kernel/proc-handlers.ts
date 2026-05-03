@@ -37,7 +37,7 @@ import type { ProcessMount } from "./processes";
 import {
   createWorkspaceBackend,
   normalizePath,
-  packageSourcePathName,
+  packageSourcePathNameForRecord,
   workspaceRootPath,
 } from "../fs";
 import { resolveInstalledPackage } from "./pkg";
@@ -710,10 +710,11 @@ function materializeSpawnMounts(
 ): SpawnMountOutcome {
   const mounts: ProcessMount[] = [];
   const seen = new Set<string>();
+  const sourcePackages = ctx.packages.list({ scopes: visiblePackageScopesForActor(ctx.identity?.process) });
 
   for (const spec of specs ?? []) {
     const record = resolveInstalledPackage(spec.packageId, ctx);
-    const mountPath = normalizePath(defaultMountPathForPackage(record));
+    const mountPath = normalizePath(defaultMountPathForPackage(record, sourcePackages));
     if (mountPath === "/" || !mountPath.startsWith("/src")) {
       return { ok: false, error: `Unsupported mount path: ${mountPath}` };
     }
@@ -736,8 +737,11 @@ function materializeSpawnMounts(
   return { ok: true, mounts };
 }
 
-function defaultMountPathForPackage(record: InstalledPackageRecord): string {
-  return `/src/packages/${packageSourcePathName(record)}`;
+function defaultMountPathForPackage(
+  record: InstalledPackageRecord,
+  sourcePackages: InstalledPackageRecord[],
+): string {
+  return `/src/packages/${packageSourcePathNameForRecord(record, sourcePackages)}`;
 }
 
 function defaultMountCwd(mounts: ProcessMount[]): string | null {

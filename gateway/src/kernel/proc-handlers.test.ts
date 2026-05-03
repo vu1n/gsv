@@ -72,7 +72,7 @@ describe("proc handlers", () => {
     expect(ctx.scheduleIpcCallTimeout).not.toHaveBeenCalled();
   });
 
-  it("rejects colliding package source mount paths", async () => {
+  it("uses disambiguated package source mount paths", async () => {
     const pkgA = makePackage("pkg-a", "Demo Tool", "sam/demo-a");
     const pkgB = makePackage("pkg-b", "demo-tool", "sam/demo-b");
     const ctx = {
@@ -107,12 +107,29 @@ describe("proc handlers", () => {
       ],
     }, ctx);
 
-    expect(result).toEqual({
-      ok: false,
-      error: "Conflicting package source mount path: /src/packages/demo-tool",
+    expect(result).toMatchObject({
+      ok: true,
+      cwd: "/src/packages/demo-tool--sam-demo-a",
     });
-    expect(ctx.procs.spawn).not.toHaveBeenCalled();
-    expect(sendFrameToProcessMock).not.toHaveBeenCalled();
+    expect(ctx.procs.spawn).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ cwd: "/src/packages/demo-tool--sam-demo-a" }),
+      expect.objectContaining({
+        mounts: [
+          expect.objectContaining({
+            packageId: "pkg-a",
+            mountPath: "/src/packages/demo-tool--sam-demo-a",
+          }),
+          expect.objectContaining({
+            packageId: "pkg-b",
+            mountPath: "/src/packages/demo-tool--sam-demo-b",
+          }),
+        ],
+      }),
+    );
+    expect(sendFrameToProcessMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      call: "proc.setidentity",
+    }));
   });
 });
 
