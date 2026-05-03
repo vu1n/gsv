@@ -161,6 +161,7 @@ export function App({ backend }: AppProps) {
   }, []);
 
   const packages = state?.packages ?? [];
+  const viewerUsername = state?.viewer.username ?? "";
 
   const visiblePackages = useMemo(() => {
     return packages
@@ -360,7 +361,7 @@ export function App({ backend }: AppProps) {
   const handleCreatePackage = useCallback(() => {
     void runAction("create-package", async () => {
       const result = await backend.createPackage({
-        repo: createForm.repo,
+        repo: createRepoName(createForm.repo),
         ref: createForm.ref,
         subdir: createForm.subdir,
         name: createForm.packageName,
@@ -487,6 +488,7 @@ export function App({ backend }: AppProps) {
     <PackageDetailView
       pkg={selectedPackage}
       state={state}
+      viewerUsername={viewerUsername}
       activeTab={detailTab}
       pendingAction={pendingAction}
       packageMutationBlockedReason={packageMutationBlockedReason}
@@ -528,6 +530,7 @@ export function App({ backend }: AppProps) {
   ) : view === "create" ? (
     <CreatePackagePanel
       form={createForm}
+      viewerUsername={viewerUsername}
       pendingAction={pendingAction}
       onChange={(patch) => setCreateForm((current) => ({ ...current, ...patch }))}
       onSubmit={handleCreatePackage}
@@ -565,6 +568,7 @@ export function App({ backend }: AppProps) {
     <SourcesPanel
       state={state}
       query={query}
+      viewerUsername={viewerUsername}
       selectedSource={selectedSource}
       pendingAction={pendingAction}
       sourceRefreshBlockedReason={sourceRefreshBlockedReason}
@@ -590,6 +594,7 @@ export function App({ backend }: AppProps) {
       packages={visiblePackages}
       view={view}
       query={query}
+      viewerUsername={viewerUsername}
       onOpenPackage={(pkg) => updateRoute({ view: view === "review" || view === "updates" ? view : "inventory", packageId: pkg.packageId, sourceRepo: pkg.source.repo, tab: "summary" })}
     />
   );
@@ -661,7 +666,7 @@ export function App({ backend }: AppProps) {
                   <span class={`packages-status-dot ${statusClass(pkg)}`} aria-hidden="true"></span>
                   <span>
                     <strong>{pkg.name}</strong>
-                    <small>{pkg.source.repo}</small>
+                    <small><RepoSlug repo={pkg.source.repo} viewerUsername={viewerUsername} /></small>
                   </span>
                   <PackageBadges pkg={pkg} compact />
                 </button>
@@ -691,9 +696,10 @@ function InventoryPanel(props: {
   packages: PackageRecord[];
   view: PackagesView;
   query: string;
+  viewerUsername: string;
   onOpenPackage: (pkg: PackageRecord) => void;
 }) {
-  const { packages, view, query, onOpenPackage } = props;
+  const { packages, view, query, viewerUsername, onOpenPackage } = props;
   return (
     <section class="packages-panel">
       <header class="packages-panel-head">
@@ -703,13 +709,13 @@ function InventoryPanel(props: {
           <p>{viewDescription(view)}</p>
         </div>
       </header>
-      <PackageInventoryTable packages={packages} query={query} onOpenPackage={onOpenPackage} />
+      <PackageInventoryTable packages={packages} query={query} viewerUsername={viewerUsername} onOpenPackage={onOpenPackage} />
     </section>
   );
 }
 
-function PackageInventoryTable(props: { packages: PackageRecord[]; query: string; onOpenPackage: (pkg: PackageRecord) => void }) {
-  const { packages, query, onOpenPackage } = props;
+function PackageInventoryTable(props: { packages: PackageRecord[]; query: string; viewerUsername: string; onOpenPackage: (pkg: PackageRecord) => void }) {
+  const { packages, query, viewerUsername, onOpenPackage } = props;
   if (packages.length === 0) {
     return <div class="packages-empty-state">{query ? `No packages match "${query}".` : "No packages in this queue."}</div>;
   }
@@ -718,9 +724,9 @@ function PackageInventoryTable(props: { packages: PackageRecord[]; query: string
       <div class="packages-table-head">
         <span>Package</span>
         <span>State</span>
+        <span>Surfaces</span>
         <span>Risk</span>
         <span>Source</span>
-        <span>Ref</span>
         <span>Updated</span>
       </div>
       {packages.map((pkg) => (
@@ -730,10 +736,10 @@ function PackageInventoryTable(props: { packages: PackageRecord[]; query: string
             <small>{pkg.description || "No description provided."}</small>
           </span>
           <span><PackageBadges pkg={pkg} compact /></span>
+          <span><PackageSurfaceIcons pkg={pkg} /></span>
           <span><RiskBadge pkg={pkg} /></span>
-          <span class="packages-mono">{pkg.source.repo}</span>
-          <span class="packages-mono">{pkg.source.ref}</span>
-          <span>{formatDate(pkg.updatedAt)}</span>
+          <span><RepoSlug repo={pkg.source.repo} viewerUsername={viewerUsername} /></span>
+          <span><TimeAgo timestamp={pkg.updatedAt} /></span>
         </button>
       ))}
     </div>
@@ -743,6 +749,7 @@ function PackageInventoryTable(props: { packages: PackageRecord[]; query: string
 function PackageDetailView(props: {
   pkg: PackageRecord;
   state: PackagesState | null;
+  viewerUsername: string;
   activeTab: PackageDetailTab;
   pendingAction: string | null;
   packageMutationBlockedReason: string;
@@ -854,13 +861,7 @@ function PackageDetailView(props: {
         </div>
       </header>
 
-      <section class="packages-decision-strip">
-        <DecisionMetric label="Runtime" value={pkg.runtime} />
-        <DecisionMetric label="Source path" value={sourcePathForPackage(pkg)} mono />
-        <DecisionMetric label="Installed commit" value={shortHash(pkg.source.resolvedCommit)} mono />
-        <DecisionMetric label="Head commit" value={shortHash(pkg.currentHead)} mono />
-        <DecisionMetric label="Permissions" value={packageRiskLabel(pkg)} />
-      </section>
+      <PackageSignalStrip pkg={pkg} viewerUsername={props.viewerUsername} />
 
       <nav class="packages-tabbar" aria-label="Package detail tabs">
         {([
@@ -874,7 +875,7 @@ function PackageDetailView(props: {
       </nav>
 
       <div class="packages-detail-body">
-        {activeTab === "summary" ? <SummaryTab pkg={pkg} /> : null}
+        {activeTab === "summary" ? <SummaryTab pkg={pkg} viewerUsername={props.viewerUsername} /> : null}
         {activeTab === "permissions" ? <PermissionsTab pkg={pkg} /> : null}
         {activeTab === "review" ? (
           <ReviewTab
@@ -923,23 +924,39 @@ function PackageDetailView(props: {
   );
 }
 
-function DecisionMetric(props: { label: string; value: string; mono?: boolean }) {
+function PackageSignalStrip({ pkg, viewerUsername }: { pkg: PackageRecord; viewerUsername: string }) {
   return (
-    <article>
-      <span>{props.label}</span>
-      <strong class={props.mono ? "packages-mono" : ""}>{props.value}</strong>
-    </article>
+    <section class="packages-signal-strip">
+      <div class="packages-signal-group" aria-label="Package surfaces">
+        <PackageSurfaceIcons pkg={pkg} />
+      </div>
+      <div class="packages-signal-group">
+        <span class="packages-signal-label">Source</span>
+        <RepoSlug repo={pkg.source.repo} viewerUsername={viewerUsername} />
+        <span class="packages-ref-chip">{pkg.source.ref}</span>
+      </div>
+      <div class="packages-signal-group">
+        <span class="packages-signal-label">Commit</span>
+        <span class="packages-mono" title={`Installed ${pkg.source.resolvedCommit ?? "unknown"}`}>{shortHash(pkg.source.resolvedCommit)}</span>
+        <span class="packages-muted-arrow">to</span>
+        <span class="packages-mono" title={`Head ${pkg.currentHead ?? "unknown"}`}>{shortHash(pkg.currentHead)}</span>
+      </div>
+      <div class="packages-signal-group">
+        <RiskBadge pkg={pkg} />
+        <PackageBadges pkg={pkg} compact />
+      </div>
+    </section>
   );
 }
 
-function SummaryTab({ pkg }: { pkg: PackageRecord }) {
+function SummaryTab({ pkg, viewerUsername }: { pkg: PackageRecord; viewerUsername: string }) {
   return (
     <section class="packages-section-stack">
       <div class="packages-info-grid">
         <InfoItem label="Version" value={pkg.version} />
         <InfoItem label="Scope" value={formatScope(pkg)} />
         <InfoItem label="Visibility" value={pkg.source.public ? "Public" : "Private"} />
-        <InfoItem label="Repo" value={pkg.source.repo} mono />
+        <InfoItem label="Repo" value={formatRepoDisplay(pkg.source.repo, viewerUsername)} />
         <InfoItem label="Ref" value={pkg.source.ref} mono />
         <InfoItem label="Subdir" value={pkg.source.subdir} mono />
       </div>
@@ -961,12 +978,28 @@ function SummaryTab({ pkg }: { pkg: PackageRecord }) {
                 <strong>{entry.name}</strong>
                 <small>{entry.description || "No description"}</small>
               </span>
-              <span>{entry.kind}</span>
+              <span><SurfaceIcon kind={entry.kind} title={surfaceTitle(entry.kind, 1)} /></span>
               <span class="packages-mono">{entry.route || (entry.syscalls?.join(", ") || "-")}</span>
             </div>
           ))}
         </div>
       </section>
+      {pkg.profiles.length > 0 ? (
+        <section class="packages-subsection">
+          <header>
+            <h3>AI Profiles</h3>
+            <p>Reusable process profiles exported by this package.</p>
+          </header>
+          <div class="packages-chip-row">
+            {pkg.profiles.map((profile) => (
+              <span key={profile.name} class="packages-chip" title={profile.description || profile.name}>
+                <Icon name="profile" />
+                {profile.displayName || profile.name}
+              </span>
+            ))}
+          </div>
+        </section>
+      ) : null}
     </section>
   );
 }
@@ -1041,7 +1074,10 @@ function ReviewTab(props: {
     <section class="packages-section-stack">
       <div class="packages-info-grid">
         <InfoItem label="Review required" value={pkg.review.required ? "Yes" : "No"} />
-        <InfoItem label="Approved" value={pkg.review.approvedAt ? formatDate(pkg.review.approvedAt) : "Not yet"} />
+        <article>
+          <span>Approved</span>
+          <strong>{pkg.review.approvedAt ? <TimeAgo timestamp={pkg.review.approvedAt} /> : "Not yet"}</strong>
+        </article>
         <InfoItem label="Update state" value={pkg.updateAvailable ? "Behind source head" : "Current"} />
         <InfoItem label="Head commit" value={shortHash(pkg.currentHead)} mono />
       </div>
@@ -1188,14 +1224,14 @@ function SourceWorkbench(props: {
               <button key={commit.hash} class={`packages-commit-row${props.selectedCommit === commit.hash ? " is-active" : ""}`} type="button" onClick={() => props.onSelectCommit(commit.hash)}>
                 <strong>{firstLine(commit.message)}</strong>
                 <span class="packages-mono">{shortHash(commit.hash)}</span>
-                <small>{commit.author} - {formatCommitTime(commit.commitTime)}</small>
+                <small>{commit.author} - <TimeAgo timestamp={commit.commitTime * 1000} /></small>
               </button>
             ))}
           </div>
           {props.selectedCommitRecord ? (
             <div class="packages-selected-commit">
               <strong>{firstLine(props.selectedCommitRecord.message)}</strong>
-              <span>{props.selectedCommitRecord.author} - {formatCommitTime(props.selectedCommitRecord.commitTime)}</span>
+              <span>{props.selectedCommitRecord.author} - <TimeAgo timestamp={props.selectedCommitRecord.commitTime * 1000} /></span>
             </div>
           ) : null}
           {props.diffBusy ? <div class="packages-empty-state">Loading diff...</div> : null}
@@ -1248,7 +1284,7 @@ function SourceReadPanel(props: {
       <div class="packages-directory-view">
         {sortTreeEntries(props.codeRead.entries).map((entry) => (
           <button key={entry.path} class="packages-directory-row" type="button" onClick={() => props.setCodePath(entry.path)}>
-            <span>{entry.type === "tree" ? "dir" : "file"} / {entry.name}</span>
+            <span class="packages-file-label"><Icon name={entry.type === "tree" ? "folder" : "file"} />{entry.name}</span>
             <small class="packages-mono">{entry.hash.slice(0, 7)}</small>
           </button>
         ))}
@@ -1260,7 +1296,7 @@ function SourceReadPanel(props: {
       <article class="packages-file-view">
         <header>
           <div>
-            <strong>{props.codeRead.path || "/"}</strong>
+            <strong class="packages-file-label"><Icon name="file" />{props.codeRead.path || "/"}</strong>
             <span>{formatBytes(props.codeRead.size)} - {props.codeRead.isBinary ? "binary" : "text"}</span>
           </div>
           <button class="packages-button" type="button" onClick={() => props.setCodePath(parentPath(props.codeRead?.path ?? ""))}>Directory</button>
@@ -1288,7 +1324,10 @@ function DiffFileView({ file }: { file: PackageRepoDiffFile }) {
           <div class="packages-diff-hunk-head">@@ -{hunk.oldStart},{hunk.oldCount} +{hunk.newStart},{hunk.newCount} @@</div>
           <div class="packages-diff-block">
             {hunk.lines.map((line, index) => (
-              <code key={index} class={`packages-diff-line is-${line.tag}`}>{prefixForDiffLine(line.tag)}{line.content}</code>
+              <code key={index} class={`packages-diff-line is-${line.tag}`}>
+                <span class="packages-diff-prefix">{prefixForDiffLine(line.tag)}</span>
+                <SyntaxLine path={file.path} content={line.content} />
+              </code>
             ))}
           </div>
         </section>
@@ -1300,6 +1339,7 @@ function DiffFileView({ file }: { file: PackageRepoDiffFile }) {
 function SourcesPanel(props: {
   state: PackagesState | null;
   query: string;
+  viewerUsername: string;
   selectedSource: SourceRecord | null;
   pendingAction: string | null;
   sourceRefreshBlockedReason: string;
@@ -1323,7 +1363,7 @@ function SourcesPanel(props: {
         <div class="packages-source-list">
           {sources.length === 0 ? <div class="packages-empty-state">No source repositories match this filter.</div> : sources.map((source) => (
             <button key={source.repo} class={`packages-source-row${props.selectedSource?.repo === source.repo ? " is-active" : ""}`} type="button" onClick={() => props.updateRoute({ sourceRepo: source.repo })}>
-              <strong>{source.repo}</strong>
+              <strong><RepoSlug repo={source.repo} viewerUsername={props.viewerUsername} /></strong>
               <span>{source.packageCount} package{source.packageCount === 1 ? "" : "s"}</span>
               <span class="packages-badge-row">
                 {source.updateCount > 0 ? <span class="packages-badge is-update">{source.updateCount} updates</span> : null}
@@ -1337,7 +1377,7 @@ function SourcesPanel(props: {
             <>
               <header>
                 <div>
-                  <h3>{props.selectedSource.repo}</h3>
+                  <h3><RepoSlug repo={props.selectedSource.repo} viewerUsername={props.viewerUsername} /></h3>
                   <p>{props.selectedSource.isBuiltin ? "Builtin source" : "Imported source"} - {props.selectedSource.public ? "public" : "private"}</p>
                 </div>
                 <div class="packages-inline-actions">
@@ -1367,9 +1407,12 @@ function SourcesPanel(props: {
                 <InfoItem label="Packages" value={String(props.selectedSource.packageCount)} />
                 <InfoItem label="Pending review" value={String(props.selectedSource.reviewPendingCount)} />
                 <InfoItem label="Updates" value={String(props.selectedSource.updateCount)} />
-                <InfoItem label="Latest update" value={formatDate(props.selectedSource.latestUpdatedAt)} />
+                <article>
+                  <span>Latest update</span>
+                  <strong><TimeAgo timestamp={props.selectedSource.latestUpdatedAt} /></strong>
+                </article>
               </div>
-              <PackageInventoryTable packages={sourcePackages} query="" onOpenPackage={(pkg) => props.updateRoute({ view: "inventory", packageId: pkg.packageId, sourceRepo: pkg.source.repo, tab: "summary" })} />
+              <PackageInventoryTable packages={sourcePackages} query="" viewerUsername={props.viewerUsername} onOpenPackage={(pkg) => props.updateRoute({ view: "inventory", packageId: pkg.packageId, sourceRepo: pkg.source.repo, tab: "summary" })} />
             </>
           ) : <div class="packages-empty-state">Select a source repository.</div>}
         </div>
@@ -1456,9 +1499,9 @@ function DiscoverPanel(props: {
                     <div key={`${entry.source.repo}:${entry.source.subdir}:${entry.name}`} class="packages-table-row">
                       <span class="packages-table-primary">
                         <strong>{entry.name}</strong>
-                        <small>{entry.description || entry.source.repo}</small>
+                        <small>{entry.description || formatRepoDisplay(entry.source.repo, props.state?.viewer.username ?? "")}</small>
                       </span>
-                      <span class="packages-mono">{entry.source.repo}</span>
+                      <span><RepoSlug repo={entry.source.repo} viewerUsername={props.state?.viewer.username ?? ""} /></span>
                       <span class="packages-inline-actions">
                         {installed ? (
                           <button class="packages-button" type="button" onClick={() => props.updateRoute({ view: installed.reviewPending ? "review" : installed.updateAvailable ? "updates" : "inventory", packageId: installed.packageId, sourceRepo: installed.source.repo, tab: "summary" })}>
@@ -1545,11 +1588,13 @@ function RemotesPanel(props: {
 
 function CreatePackagePanel(props: {
   form: CreatePackageForm;
+  viewerUsername: string;
   pendingAction: string | null;
   onChange: (patch: Partial<CreatePackageForm>) => void;
   onSubmit: () => void;
 }) {
   const { form } = props;
+  const owner = props.viewerUsername || "you";
   return (
     <section class="packages-panel packages-create-panel">
       <header class="packages-panel-head">
@@ -1563,13 +1608,16 @@ function CreatePackagePanel(props: {
       <section class="packages-create-grid">
         <div class="packages-create-main">
           <label>
-            <span>Repository</span>
-            <input value={form.repo} onInput={(event) => props.onChange({ repo: (event.currentTarget as HTMLInputElement).value })} placeholder="owner/repo or repo" />
+            <span>Repository name</span>
+            <div class="packages-owned-repo-field">
+              <span>{owner}/</span>
+              <input value={form.repo} onInput={(event) => props.onChange({ repo: createRepoName((event.currentTarget as HTMLInputElement).value) })} placeholder="my-package" />
+            </div>
           </label>
           <div class="packages-form-pair">
             <label>
               <span>Package name</span>
-              <input value={form.packageName} onInput={(event) => props.onChange({ packageName: (event.currentTarget as HTMLInputElement).value })} placeholder="@owner/package" />
+              <input value={form.packageName} onInput={(event) => props.onChange({ packageName: (event.currentTarget as HTMLInputElement).value })} placeholder={`@${owner}/package`} />
             </label>
             <label>
               <span>Display name</span>
@@ -1622,7 +1670,7 @@ function CreatePackagePanel(props: {
           <section>
             <h3>What happens</h3>
             <ul class="packages-bullet-list">
-              <li>Creates source files in the selected ripgit repo and branch.</li>
+              <li>Creates source files in {owner}'s ripgit repo and branch.</li>
               <li>Installs the package into your mutable package scope.</li>
               <li>Makes source available under /src/packages after install.</li>
               <li>Leaves future source edits explicit through package source commit flows.</li>
@@ -1651,6 +1699,67 @@ function PackageBadges({ pkg, compact = false }: { pkg: PackageRecord; compact?:
 function RiskBadge({ pkg }: { pkg: PackageRecord }) {
   const level = packageRiskLevel(pkg);
   return <span class={`packages-badge packages-risk-badge is-${level}`}>{packageRiskLabel(pkg)}</span>;
+}
+
+function PackageSurfaceIcons({ pkg }: { pkg: PackageRecord }) {
+  const counts = packageSurfaceCounts(pkg);
+  return (
+    <span class="packages-surface-icons" aria-label="Package surfaces">
+      {counts.ui > 0 ? <SurfaceIcon kind="ui" count={counts.ui} title={surfaceTitle("ui", counts.ui)} /> : null}
+      {counts.command > 0 ? <SurfaceIcon kind="command" count={counts.command} title={surfaceTitle("command", counts.command)} /> : null}
+      {counts.rpc > 0 ? <SurfaceIcon kind="rpc" count={counts.rpc} title={surfaceTitle("rpc", counts.rpc)} /> : null}
+      {counts.http > 0 ? <SurfaceIcon kind="http" count={counts.http} title={surfaceTitle("http", counts.http)} /> : null}
+      {counts.profile > 0 ? <SurfaceIcon kind="profile" count={counts.profile} title={surfaceTitle("profile", counts.profile)} /> : null}
+      {counts.total === 0 ? <span class="packages-empty-inline">None</span> : null}
+    </span>
+  );
+}
+
+function SurfaceIcon(props: { kind: "ui" | "command" | "rpc" | "http" | "profile"; count?: number; title: string }) {
+  return (
+    <span class="packages-surface-icon" title={props.title} aria-label={props.title}>
+      <Icon name={props.kind === "ui" ? "app" : props.kind === "command" ? "terminal" : props.kind === "profile" ? "profile" : "network"} />
+      {props.count && props.count > 1 ? <small>{props.count}</small> : null}
+    </span>
+  );
+}
+
+function Icon({ name }: { name: "app" | "terminal" | "profile" | "network" | "folder" | "file" }) {
+  if (name === "app") {
+    return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2"></rect><path d="M4 9h16"></path><path d="M8 13h3"></path><path d="M14 13h2"></path></svg>;
+  }
+  if (name === "terminal") {
+    return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2"></rect><path d="m8 10 3 2.5L8 15"></path><path d="M13.5 15H17"></path></svg>;
+  }
+  if (name === "profile") {
+    return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3"></circle><path d="M6.5 19a5.5 5.5 0 0 1 11 0"></path><path d="M18 6l2-2"></path><path d="M20 4l1.5 1.5"></path></svg>;
+  }
+  if (name === "network") {
+    return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="12" r="2"></circle><circle cx="18" cy="7" r="2"></circle><circle cx="18" cy="17" r="2"></circle><path d="m8 11 8-3"></path><path d="m8 13 8 3"></path></svg>;
+  }
+  if (name === "folder") {
+    return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5h6l2 2h9v7.5a2 2 0 0 1-2 2h-15z"></path><path d="M3.5 7.5v-1a1.5 1.5 0 0 1 1.5-1.5h4l2 2"></path></svg>;
+  }
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3.5h7l3 3V20a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4.5a1 1 0 0 1 1-1z"></path><path d="M14 3.5V7h3"></path></svg>;
+}
+
+function RepoSlug({ repo, viewerUsername }: { repo: string; viewerUsername: string }) {
+  const { owner, name } = parseRepoSlug(repo);
+  const ownerLabel = owner === viewerUsername ? "you" : owner;
+  return (
+    <span class="packages-repo-slug" title={repo}>
+      <span>{ownerLabel}</span>
+      <strong>{name}</strong>
+    </span>
+  );
+}
+
+function TimeAgo({ timestamp }: { timestamp: number | null | undefined }) {
+  return <time title={formatDate(timestamp)} dateTime={formatDateTimeAttribute(timestamp)}>{formatRelativeTime(timestamp)}</time>;
+}
+
+function SyntaxLine({ path, content }: { path: string; content: string }) {
+  return <>{highlightLine(path, content).map((token, index) => <span key={index} class={token.className}>{token.text}</span>)}</>;
 }
 
 function readViewFromLocation(): PackagesView {
@@ -1701,9 +1810,30 @@ function formatDate(timestamp: number | null | undefined): string {
   return new Date(timestamp).toLocaleString();
 }
 
-function formatCommitTime(unixSeconds: number): string {
-  if (!unixSeconds || !Number.isFinite(unixSeconds)) return "unknown";
-  return new Date(unixSeconds * 1000).toLocaleString();
+function formatDateTimeAttribute(timestamp: number | null | undefined): string | undefined {
+  if (!timestamp || !Number.isFinite(timestamp)) return undefined;
+  return new Date(timestamp).toISOString();
+}
+
+function formatRelativeTime(timestamp: number | null | undefined): string {
+  if (!timestamp || !Number.isFinite(timestamp)) return "unknown";
+  const deltaMs = timestamp - Date.now();
+  const absMs = Math.abs(deltaMs);
+  const divisions: Array<[Intl.RelativeTimeFormatUnit, number]> = [
+    ["year", 1000 * 60 * 60 * 24 * 365],
+    ["month", 1000 * 60 * 60 * 24 * 30],
+    ["week", 1000 * 60 * 60 * 24 * 7],
+    ["day", 1000 * 60 * 60 * 24],
+    ["hour", 1000 * 60 * 60],
+    ["minute", 1000 * 60],
+  ];
+  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  for (const [unit, size] of divisions) {
+    if (absMs >= size) {
+      return formatter.format(Math.round(deltaMs / size), unit);
+    }
+  }
+  return "just now";
 }
 
 function formatBytes(size: number): string {
@@ -1729,6 +1859,49 @@ function sourcePathForPackage(pkg: PackageRecord): string {
 
 function unique<T>(items: T[]): T[] {
   return [...new Set(items)];
+}
+
+function packageSurfaceCounts(pkg: PackageRecord) {
+  const ui = pkg.entrypoints.filter((entry) => entry.kind === "ui").length;
+  const command = pkg.entrypoints.filter((entry) => entry.kind === "command").length;
+  const rpc = pkg.entrypoints.filter((entry) => entry.kind === "rpc").length;
+  const http = pkg.entrypoints.filter((entry) => entry.kind === "http").length;
+  const profile = pkg.profiles.length;
+  return {
+    ui,
+    command,
+    rpc,
+    http,
+    profile,
+    total: ui + command + rpc + http + profile,
+  };
+}
+
+function surfaceTitle(kind: "ui" | "command" | "rpc" | "http" | "profile", count: number): string {
+  if (kind === "ui") return `${count} app window${count === 1 ? "" : "s"}`;
+  if (kind === "command") return `${count} CLI command${count === 1 ? "" : "s"}`;
+  if (kind === "profile") return `${count} AI profile${count === 1 ? "" : "s"}`;
+  if (kind === "http") return `${count} HTTP surface${count === 1 ? "" : "s"}`;
+  return `${count} RPC surface${count === 1 ? "" : "s"}`;
+}
+
+function parseRepoSlug(repo: string): { owner: string; name: string } {
+  const [owner, ...rest] = repo.split("/").filter(Boolean);
+  return {
+    owner: owner || "unknown",
+    name: rest.join("/") || repo || "unknown",
+  };
+}
+
+function formatRepoDisplay(repo: string, viewerUsername: string): string {
+  const { owner, name } = parseRepoSlug(repo);
+  return `${owner === viewerUsername ? "you" : owner} / ${name}`;
+}
+
+function createRepoName(raw: string): string {
+  const value = raw.trim().replace(/^\/+|\/+$/g, "");
+  const parts = value.split("/").filter(Boolean);
+  return parts[parts.length - 1] ?? value;
 }
 
 function packageMatchesScope(pkg: PackageRecord, scope: PackageScopeFilter): boolean {
@@ -1916,6 +2089,44 @@ function prefixForDiffLine(tag: string): string {
   if (tag === "delete") return "-";
   if (tag === "binary") return "#";
   return " ";
+}
+
+function highlightLine(path: string, content: string): Array<{ text: string; className: string }> {
+  const language = languageForPath(path);
+  if (language === "plain" || content.trim().length === 0) {
+    return [{ text: content, className: "" }];
+  }
+  const pattern = language === "css"
+    ? /(\/\*.*?\*\/|"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|#[a-fA-F0-9]{3,8}\b|\b(?:@media|@supports|display|grid|flex|color|background|border|padding|margin|font|width|height|min|max|gap|content)\b|-?\b\d+(?:\.\d+)?(?:px|rem|em|%|vh|vw)?\b)/g
+    : /(\/\/.*$|\/\*.*?\*\/|"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|`(?:\\.|[^`])*`|\b(?:import|export|from|type|const|let|var|function|return|if|else|for|while|class|extends|async|await|try|catch|throw|new|true|false|null|undefined)\b|-?\b\d+(?:\.\d+)?\b)/g;
+  const tokens: Array<{ text: string; className: string }> = [];
+  let index = 0;
+  for (const match of content.matchAll(pattern)) {
+    const text = match[0];
+    const start = match.index ?? 0;
+    if (start > index) {
+      tokens.push({ text: content.slice(index, start), className: "" });
+    }
+    tokens.push({ text, className: tokenClass(text) });
+    index = start + text.length;
+  }
+  if (index < content.length) {
+    tokens.push({ text: content.slice(index), className: "" });
+  }
+  return tokens;
+}
+
+function languageForPath(path: string): "js" | "css" | "plain" {
+  if (/\.(ts|tsx|js|jsx|mjs|cjs|json)$/.test(path)) return "js";
+  if (/\.(css|scss|less)$/.test(path)) return "css";
+  return "plain";
+}
+
+function tokenClass(token: string): string {
+  if (/^(\/\/|\/\*)/.test(token)) return "tok-comment";
+  if (/^["'`]/.test(token)) return "tok-string";
+  if (/^-?\d/.test(token) || /^#[a-fA-F0-9]/.test(token)) return "tok-number";
+  return "tok-keyword";
 }
 
 function openCompanion(appId: string, route: string) {

@@ -64,10 +64,17 @@ type PackageLike = Record<string, unknown> & {
   };
   entrypoints: Array<{
     name: string;
-    kind: string;
+    kind: "command" | "http" | "rpc" | "ui";
     description?: string;
+    command?: string;
     route?: string;
     syscalls?: string[];
+  }>;
+  profiles?: Array<{
+    name: string;
+    displayName: string;
+    description?: string;
+    icon?: string;
   }>;
   bindingNames: string[];
   review: {
@@ -198,10 +205,17 @@ function derivePackageView(
   const sourceHealth = describeSourceHealth(pkg, refsByRepo);
   const declaredSyscalls = unique(pkg.entrypoints.flatMap((entry) => asArray<string>(entry.syscalls)));
   const uiEntrypoints = pkg.entrypoints.filter((entry) => entry.kind === "ui" && asString(entry.route).length > 0);
+  const profiles = asArray<Record<string, unknown>>(pkg.profiles).map((profile) => ({
+    name: asString(profile.name),
+    displayName: asString(profile.displayName),
+    description: asString(profile.description) || undefined,
+    icon: asString(profile.icon) || undefined,
+  }));
   const canMutate = viewer.isRoot || (pkg.scope.kind === "user" && pkg.scope.uid === viewer.uid);
   const canChangeVisibility = viewer.isRoot || repoOwner(pkg.source.repo) === viewer.username;
   return {
     ...pkg,
+    profiles,
     reviewPending: pkg.review.required && !pkg.review.approvedAt,
     reviewed: pkg.review.required && Boolean(pkg.review.approvedAt),
     isBuiltin: isBuiltinRepo(pkg.source.repo),

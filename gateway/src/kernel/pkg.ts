@@ -956,6 +956,12 @@ function toPkgSummary(record: InstalledPackageRecord, ctx: KernelContext): PkgSu
       syscalls: entrypoint.syscalls,
       windowDefaults: entrypoint.windowDefaults,
     })),
+    profiles: (record.manifest.profiles ?? []).map((profile) => ({
+      name: profile.name,
+      displayName: profile.displayName,
+      description: profile.description,
+      icon: profile.icon,
+    })),
     bindingNames: (record.manifest.capabilities?.bindings ?? []).map((binding) => binding.binding),
     review: {
       required: record.reviewRequired,
@@ -987,6 +993,12 @@ function toCatalogEntry(record: InstalledPackageRecord): PkgCatalogEntry {
       icon: entrypoint.icon,
       syscalls: entrypoint.syscalls,
       windowDefaults: entrypoint.windowDefaults,
+    })),
+    profiles: (record.manifest.profiles ?? []).map((profile) => ({
+      name: profile.name,
+      displayName: profile.displayName,
+      description: profile.description,
+      icon: profile.icon,
     })),
     bindingNames: (record.manifest.capabilities?.bindings ?? []).map((binding) => binding.binding),
   };
@@ -1131,6 +1143,7 @@ function normalizeCatalogEntry(entry: unknown): PkgCatalogEntry | null {
       resolvedCommit: typeof sourceRecord.resolvedCommit === "string" ? sourceRecord.resolvedCommit : null,
     },
     entrypoints: Array.isArray(value.entrypoints) ? value.entrypoints as PkgCatalogEntry["entrypoints"] : [],
+    profiles: Array.isArray(value.profiles) ? value.profiles as PkgCatalogEntry["profiles"] : [],
     bindingNames: Array.isArray(value.bindingNames) ? value.bindingNames.filter((item): item is string => typeof item === "string") : [],
   };
 }

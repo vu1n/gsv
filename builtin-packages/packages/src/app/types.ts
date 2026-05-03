@@ -6,10 +6,18 @@ export type PackageCreateTemplate = "web-ui" | "command";
 
 export type PackageEntrypoint = {
   name: string;
-  kind: string;
+  kind: "command" | "http" | "rpc" | "ui";
   description?: string;
+  command?: string;
   route?: string;
   syscalls?: string[];
+};
+
+export type PackageProfile = {
+  name: string;
+  displayName: string;
+  description?: string;
+  icon?: string;
 };
 
 export type PackageRecord = {
@@ -32,6 +40,7 @@ export type PackageRecord = {
     public: boolean;
   };
   entrypoints: PackageEntrypoint[];
+  profiles: PackageProfile[];
   bindingNames: string[];
   review: {
     required: boolean;
@@ -76,6 +85,7 @@ export type CatalogEntry = {
     resolvedCommit?: string | null;
   };
   entrypoints: PackageEntrypoint[];
+  profiles: PackageProfile[];
   bindingNames: string[];
 };
 

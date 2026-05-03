@@ -24,6 +24,13 @@ export type PkgEntrypointSummary = {
   };
 };
 
+export type PkgProfileSummary = {
+  name: string;
+  displayName: string;
+  description?: string;
+  icon?: string;
+};
+
 export type PkgSummary = {
   packageId: string;
   scope: {
@@ -44,6 +51,7 @@ export type PkgSummary = {
     public: boolean;
   };
   entrypoints: PkgEntrypointSummary[];
+  profiles: PkgProfileSummary[];
   bindingNames: string[];
   review: {
     required: boolean;
@@ -188,6 +196,7 @@ export type PkgCatalogEntry = {
     resolvedCommit?: string | null;
   };
   entrypoints: PkgEntrypointSummary[];
+  profiles: PkgProfileSummary[];
   bindingNames: string[];
 };
 
