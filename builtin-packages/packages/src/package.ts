@@ -32,6 +32,7 @@ export default definePackage({
         "repo.search",
         "repo.log",
         "repo.diff",
+        "repo.import",
       ],
     },
   },

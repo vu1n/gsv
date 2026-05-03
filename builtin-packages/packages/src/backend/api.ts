@@ -120,6 +120,10 @@ function normalizeViewer(viewer: { uid: number; username: string }) {
   };
 }
 
+function canMutatePackage(pkg: PackageLike, viewer: ReturnType<typeof normalizeViewer>): boolean {
+  return viewer.isRoot || (pkg.scope.kind === "user" && pkg.scope.uid === viewer.uid);
+}
+
 function buildReviewPrompt(pkg: PackageLike): string {
   const bindings = pkg.bindingNames.length > 0 ? pkg.bindingNames.join(", ") : "none declared";
   const entrypoints = pkg.entrypoints.length > 0
@@ -211,8 +215,9 @@ function derivePackageView(
     description: asString(profile.description) || undefined,
     icon: asString(profile.icon) || undefined,
   }));
-  const canMutate = viewer.isRoot || (pkg.scope.kind === "user" && pkg.scope.uid === viewer.uid);
+  const canMutate = canMutatePackage(pkg, viewer);
   const canChangeVisibility = viewer.isRoot || repoOwner(pkg.source.repo) === viewer.username;
+  const canPullSource = canChangeVisibility && (isBuiltinRepo(pkg.source.repo) || pkg.review.required);
   return {
     ...pkg,
     profiles,
@@ -225,6 +230,7 @@ function derivePackageView(
     updateAvailable: sourceHealth.updateAvailable,
     canMutate,
     canChangeVisibility,
+    canPullSource,
   };
 }
 
@@ -241,6 +247,7 @@ function aggregateSources(packages: ReturnType<typeof derivePackageView>[]) {
     latestUpdatedAt: number;
     canChangeVisibility: boolean;
     hasImmutablePackages: boolean;
+    pullable: boolean;
   }>();
 
   for (const pkg of packages) {
@@ -256,6 +263,7 @@ function aggregateSources(packages: ReturnType<typeof derivePackageView>[]) {
       latestUpdatedAt: 0,
       canChangeVisibility: pkg.canChangeVisibility,
       hasImmutablePackages: !pkg.canMutate,
+      pullable: pkg.canPullSource,
     };
     current.public = current.public || pkg.source.public;
     current.packageIds.push(pkg.packageId);
@@ -266,6 +274,7 @@ function aggregateSources(packages: ReturnType<typeof derivePackageView>[]) {
     current.latestUpdatedAt = Math.max(current.latestUpdatedAt, pkg.updatedAt);
     current.canChangeVisibility = current.canChangeVisibility || pkg.canChangeVisibility;
     current.hasImmutablePackages = current.hasImmutablePackages || !pkg.canMutate;
+    current.pullable = current.pullable || pkg.canPullSource;
     byRepo.set(pkg.source.repo, current);
   }
 
@@ -274,7 +283,7 @@ function aggregateSources(packages: ReturnType<typeof derivePackageView>[]) {
     .map((source) => ({
       ...source,
       packageNames: source.packageNames.sort((left, right) => left.localeCompare(right)),
-      refreshable: !source.isBuiltin && !source.hasImmutablePackages,
+      refreshable: !source.hasImmutablePackages,
     }));
 }
 
@@ -400,18 +409,22 @@ export async function loadState(
   };
 }
 
-export async function syncSources(kernel: KernelClientLike) {
-  const packages = await listPackages(kernel);
+export async function syncSources(kernel: KernelClientLike, ctx: ViewerRuntime) {
+  const viewer = normalizeViewer({
+    uid: ctx.viewer?.uid ?? 0,
+    username: ctx.viewer?.username ?? "",
+  });
   await kernel.request("pkg.sync", {});
-  const uniqueImports = unique(packages
-    .filter((pkg) => !isBuiltinRepo(pkg.source.repo))
-    .map((pkg) => `${pkg.source.repo}|${pkg.source.ref}|${pkg.source.subdir}`));
-
-  for (const entry of uniqueImports) {
-    const [repo, ref, subdir] = entry.split("|");
-    await kernel.request("pkg.add", { repo, ref, subdir });
+  const packages = await listPackages(kernel);
+  for (const pkg of packages) {
+    if (isBuiltinRepo(pkg.source.repo) || !canMutatePackage(pkg, viewer)) {
+      continue;
+    }
+    await kernel.request("pkg.checkout", {
+      packageId: pkg.packageId,
+      ref: pkg.source.ref,
+    });
   }
-
   return { ok: true };
 }
 
@@ -504,10 +517,9 @@ export async function refreshPackage(kernel: KernelClientLike, args: { packageId
   if (isBuiltinRepo(target.source.repo)) {
     return kernel.request("pkg.sync", {});
   }
-  return kernel.request("pkg.add", {
-    repo: target.source.repo,
+  return kernel.request("pkg.checkout", {
+    packageId: target.packageId,
     ref: target.source.ref,
-    subdir: target.source.subdir,
   });
 }
 
@@ -524,10 +536,40 @@ export async function refreshSource(kernel: KernelClientLike, args: { repo: stri
   if (isBuiltinRepo(repo)) {
     return kernel.request("pkg.sync", {});
   }
-  const uniqueTargets = unique(sourcePackages.map((pkg) => `${pkg.source.ref}|${pkg.source.subdir}`));
-  for (const entry of uniqueTargets) {
-    const [ref, subdir] = entry.split("|");
-    await kernel.request("pkg.add", { repo, ref, subdir });
+  for (const pkg of sourcePackages) {
+    await kernel.request("pkg.checkout", {
+      packageId: pkg.packageId,
+      ref: pkg.source.ref,
+    });
+  }
+  return { ok: true };
+}
+
+export async function pullPackage(kernel: KernelClientLike, args: { packageId: string }) {
+  const packages = await listPackages(kernel);
+  const target = packages.find((pkg) => pkg.packageId === asString(args.packageId));
+  if (!target) {
+    throw new Error(`Unknown package: ${asString(args.packageId)}`);
+  }
+  return kernel.request("repo.import", {
+    repo: target.source.repo,
+    ref: target.source.ref,
+  });
+}
+
+export async function pullSource(kernel: KernelClientLike, args: { repo: string }) {
+  const repo = asString(args.repo);
+  if (!repo) {
+    throw new Error("repo is required");
+  }
+  const packages = await listPackages(kernel);
+  const sourcePackages = packages.filter((pkg) => pkg.source.repo === repo);
+  if (sourcePackages.length === 0) {
+    throw new Error(`Unknown source: ${repo}`);
+  }
+  const refs = unique(sourcePackages.map((pkg) => pkg.source.ref));
+  for (const ref of refs) {
+    await kernel.request("repo.import", { repo, ref });
   }
   return { ok: true };
 }

@@ -317,8 +317,14 @@ export function App({ backend }: AppProps) {
   const packageVisibilityBlockedReason = selectedPackage && !selectedPackage.canChangeVisibility
     ? "Only root or the repo owner can change visibility for this source."
     : "";
+  const packagePullBlockedReason = selectedPackage && !selectedPackage.canPullSource
+    ? "Only packages imported from an upstream source can be pulled."
+    : "";
   const sourceRefreshBlockedReason = selectedSource && !selectedSource.refreshable
-    ? "You can only pull upstream for sources installed in your mutable package scope."
+    ? "You can only sync sources installed in your mutable package scope."
+    : "";
+  const sourcePullBlockedReason = selectedSource && !selectedSource.pullable
+    ? "Only sources imported from an upstream can be pulled."
     : "";
   const sourceVisibilityBlockedReason = selectedSource && !selectedSource.canChangeVisibility
     ? "Only root or the repo owner can change visibility for this source."
@@ -341,7 +347,7 @@ export function App({ backend }: AppProps) {
     void runAction("sync-sources", async () => {
       await backend.syncSources();
       await refresh(selectedPackage?.packageId ?? selectedPackageId);
-      setNotice("Synced builtins and refreshed imported package sources.");
+      setNotice("Synced packages from source.");
     });
   }, [backend, refresh, selectedPackage?.packageId, selectedPackageId]);
 
@@ -424,7 +430,7 @@ export function App({ backend }: AppProps) {
     void runAction(`refresh:${packageId}`, async () => {
       await backend.refreshPackage({ packageId });
       await refresh(packageId);
-      setNotice("Pulled latest upstream changes for the package.");
+      setNotice("Synced the package from source.");
     });
   }, [backend, refresh]);
 
@@ -432,7 +438,23 @@ export function App({ backend }: AppProps) {
     void runAction(`refresh-source:${repo}`, async () => {
       await backend.refreshSource({ repo });
       await refresh(selectedPackage?.packageId ?? selectedPackageId);
-      setNotice(`Pulled latest upstream changes for ${repo}.`);
+      setNotice(`Synced packages from ${repo}.`);
+    });
+  }, [backend, refresh, selectedPackage?.packageId, selectedPackageId]);
+
+  const handlePullPackage = useCallback((packageId: string) => {
+    void runAction(`pull:${packageId}`, async () => {
+      await backend.pullPackage({ packageId });
+      await refresh(packageId);
+      setNotice("Pulled upstream changes. Sync the package to install them.");
+    });
+  }, [backend, refresh]);
+
+  const handlePullSource = useCallback((repo: string) => {
+    void runAction(`pull-source:${repo}`, async () => {
+      await backend.pullSource({ repo });
+      await refresh(selectedPackage?.packageId ?? selectedPackageId);
+      setNotice(`Pulled upstream changes for ${repo}. Sync packages to install them.`);
     });
   }, [backend, refresh, selectedPackage?.packageId, selectedPackageId]);
 
@@ -493,6 +515,7 @@ export function App({ backend }: AppProps) {
       pendingAction={pendingAction}
       packageMutationBlockedReason={packageMutationBlockedReason}
       packageVisibilityBlockedReason={packageVisibilityBlockedReason}
+      packagePullBlockedReason={packagePullBlockedReason}
       browseRefs={browseRefs}
       checkoutRef={checkoutRef}
       setCheckoutRef={setCheckoutRef}
@@ -516,6 +539,7 @@ export function App({ backend }: AppProps) {
       onDisable={handleDisablePackage}
       onApprove={handleApproveReview}
       onRefresh={handleRefreshPackage}
+      onPull={handlePullPackage}
       onSetPublic={handleSetPublic}
       onStartReview={handleStartReview}
       onCheckout={handleCheckout}
@@ -572,9 +596,11 @@ export function App({ backend }: AppProps) {
       selectedSource={selectedSource}
       pendingAction={pendingAction}
       sourceRefreshBlockedReason={sourceRefreshBlockedReason}
+      sourcePullBlockedReason={sourcePullBlockedReason}
       sourceVisibilityBlockedReason={sourceVisibilityBlockedReason}
       updateRoute={updateRoute}
       handleRefreshSource={handleRefreshSource}
+      handlePullSource={handlePullSource}
       handleSetPublic={handleSetPublic}
     />
   ) : view === "remotes" ? (
@@ -614,7 +640,7 @@ export function App({ backend }: AppProps) {
           </label>
           <button class="packages-button packages-button--primary" type="button" onClick={() => updateRoute({ view: "create", packageId: null })}>New package</button>
           <button class="packages-button" type="button" disabled={pendingAction === "sync-sources"} onClick={handleSyncSources}>
-            {pendingAction === "sync-sources" ? "Syncing" : "Sync"}
+            {pendingAction === "sync-sources" ? "Syncing" : "Sync all"}
           </button>
         </div>
       </header>
@@ -754,6 +780,7 @@ function PackageDetailView(props: {
   pendingAction: string | null;
   packageMutationBlockedReason: string;
   packageVisibilityBlockedReason: string;
+  packagePullBlockedReason: string;
   browseRefs: string[];
   checkoutRef: string;
   setCheckoutRef: (value: string) => void;
@@ -777,6 +804,7 @@ function PackageDetailView(props: {
   onDisable: (packageId: string) => void;
   onApprove: (packageId: string) => void;
   onRefresh: (packageId: string) => void;
+  onPull: (packageId: string) => void;
   onSetPublic: (payload: { packageId?: string; repo?: string; public: boolean }) => void;
   onStartReview: (packageId: string) => void;
   onCheckout: (packageId: string) => void;
@@ -841,9 +869,18 @@ function PackageDetailView(props: {
           <button
             class="packages-button"
             type="button"
-            title={pkg.isBuiltin ? "Builtin packages are refreshed through Sync." : props.packageMutationBlockedReason || undefined}
-            disabled={pkg.isBuiltin || !pkg.canMutate || props.pendingAction === `refresh:${pkg.packageId}`}
+            title={props.packageMutationBlockedReason || undefined}
+            disabled={!pkg.canMutate || props.pendingAction === `refresh:${pkg.packageId}`}
             onClick={() => props.onRefresh(pkg.packageId)}
+          >
+            Sync package
+          </button>
+          <button
+            class="packages-button"
+            type="button"
+            title={props.packagePullBlockedReason || undefined}
+            disabled={!pkg.canPullSource || props.pendingAction === `pull:${pkg.packageId}`}
+            onClick={() => props.onPull(pkg.packageId)}
           >
             Pull upstream
           </button>
@@ -1343,9 +1380,11 @@ function SourcesPanel(props: {
   selectedSource: SourceRecord | null;
   pendingAction: string | null;
   sourceRefreshBlockedReason: string;
+  sourcePullBlockedReason: string;
   sourceVisibilityBlockedReason: string;
   updateRoute: (next: { view?: PackagesView; scope?: PackageScopeFilter; tab?: PackageDetailTab; packageId?: string | null; sourceRepo?: string | null; catalog?: string }) => void;
   handleRefreshSource: (repo: string) => void;
+  handlePullSource: (repo: string) => void;
   handleSetPublic: (payload: { packageId?: string; repo?: string; public: boolean }) => void;
 }) {
   const sources = (props.state?.sources ?? []).filter((source) => sourceMatchesQuery(source, props.query));
@@ -1378,15 +1417,24 @@ function SourcesPanel(props: {
               <header>
                 <div>
                   <h3><RepoSlug repo={props.selectedSource.repo} viewerUsername={props.viewerUsername} /></h3>
-                  <p>{props.selectedSource.isBuiltin ? "Builtin source" : "Imported source"} - {props.selectedSource.public ? "public" : "private"}</p>
+                  <p>{props.selectedSource.isBuiltin ? "Builtin source" : props.selectedSource.pullable ? "Imported source" : "Local source"} - {props.selectedSource.public ? "public" : "private"}</p>
                 </div>
                 <div class="packages-inline-actions">
                   <button
                     class="packages-button"
                     type="button"
-                    title={props.selectedSource.isBuiltin ? "Builtin packages are refreshed through Sync." : props.sourceRefreshBlockedReason || undefined}
+                    title={props.sourceRefreshBlockedReason || undefined}
                     disabled={!props.selectedSource.refreshable || props.pendingAction === `refresh-source:${props.selectedSource.repo}`}
                     onClick={() => props.handleRefreshSource(props.selectedSource?.repo ?? "")}
+                  >
+                    Sync packages
+                  </button>
+                  <button
+                    class="packages-button"
+                    type="button"
+                    title={props.sourcePullBlockedReason || undefined}
+                    disabled={!props.selectedSource.pullable || props.pendingAction === `pull-source:${props.selectedSource.repo}`}
+                    onClick={() => props.handlePullSource(props.selectedSource?.repo ?? "")}
                   >
                     Pull upstream
                   </button>
@@ -1441,7 +1489,7 @@ function DiscoverPanel(props: {
         <div>
           <p class="packages-eyebrow">Discover</p>
           <h2>Import packages</h2>
-          <p>Install from a known repo, remote URL, local catalog, or trusted remote catalog.</p>
+          <p>Install from GitHub shorthand, a remote URL, local catalog, or trusted remote catalog.</p>
         </div>
       </header>
       <section class="packages-import-panel">
@@ -1452,7 +1500,7 @@ function DiscoverPanel(props: {
         <div class="packages-form-grid">
           <label>
             <span>Source</span>
-            <input value={props.importSource} onInput={(event) => props.setImportSource((event.currentTarget as HTMLInputElement).value)} placeholder="owner/repo or https://..." />
+            <input value={props.importSource} onInput={(event) => props.setImportSource((event.currentTarget as HTMLInputElement).value)} placeholder="github-owner/repo or https://..." />
           </label>
           <label>
             <span>Ref</span>

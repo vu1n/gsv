@@ -57,6 +57,7 @@ export type PackageRecord = {
   updateAvailable: boolean;
   canMutate: boolean;
   canChangeVisibility: boolean;
+  canPullSource: boolean;
 };
 
 export type SourceRecord = {
@@ -70,6 +71,7 @@ export type SourceRecord = {
   updateCount: number;
   latestUpdatedAt: number;
   refreshable: boolean;
+  pullable: boolean;
   canChangeVisibility: boolean;
 };
 
@@ -233,6 +235,8 @@ export type PackagesBackend = {
   approveReview(args: { packageId: string }): Promise<unknown>;
   refreshPackage(args: { packageId: string }): Promise<unknown>;
   refreshSource(args: { repo: string }): Promise<unknown>;
+  pullPackage(args: { packageId: string }): Promise<unknown>;
+  pullSource(args: { repo: string }): Promise<unknown>;
   checkoutPackage(args: { packageId: string; ref: string }): Promise<unknown>;
   setPublic(args: { packageId?: string; repo?: string; public: boolean }): Promise<unknown>;
   startReview(args: { packageId: string }): Promise<{ pid: string; workspaceId: string | null; cwd: string | null }>;
