@@ -249,18 +249,30 @@ class ProcessSourceMountBackend implements MountBackend {
     if (putChange?.type === "put") {
       throw new Error(`ENOTDIR: not a directory, scandir '${normalizedPath}'`);
     }
-
-    const result = await this.ripgit.readPath(
-      this.repoRefForPackage(resolved.pkg),
-      joinRepoPath(resolved.pkg.record.manifest.source.subdir, resolved.relativePath),
-    );
-    if (result.kind === "missing" && !hasOverlayDescendant(overlay, resolved.relativePath)) {
+    const deletedByOverlay = isDeletedByOverlay(overlay, resolved.relativePath);
+    const hasStagedChildren = hasOverlayDescendant(overlay, resolved.relativePath);
+    if (deletedByOverlay && !hasStagedChildren) {
       throw new Error(`ENOENT: no such file or directory, scandir '${normalizedPath}'`);
     }
-    if (result.kind !== "missing" && result.kind !== "tree") {
-      throw new Error(`ENOTDIR: not a directory, scandir '${normalizedPath}'`);
+
+    const entries = new Set<string>();
+    if (!deletedByOverlay) {
+      const result = await this.ripgit.readPath(
+        this.repoRefForPackage(resolved.pkg),
+        joinRepoPath(resolved.pkg.record.manifest.source.subdir, resolved.relativePath),
+      );
+      if (result.kind === "missing" && !hasStagedChildren) {
+        throw new Error(`ENOENT: no such file or directory, scandir '${normalizedPath}'`);
+      }
+      if (result.kind !== "missing" && result.kind !== "tree") {
+        throw new Error(`ENOTDIR: not a directory, scandir '${normalizedPath}'`);
+      }
+      if (result.kind === "tree") {
+        for (const entry of result.entries) {
+          entries.add(entry.name);
+        }
+      }
     }
-    const entries = new Set(result.kind === "tree" ? result.entries.map((entry) => entry.name) : []);
     mergeOverlayDirectoryEntries(entries, overlay, resolved.relativePath);
     return [...entries].sort();
   }
@@ -622,6 +634,7 @@ export async function commitProcessSourceChanges(
     ? normalizeSourceBranch(args.branch)
     : state?.branch ?? processBranchName(options.processId, pkg.name);
   const baseRef = state?.baseRef ?? pkg.record.manifest.source.resolvedCommit ?? pkg.record.manifest.source.ref;
+  const expectedHead = state?.branch === branch ? state.head : null;
   const repo = parseRepoSlug(pkg.record.manifest.source.repo);
   const result = await options.ripgit.apply(
     { ...repo, branch },
@@ -631,7 +644,7 @@ export async function commitProcessSourceChanges(
     ops,
     {
       baseRef,
-      ...(state?.head ? { expectedHead: state.head } : {}),
+      ...(expectedHead ? { expectedHead } : {}),
     },
   );
   const now = Date.now();

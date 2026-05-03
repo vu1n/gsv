@@ -203,6 +203,108 @@ describe("createProcessSourceBackend", () => {
     expect(storage.objects.size).toBe(0);
   });
 
+  it("does not reuse expectedHead when committing to a different branch", async () => {
+    const config = makeConfig();
+    const storage = makeBucket();
+    const applyCalls: any[] = [];
+    const heads = ["processhead123", "featurehead456", "featurehead789"];
+    const ripgit = {
+      readPath: async () => ({ kind: "missing" }),
+      apply: async (...args: any[]) => {
+        applyCalls.push(args);
+        return { head: heads[applyCalls.length - 1] };
+      },
+    } as any;
+    const backend = createProcessSourceBackend({
+      identity: IDENTITY,
+      storage,
+      packages: [makePackage()],
+      processId: "task:source",
+      config,
+      ripgit,
+    });
+
+    await backend!.writeFile("/src/packages/ascii-starfield/src/one.ts", "export const one = true;\n");
+    await commitProcessSourceChanges({
+      identity: IDENTITY,
+      storage,
+      packages: [makePackage()],
+      processId: "task:source",
+      config,
+      ripgit,
+    }, makePackage(), { message: "pkg: commit one" });
+
+    await backend!.writeFile("/src/packages/ascii-starfield/src/two.ts", "export const two = true;\n");
+    await commitProcessSourceChanges({
+      identity: IDENTITY,
+      storage,
+      packages: [makePackage()],
+      processId: "task:source",
+      config,
+      ripgit,
+    }, makePackage(), { message: "pkg: commit two", branch: "feature/package-work" });
+
+    expect(applyCalls).toHaveLength(2);
+    expect(applyCalls[1][0]).toEqual({
+      owner: "sam",
+      repo: "pkg-test",
+      branch: "feature/package-work",
+    });
+    expect(applyCalls[1][5]).toEqual({ baseRef: "base123" });
+
+    await backend!.writeFile("/src/packages/ascii-starfield/src/three.ts", "export const three = true;\n");
+    await commitProcessSourceChanges({
+      identity: IDENTITY,
+      storage,
+      packages: [makePackage()],
+      processId: "task:source",
+      config,
+      ripgit,
+    }, makePackage(), { message: "pkg: commit three" });
+
+    expect(applyCalls).toHaveLength(3);
+    expect(applyCalls[2][0]).toEqual({
+      owner: "sam",
+      repo: "pkg-test",
+      branch: "feature/package-work",
+    });
+    expect(applyCalls[2][5]).toEqual({ baseRef: "base123", expectedHead: "featurehead456" });
+  });
+
+  it("treats recursively deleted overlay directories as missing in readdir", async () => {
+    const backend = createProcessSourceBackend({
+      identity: IDENTITY,
+      storage: makeBucket(),
+      packages: [makePackage()],
+      processId: "task:source",
+      config: makeConfig(),
+      ripgit: {
+        readPath: async (_repo: unknown, path: string) => {
+          if (path === "packages/ascii-starfield") {
+            return {
+              kind: "tree",
+              entries: [{ name: "src", mode: "040000", hash: "tree1", type: "tree" }],
+            };
+          }
+          if (path === "packages/ascii-starfield/src") {
+            return {
+              kind: "tree",
+              entries: [{ name: "index.ts", mode: "100644", hash: "blob1", type: "blob" }],
+            };
+          }
+          return { kind: "missing" };
+        },
+      } as any,
+    });
+
+    await expect(backend!.readdir("/src/packages/ascii-starfield/src")).resolves.toEqual(["index.ts"]);
+    await backend!.rm("/src/packages/ascii-starfield/src", { recursive: true });
+
+    await expect(backend!.stat("/src/packages/ascii-starfield/src")).rejects.toThrow("ENOENT");
+    await expect(backend!.readdir("/src/packages/ascii-starfield/src")).rejects.toThrow("ENOENT");
+    await expect(backend!.readdir("/src/packages/ascii-starfield")).resolves.toEqual([]);
+  });
+
   it("keeps package sources from other owners read-only", async () => {
     const backend = createProcessSourceBackend({
       identity: IDENTITY,
