@@ -23,6 +23,7 @@ import {
   discardProcessSourceChanges,
   getProcessSourceStatus,
   RipgitClient,
+  packageSourcePathNameMap,
   packageSourcePathName,
   resolveUserPath,
 } from "../../fs";
@@ -2364,9 +2365,9 @@ function currentSourcePackageId(ctx: KernelContext, cwd: string): string | null 
   if (!packageName) {
     return null;
   }
-  const found = ctx.packages
-    .list({ scopes: visiblePackageScopesForActor(ctx.identity?.process) })
-    .find((candidate) => packageSourcePathName(candidate) === packageName);
+  const packages = ctx.packages.list({ scopes: visiblePackageScopesForActor(ctx.identity?.process) });
+  const pathNames = packageSourcePathNameMap(packages);
+  const found = packages.find((candidate) => pathNames.get(candidate) === packageName);
   return found?.packageId ?? null;
 }
 

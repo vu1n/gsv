@@ -1922,7 +1922,11 @@ function formatScope(pkg: PackageRecord): string {
 }
 
 function sourcePathForPackage(pkg: PackageRecord): string {
-  return `/src/packages/${pkg.name}`;
+  return `/src/packages/${packageSourcePathName(pkg.name)}`;
+}
+
+function packageSourcePathName(name: string): string {
+  return name.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
 function unique<T>(items: T[]): T[] {

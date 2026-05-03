@@ -20,6 +20,8 @@ export {
   discardProcessSourceChanges,
   getProcessSourceStatus,
   isProcessSourceMountPath,
+  packageSourcePathNameForRecord,
+  packageSourcePathNameMap,
   packageSourcePathName,
 } from "./backends/process-sources";
 export type {

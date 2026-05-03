@@ -124,12 +124,16 @@ function canMutatePackage(pkg: PackageLike, viewer: ReturnType<typeof normalizeV
   return viewer.isRoot || (pkg.scope.kind === "user" && pkg.scope.uid === viewer.uid);
 }
 
+function packageSourcePathName(pkg: PackageLike): string {
+  return pkg.name.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
 function buildReviewPrompt(pkg: PackageLike): string {
   const bindings = pkg.bindingNames.length > 0 ? pkg.bindingNames.join(", ") : "none declared";
   const entrypoints = pkg.entrypoints.length > 0
     ? pkg.entrypoints.map((entry) => `${entry.name}:${entry.kind}`).join(", ")
     : "none";
-  const sourcePath = `/src/packages/${pkg.name}`;
+  const sourcePath = `/src/packages/${packageSourcePathName(pkg)}`;
 
   return [
     `Review the imported package \"${pkg.name}\".`,

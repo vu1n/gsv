@@ -1,6 +1,8 @@
 import type { ProcessIdentity } from "@gsv/protocol/syscalls/system";
 import {
   homeKnowledgeRepoRef,
+  packageSourcePathNameForRecord,
+  packageSourcePathNameMap,
   packageSourcePathName,
   RipgitClient,
   workspaceRepoRef,
@@ -221,7 +223,15 @@ async function collectRipgitRuntimeSkillFiles(
       visiblePackageScopesForActor(identity),
     );
     if (resolved) {
-      const root = packageProfileSkillRoot(resolved.record, resolved.packageProfile.name);
+      const packageRecords = ctx.packages.list({
+        enabled: true,
+        scopes: visiblePackageScopesForActor(identity),
+      });
+      const root = packageProfileSkillRoot(
+        resolved.record,
+        resolved.packageProfile.name,
+        packageSourcePathNameForRecord(resolved.record, packageRecords),
+      );
       if (root) {
         files.push(...await collectRipgitSkillFiles(ripgit, root.repo, root.path, {
           kind: "profile",
@@ -258,11 +268,13 @@ async function collectRipgitRuntimeSkillFiles(
     ));
   }
 
-  for (const record of ctx.packages.list({
+  const packageRecords = ctx.packages.list({
     enabled: true,
     scopes: visiblePackageScopesForActor(identity),
-  })) {
-    const root = packageTopLevelSkillRoot(record);
+  });
+  const packagePathNames = packageSourcePathNameMap(packageRecords);
+  for (const record of packageRecords) {
+    const root = packageTopLevelSkillRoot(record, packagePathNames.get(record));
     if (!root) {
       continue;
     }
@@ -299,8 +311,14 @@ function filesystemSkillRoots(
       visiblePackageScopesForActor(identity),
     );
     if (resolved) {
+      const packageRecords = ctx.packages.list({
+        enabled: true,
+        scopes: visiblePackageScopesForActor(identity),
+      });
       roots.push({
-        rootPath: `/src/packages/${packageSourcePathName(resolved.record)}/profiles/${resolved.packageProfile.name}/skills.d`,
+        rootPath: `/src/packages/${
+          packageSourcePathNameForRecord(resolved.record, packageRecords)
+        }/profiles/${resolved.packageProfile.name}/skills.d`,
         source: {
           kind: "profile",
           label: `profile:${profile}`,
@@ -330,12 +348,14 @@ function filesystemSkillRoots(
     });
   }
 
-  for (const record of ctx.packages.list({
+  const packageRecords = ctx.packages.list({
     enabled: true,
     scopes: visiblePackageScopesForActor(identity),
-  })) {
+  });
+  const packagePathNames = packageSourcePathNameMap(packageRecords);
+  for (const record of packageRecords) {
     roots.push({
-      rootPath: `/src/packages/${packageSourcePathName(record)}/skills.d`,
+      rootPath: `/src/packages/${packagePathNames.get(record) ?? packageSourcePathName(record)}/skills.d`,
       source: {
         kind: "package",
         label: `pkg:${record.manifest.name}`,
@@ -607,7 +627,7 @@ function currentProcessProfile(ctx: KernelContext): AiContextProfile | null {
   return proc?.profile as AiContextProfile | null;
 }
 
-function packageTopLevelSkillRoot(record: InstalledPackageRecord): {
+function packageTopLevelSkillRoot(record: InstalledPackageRecord, sourcePathName?: string): {
   repo: RipgitRepoRef;
   path: string;
   virtualPath: string;
@@ -619,11 +639,11 @@ function packageTopLevelSkillRoot(record: InstalledPackageRecord): {
   return {
     repo,
     path: joinPath(record.manifest.source.subdir, "skills.d"),
-    virtualPath: `/src/packages/${packageSourcePathName(record)}/skills.d`,
+    virtualPath: `/src/packages/${sourcePathName ?? packageSourcePathName(record)}/skills.d`,
   };
 }
 
-function packageProfileSkillRoot(record: InstalledPackageRecord, profileName: string): {
+function packageProfileSkillRoot(record: InstalledPackageRecord, profileName: string, sourcePathName?: string): {
   repo: RipgitRepoRef;
   path: string;
   virtualPath: string;
@@ -636,7 +656,7 @@ function packageProfileSkillRoot(record: InstalledPackageRecord, profileName: st
   return {
     repo,
     path: joinPath(joinPath(profileRoot, profileName), "skills.d"),
-    virtualPath: `/src/packages/${packageSourcePathName(record)}/profiles/${profileName}/skills.d`,
+    virtualPath: `/src/packages/${sourcePathName ?? packageSourcePathName(record)}/profiles/${profileName}/skills.d`,
   };
 }
 

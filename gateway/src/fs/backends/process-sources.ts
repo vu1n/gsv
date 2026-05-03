@@ -110,7 +110,46 @@ export function isProcessSourceMountPath(path: string): boolean {
 }
 
 export function packageSourcePathName(record: Pick<InstalledPackageRecord, "manifest">): string {
-  return record.manifest.name.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  return sanitizePackageSourcePathSegment(record.manifest.name);
+}
+
+export function packageSourcePathNameMap<T extends Pick<InstalledPackageRecord, "packageId" | "scope" | "manifest">>(
+  records: T[],
+): Map<T, string> {
+  const entries = records.map((record) => ({
+    record,
+    baseName: packageSourcePathName(record) || sanitizePackageSourcePathSegment(record.packageId) || "package",
+  }));
+  const counts = new Map<string, number>();
+  for (const entry of entries) {
+    counts.set(entry.baseName, (counts.get(entry.baseName) ?? 0) + 1);
+  }
+
+  const used = new Set<string>();
+  const result = new Map<T, string>();
+  for (const entry of entries.sort(compareSourcePathEntries)) {
+    const collides = (counts.get(entry.baseName) ?? 0) > 1;
+    const preferred = collides
+      ? `${entry.baseName}--${packageSourcePathDisambiguator(entry.record)}`
+      : entry.baseName;
+    const name = uniquePackageSourcePathName(preferred, used);
+    used.add(name);
+    result.set(entry.record, name);
+  }
+  return result;
+}
+
+export function packageSourcePathNameForRecord<
+  T extends Pick<InstalledPackageRecord, "packageId" | "scope" | "manifest">,
+>(target: T, records: T[]): string {
+  const names = packageSourcePathNameMap(records);
+  const targetKey = packageSourceRecordKey(target);
+  for (const [record, name] of names) {
+    if (packageSourceRecordKey(record) === targetKey) {
+      return name;
+    }
+  }
+  return packageSourcePathName(target);
 }
 
 class ProcessSourceMountBackend implements MountBackend {
@@ -686,19 +725,20 @@ function visibleSourcePackages(
   records: InstalledPackageRecord[],
   identity: ProcessIdentity,
 ): SourcePackage[] {
-  const byName = new Map<string, SourcePackage>();
+  const pathNames = packageSourcePathNameMap(records);
+  const packages: SourcePackage[] = [];
   for (const record of records) {
-    const name = packageSourcePathName(record);
-    if (!name || byName.has(name)) {
+    const name = pathNames.get(record);
+    if (!name) {
       continue;
     }
-    byName.set(name, {
+    packages.push({
       record,
       name,
       writable: canWritePackageSource(record, identity),
     });
   }
-  return [...byName.values()].sort((left, right) => left.name.localeCompare(right.name));
+  return packages.sort((left, right) => left.name.localeCompare(right.name));
 }
 
 function canWritePackageSource(record: InstalledPackageRecord, identity: ProcessIdentity): boolean {
@@ -715,6 +755,60 @@ function sourcePackageForRecord(
     name: packageSourcePathName(record),
     writable: canWritePackageSource(record, identity),
   };
+}
+
+function compareSourcePathEntries<T extends Pick<InstalledPackageRecord, "packageId" | "scope" | "manifest">>(
+  left: { record: T; baseName: string },
+  right: { record: T; baseName: string },
+): number {
+  const name = left.baseName.localeCompare(right.baseName);
+  if (name !== 0) {
+    return name;
+  }
+  const source = sourcePathDisambiguationKey(left.record).localeCompare(sourcePathDisambiguationKey(right.record));
+  if (source !== 0) {
+    return source;
+  }
+  return packageSourceRecordKey(left.record).localeCompare(packageSourceRecordKey(right.record));
+}
+
+function packageSourcePathDisambiguator(record: Pick<InstalledPackageRecord, "packageId" | "manifest">): string {
+  return sanitizePackageSourcePathSegment(sourcePathDisambiguationKey(record))
+    || sanitizePackageSourcePathSegment(record.packageId)
+    || "package";
+}
+
+function sourcePathDisambiguationKey(record: Pick<InstalledPackageRecord, "packageId" | "manifest">): string {
+  const source = record.manifest.source;
+  const subdir = normalizeRepoPath(source.subdir);
+  return subdir && subdir !== "."
+    ? `${source.repo}-${subdir}`
+    : source.repo;
+}
+
+function sanitizePackageSourcePathSegment(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+function uniquePackageSourcePathName(preferred: string, used: Set<string>): string {
+  let candidate = preferred || "package";
+  let index = 2;
+  while (used.has(candidate)) {
+    candidate = `${preferred || "package"}-${index}`;
+    index += 1;
+  }
+  return candidate;
+}
+
+function packageSourceRecordKey(record: Pick<InstalledPackageRecord, "packageId" | "scope">): string {
+  switch (record.scope.kind) {
+    case "user":
+      return `user:${record.scope.uid}:${record.packageId}`;
+    case "workspace":
+      return `workspace:${record.scope.workspaceId}:${record.packageId}`;
+    case "global":
+      return `global:${record.packageId}`;
+  }
 }
 
 function sourceStatusForPackage(

@@ -203,6 +203,73 @@ describe("createProcessSourceBackend", () => {
     expect(storage.objects.size).toBe(0);
   });
 
+  it("keeps colliding package source path names visible with disambiguated names", async () => {
+    const first = makePackage({
+      packageId: "import:sam/demo-a:.",
+      manifest: {
+        ...makePackage().manifest,
+        name: "Demo Tool",
+        source: {
+          repo: "sam/demo-a",
+          ref: "main",
+          subdir: ".",
+          resolvedCommit: "first123",
+        },
+      },
+    });
+    const second = makePackage({
+      packageId: "import:sam/demo-b:.",
+      manifest: {
+        ...makePackage().manifest,
+        name: "demo-tool",
+        source: {
+          repo: "sam/demo-b",
+          ref: "main",
+          subdir: ".",
+          resolvedCommit: "second123",
+        },
+      },
+    });
+    const readCalls: Array<{ repo: unknown; path: string }> = [];
+    const backend = createProcessSourceBackend({
+      identity: IDENTITY,
+      storage: makeBucket(),
+      packages: [first, second],
+      processId: "task:source",
+      config: makeConfig(),
+      ripgit: {
+        readPath: async (repo: unknown, path: string) => {
+          readCalls.push({ repo, path });
+          return {
+            kind: "file",
+            bytes: new TextEncoder().encode(`from ${path}\n`),
+            size: path.length + 6,
+          };
+        },
+      } as any,
+    });
+
+    await expect(backend!.readdir("/src/packages")).resolves.toEqual([
+      "demo-tool--sam-demo-a",
+      "demo-tool--sam-demo-b",
+    ]);
+    await expect(backend!.readFile("/src/packages/demo-tool--sam-demo-a/src/index.ts"))
+      .resolves.toContain("src/index.ts");
+    await expect(backend!.readFile("/src/packages/demo-tool--sam-demo-b/src/index.ts"))
+      .resolves.toContain("src/index.ts");
+
+    expect(readCalls).toEqual([
+      {
+        repo: { owner: "sam", repo: "demo-a", branch: "first123" },
+        path: "src/index.ts",
+      },
+      {
+        repo: { owner: "sam", repo: "demo-b", branch: "second123" },
+        path: "src/index.ts",
+      },
+    ]);
+  });
+
   it("does not reuse expectedHead when committing to a different branch", async () => {
     const config = makeConfig();
     const storage = makeBucket();
