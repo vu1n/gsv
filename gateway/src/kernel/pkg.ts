@@ -600,7 +600,7 @@ function packageCreateApplyOptions(
   ref: string,
   heads: Record<string, string> | undefined,
 ): { baseRef?: string } | undefined {
-  if (heads?.[ref] || ref === DEFAULT_PACKAGE_CREATE_REF) {
+  if (heads?.[ref]) {
     return undefined;
   }
 
