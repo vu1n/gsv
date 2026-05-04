@@ -1,5 +1,11 @@
+import type { PackageViewerBinding } from "@gsv/package/backend";
+
 type KernelClient = {
   request(call: string, args: Record<string, unknown>): Promise<any>;
+};
+
+type ViewerRuntime = {
+  viewer?: PackageViewerBinding;
 };
 
 type AppBinding = {
@@ -239,4 +245,15 @@ export async function unwatchProcessSignals(kernel: KernelClient, app: AppBindin
     removed += count;
   }));
   return { pid, removed };
+}
+
+export function getViewer(runtime: ViewerRuntime) {
+  const uid = typeof runtime.viewer?.uid === "number" ? runtime.viewer.uid : 0;
+  const username = typeof runtime.viewer?.username === "string" && runtime.viewer.username.trim().length > 0
+    ? runtime.viewer.username.trim()
+    : uid === 0 ? "root" : "user";
+  return {
+    uid,
+    username,
+  };
 }

@@ -5,7 +5,7 @@ export function PlusIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14" /><path d="M5 12h14" /></svg>;
 }
 export function RefreshIcon() {
-  return <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M20.7 5.9c-.5-.2-1.1 0-1.3.5s0 1.1.5 1.3C23.6 9.4 26 13 26 17c0 5.5-4.5 10-10 10S6 22.5 6 17 10.5 7 16 7c.4 0 .8-.3.9-.7s0-.9-.3-1.1l-4-3c-.4-.3-1.1-.2-1.4.2s-.2 1.1.2 1.4l2 1.5C8 6.5 4 11.3 4 17c0 6.6 5.4 12 12 12s12-5.4 12-12c0-4.8-2.9-9.2-7.3-11.1" /></svg>;
+  return <svg class="refresh-icon" viewBox="0 0 32 32" aria-hidden="true"><path d="M20.7 5.9c-.5-.2-1.1 0-1.3.5s0 1.1.5 1.3C23.6 9.4 26 13 26 17c0 5.5-4.5 10-10 10S6 22.5 6 17 10.5 7 16 7c.4 0 .8-.3.9-.7s0-.9-.3-1.1l-4-3c-.4-.3-1.1-.2-1.4.2s-.2 1.1.2 1.4l2 1.5C8 6.5 4 11.3 4 17c0 6.6 5.4 12 12 12s12-5.4 12-12c0-4.8-2.9-9.2-7.3-11.1" /></svg>;
 }
 export function MoreIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h.01" /><path d="M12 12h.01" /><path d="M19 12h.01" /></svg>;

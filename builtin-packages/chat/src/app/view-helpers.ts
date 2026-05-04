@@ -532,8 +532,8 @@ function deriveThreadLabel(message: string): string | undefined {
   return firstLine.length > 72 ? firstLine.slice(0, 69) + "..." : firstLine;
 }
 
-function labelForRole(role: string): string {
-  if (role === "user") return "You";
+function labelForRole(role: string, userLabel = "You"): string {
+  if (role === "user") return userLabel.trim() || "You";
   if (role === "assistant") return "Assistant";
   return "System";
 }

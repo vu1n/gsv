@@ -1,4 +1,5 @@
 export type ChatBackend = {
+  getViewer(args?: unknown): Promise<unknown>;
   listProfiles(args?: unknown): Promise<unknown>;
   listWorkspaces(args?: unknown): Promise<unknown>;
   spawnProcess(args: unknown): Promise<unknown>;

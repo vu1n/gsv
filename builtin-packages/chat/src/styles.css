@@ -180,6 +180,16 @@ textarea {
   pointer-events: none;
 }
 
+.refresh-icon {
+  transform: scale(0.9);
+  transform-origin: center;
+}
+
+.refresh-icon path {
+  fill: currentColor;
+  stroke: none;
+}
+
 .new-thread-strip {
   padding: 10px 14px;
   border-bottom: 1px solid var(--line);
@@ -868,6 +878,10 @@ textarea {
   font-size: 11px;
   font-weight: 800;
   text-transform: uppercase;
+}
+
+.message-user .message-role-label {
+  text-transform: none;
 }
 
 .message-spacer {

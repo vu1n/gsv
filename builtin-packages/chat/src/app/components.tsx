@@ -279,6 +279,7 @@ export function ConversationBar(props: {
 
 export function ArchiveWorkspace(props: {
   archive: ArchiveState;
+  userLabel: string;
   onRefresh(): void;
   onSelect(segmentId: string): void;
 }) {
@@ -319,7 +320,7 @@ export function ArchiveWorkspace(props: {
             <>
               <div class="archive-count">{archive.messages.length}/{archive.messageCount}{archive.truncated ? " shown" : ""}</div>
               {archiveRows.map((row, index) => (
-                <ArchiveRow key={`${row.kind}:${row.kind === "message" ? row.messageId ?? index : row.callId}:${index}`} row={row} />
+                <ArchiveRow key={`${row.kind}:${row.kind === "message" ? row.messageId ?? index : row.callId}:${index}`} row={row} userLabel={props.userLabel} />
               ))}
             </>
           ) : (
@@ -337,6 +338,7 @@ export function ArchiveWorkspace(props: {
 
 export function Transcript(props: {
   rows: LogRow[];
+  userLabel: string;
   pendingAssistant: PendingAssistantState;
   pendingHil: HilRequest | null;
   hilBusy: boolean;
@@ -372,6 +374,7 @@ export function Transcript(props: {
           <MessageBubble
             key={`${messageRow.messageId ?? index}:${messageRow.timestamp}`}
             row={messageRow}
+            userLabel={props.userLabel}
             branchBusy={props.branchBusy}
             mediaSources={props.mediaSources}
             onCopy={props.onCopy}
@@ -395,6 +398,7 @@ export function Transcript(props: {
 
 function MessageBubble({
   row,
+  userLabel,
   branchBusy,
   branchable = true,
   mediaSources,
@@ -403,6 +407,7 @@ function MessageBubble({
   onLoadMediaSource,
 }: {
   row: MessageRow;
+  userLabel: string;
   branchBusy: boolean;
   branchable?: boolean;
   mediaSources: Record<string, string>;
@@ -422,7 +427,7 @@ function MessageBubble({
   return (
     <article class={`message message-${row.role}`}>
       <div class="message-head">
-        <span>{labelForRole(row.role)}</span>
+        <span class="message-role-label">{labelForRole(row.role, userLabel)}</span>
         <span class="message-spacer" />
         <span>{formatTimestamp(row.timestamp)}</span>
         <details class="message-menu">
@@ -1197,13 +1202,14 @@ export function CompactDialog(props: {
   );
 }
 
-function ArchiveRow({ row }: { row: LogRow }) {
+function ArchiveRow({ row, userLabel }: { row: LogRow; userLabel: string }) {
   if (row.kind === "toolCall" || row.kind === "toolResult") {
     return <ToolCard row={row} />;
   }
   return (
     <MessageBubble
       row={row as MessageRow}
+      userLabel={userLabel}
       branchBusy={false}
       branchable={false}
       mediaSources={{}}

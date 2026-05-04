@@ -166,6 +166,7 @@ export function App({ backend }: { backend: ChatBackend }) {
   const [active, setActiveState] = useState<ThreadContext | null>(() => getStoredThreadContext());
   const [profiles, setProfiles] = useState<Profile[]>(() => fallbackProfiles());
   const [draftProfileId, setDraftProfileId] = useState("task");
+  const [viewerUsername, setViewerUsername] = useState("You");
   const [threads, setThreads] = useState<WorkspaceEntry[]>([]);
   const [threadsLoading, setThreadsLoading] = useState(false);
   const [threadsError, setThreadsError] = useState("");
@@ -461,6 +462,16 @@ export function App({ backend }: { backend: ChatBackend }) {
     };
   }, [cleanupVoiceRecorder]);
 
+  const loadViewer = useCallback(async () => {
+    try {
+      const result = await backend.getViewer({});
+      const username = asString(asRecord(result)?.username)?.trim();
+      setViewerUsername(username || "You");
+    } catch {
+      setViewerUsername("You");
+    }
+  }, [backend]);
+
   const loadProfiles = useCallback(async () => {
     try {
       const result = await backend.listProfiles({});
@@ -648,9 +659,10 @@ export function App({ backend }: { backend: ChatBackend }) {
   }, [backend]);
 
   useEffect(() => {
+    void loadViewer();
     void loadProfiles();
     void loadThreads();
-  }, [loadProfiles, loadThreads]);
+  }, [loadProfiles, loadThreads, loadViewer]);
 
   useEffect(() => {
     if (newConversationProfiles.length > 0 && !newConversationProfiles.some((profile) => profile.id === draftProfileId)) {
@@ -1283,6 +1295,7 @@ export function App({ backend }: { backend: ChatBackend }) {
         {workspaceView === "archive" ? (
           <ArchiveWorkspace
             archive={archive}
+            userLabel={viewerUsername}
             onRefresh={() => void loadArchiveSegments(true)}
             onSelect={(segmentId) => void readArchiveSegment(segmentId)}
           />
@@ -1290,6 +1303,7 @@ export function App({ backend }: { backend: ChatBackend }) {
           <>
             <Transcript
               rows={rows}
+              userLabel={viewerUsername}
               pendingAssistant={pendingAssistant}
               pendingHil={pendingHil}
               hilBusy={hilBusy}
