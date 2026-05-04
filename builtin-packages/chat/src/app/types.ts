@@ -4,6 +4,7 @@ export type ChatBackend = {
   spawnProcess(args: unknown): Promise<unknown>;
   sendMessage(args: unknown): Promise<unknown>;
   getHistory(args: unknown): Promise<unknown>;
+  readProcessMedia(args: unknown): Promise<unknown>;
   listConversations(args: unknown): Promise<unknown>;
   compactConversation(args: unknown): Promise<unknown>;
   listConversationSegments(args: unknown): Promise<unknown>;

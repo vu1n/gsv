@@ -156,6 +156,11 @@ function revokeAttachmentPreview(attachment: Attachment): void {
   }
 }
 
+function mediaSourceKey(media: unknown): string | null {
+  const record = asRecord(media);
+  return asString(record?.key);
+}
+
 
 export function App({ backend }: { backend: ChatBackend }) {
   const [active, setActiveState] = useState<ThreadContext | null>(() => getStoredThreadContext());
@@ -182,6 +187,7 @@ export function App({ backend }: { backend: ChatBackend }) {
   const [composeText, setComposeText] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [voice, setVoice] = useState<VoiceRecordingState>(EMPTY_VOICE_RECORDING);
+  const [mediaSources, setMediaSources] = useState<Record<string, string>>({});
   const [archive, setArchive] = useState<ArchiveState>(EMPTY_ARCHIVE);
   const [compactDialog, setCompactDialog] = useState<CompactDialogState>(null);
   const [notice, setNotice] = useState("");
@@ -190,6 +196,10 @@ export function App({ backend }: { backend: ChatBackend }) {
   const activeRef = useRef(active);
   const mountedRef = useRef(true);
   const attachmentsRef = useRef(attachments);
+  const mediaSourcesRef = useRef(mediaSources);
+  const mediaSourceLoadingRef = useRef<Set<string>>(new Set());
+  const mediaSourceFailedRef = useRef<Set<string>>(new Set());
+  const previewUrlsRef = useRef<Set<string>>(new Set());
   const recorderRef = useRef<MediaRecorder | null>(null);
   const recorderStreamRef = useRef<MediaStream | null>(null);
   const recorderChunksRef = useRef<Blob[]>([]);
@@ -205,6 +215,10 @@ export function App({ backend }: { backend: ChatBackend }) {
   useEffect(() => {
     attachmentsRef.current = attachments;
   }, [attachments]);
+
+  useEffect(() => {
+    mediaSourcesRef.current = mediaSources;
+  }, [mediaSources]);
 
   const conversationProfiles = useMemo(
     () => profiles.filter((profile) => profile.interactive === true && profile.startable === true),
@@ -321,16 +335,19 @@ export function App({ backend }: { backend: ChatBackend }) {
     }
 
     const previewUrl = URL.createObjectURL(blob);
+    previewUrlsRef.current.add(previewUrl);
     try {
       const attachment = await readAttachmentBlob(blob, voiceRecordingFilename(mimeType), elapsedMs / 1000);
       if (!mountedRef.current) {
         URL.revokeObjectURL(previewUrl);
+        previewUrlsRef.current.delete(previewUrl);
         return;
       }
       setAttachments((current) => current.concat({ ...attachment, type: "audio", previewUrl }));
       setVoice(EMPTY_VOICE_RECORDING);
     } catch (error) {
       URL.revokeObjectURL(previewUrl);
+      previewUrlsRef.current.delete(previewUrl);
       if (mountedRef.current) {
         setVoice({ status: "idle", elapsedMs: 0, error: "Voice read failed: " + formatError(error) });
       }
@@ -439,6 +456,8 @@ export function App({ backend }: { backend: ChatBackend }) {
       recorderCancelRef.current = true;
       cleanupVoiceRecorder();
       attachmentsRef.current.forEach(revokeAttachmentPreview);
+      previewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      previewUrlsRef.current.clear();
     };
   }, [cleanupVoiceRecorder]);
 
@@ -836,7 +855,12 @@ export function App({ backend }: { backend: ChatBackend }) {
     setActive(null);
     setComposeText("");
     setAttachments((current) => {
-      current.forEach(revokeAttachmentPreview);
+      current.forEach((attachment) => {
+        revokeAttachmentPreview(attachment);
+        if (attachment.previewUrl) {
+          previewUrlsRef.current.delete(attachment.previewUrl);
+        }
+      });
       return [];
     });
     setWorkspaceView("chat");
@@ -859,6 +883,7 @@ export function App({ backend }: { backend: ChatBackend }) {
       return;
     }
     const message = composeText.trim();
+    const displayMedia = attachments.slice();
     const media = attachments.map(stripAttachmentPreview);
     if (!message && media.length === 0) {
       return;
@@ -902,14 +927,11 @@ export function App({ backend }: { backend: ChatBackend }) {
         kind: "message",
         role: "user",
         text: message,
-        media,
+        media: displayMedia,
         timestamp: Date.now(),
       }));
       setComposeText("");
-      setAttachments((current) => {
-        current.forEach(revokeAttachmentPreview);
-        return [];
-      });
+      setAttachments([]);
       const result = await backend.sendMessage({
         message,
         pid: target.pid,
@@ -1099,11 +1121,56 @@ export function App({ backend }: { backend: ChatBackend }) {
     }
   }
 
+  function loadMediaSource(media: unknown): void {
+    const key = mediaSourceKey(media);
+    if (
+      !key
+      || mediaSourcesRef.current[key]
+      || mediaSourceLoadingRef.current.has(key)
+      || mediaSourceFailedRef.current.has(key)
+    ) {
+      return;
+    }
+    const target = activeRef.current;
+    if (!target?.pid) {
+      return;
+    }
+
+    const record = asRecord(media);
+    const mimeType = asString(record?.mimeType) || undefined;
+    mediaSourceLoadingRef.current.add(key);
+    backend.readProcessMedia({ pid: target.pid, key, mimeType })
+      .then((result) => {
+        const response = asRecord(result);
+        const dataUrl = asString(response?.dataUrl);
+        if (!response?.ok || !dataUrl || !mountedRef.current) {
+          mediaSourceFailedRef.current.add(key);
+          return;
+        }
+        setMediaSources((current) => {
+          if (current[key] === dataUrl) {
+            return current;
+          }
+          return { ...current, [key]: dataUrl };
+        });
+      })
+      .catch((error) => {
+        mediaSourceFailedRef.current.add(key);
+        appendSystem("media load failed: " + formatError(error));
+      })
+      .finally(() => {
+        mediaSourceLoadingRef.current.delete(key);
+      });
+  }
+
   function removeAttachment(index: number): void {
     setAttachments((current) => {
       const removed = current[index];
       if (removed) {
         revokeAttachmentPreview(removed);
+        if (removed.previewUrl) {
+          previewUrlsRef.current.delete(removed.previewUrl);
+        }
       }
       return current.filter((_, itemIndex) => itemIndex !== index);
     });
@@ -1228,9 +1295,11 @@ export function App({ backend }: { backend: ChatBackend }) {
               hilBusy={hilBusy}
               branchBusy={branchBusy}
               refNode={transcriptRef}
+              mediaSources={mediaSources}
               onCopy={(text) => void copyText("message", text)}
               onBranch={(messageId) => void branchFromMessage(messageId)}
               onHilDecision={(requestId, decision, remember) => void decidePendingHil(requestId, decision, remember)}
+              onLoadMediaSource={loadMediaSource}
             />
 
             <Composer

@@ -77,7 +77,9 @@ function flattenHistory(messages: unknown[]): LogRow[] {
     const role = record?.role === "user" ? "user" : record?.role === "assistant" ? "assistant" : "system";
     const contentRecord = asRecord(record?.content);
     const media = Array.isArray(contentRecord?.media) ? contentRecord.media : [];
-    const text = contentRecord ? (asString(contentRecord.text) || formatMessageContent(record?.content)) : formatMessageContent(record?.content);
+    const text = contentRecord && "text" in contentRecord
+      ? asString(contentRecord.text) ?? ""
+      : formatMessageContent(record?.content);
     rows.push({ kind: "message", role, text, media, timestamp, messageId });
   }
   return rows.length > 0 ? rows : systemRows("No messages yet. Send your first prompt.");

@@ -86,6 +86,20 @@ export async function getHistory(kernel: KernelClient, input: unknown) {
   });
 }
 
+export async function readProcessMedia(kernel: KernelClient, input: unknown) {
+  const args = normalizeArgs(input);
+  const pid = normalizePid(args.pid);
+  const key = typeof args.key === "string" ? args.key.trim() : "";
+  const mimeType = typeof args.mimeType === "string" && args.mimeType.trim()
+    ? args.mimeType.trim()
+    : undefined;
+  return kernel.request("proc.media.read", {
+    ...(pid ? { pid } : {}),
+    key,
+    ...(mimeType ? { mimeType } : {}),
+  });
+}
+
 export async function listConversations(kernel: KernelClient, input: unknown) {
   const args = normalizeArgs(input);
   const pid = normalizePid(args.pid);

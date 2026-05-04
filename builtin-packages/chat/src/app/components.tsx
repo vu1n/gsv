@@ -336,9 +336,11 @@ export function Transcript(props: {
   hilBusy: boolean;
   branchBusy: boolean;
   refNode: { current: HTMLDivElement | null };
+  mediaSources: Record<string, string>;
   onCopy(text: string): void;
   onBranch(messageId: number): void;
   onHilDecision(requestId: string, decision: "approve" | "deny", remember?: boolean): void;
+  onLoadMediaSource(media: unknown): void;
 }) {
   const hilRendered = props.pendingHil
     ? props.rows.some((row) => row.kind === "toolCall" && row.callId === props.pendingHil?.callId)
@@ -360,7 +362,17 @@ export function Transcript(props: {
           return <ToolCard key={`${row.callId}:${index}`} row={row} />;
         }
         const messageRow = row as MessageRow;
-        return <MessageBubble key={`${messageRow.messageId ?? index}:${messageRow.timestamp}`} row={messageRow} branchBusy={props.branchBusy} onCopy={props.onCopy} onBranch={props.onBranch} />;
+        return (
+          <MessageBubble
+            key={`${messageRow.messageId ?? index}:${messageRow.timestamp}`}
+            row={messageRow}
+            branchBusy={props.branchBusy}
+            mediaSources={props.mediaSources}
+            onCopy={props.onCopy}
+            onBranch={props.onBranch}
+            onLoadMediaSource={props.onLoadMediaSource}
+          />
+        );
       })}
       {props.pendingHil && !hilRendered ? (
         <HilCard request={props.pendingHil} busy={props.hilBusy} onDecision={props.onHilDecision} />
@@ -375,8 +387,31 @@ export function Transcript(props: {
   );
 }
 
-function MessageBubble({ row, branchBusy, branchable = true, onCopy, onBranch }: { row: MessageRow; branchBusy: boolean; branchable?: boolean; onCopy(text: string): void; onBranch(messageId: number): void }) {
+function MessageBubble({
+  row,
+  branchBusy,
+  branchable = true,
+  mediaSources,
+  onCopy,
+  onBranch,
+  onLoadMediaSource,
+}: {
+  row: MessageRow;
+  branchBusy: boolean;
+  branchable?: boolean;
+  mediaSources: Record<string, string>;
+  onCopy(text: string): void;
+  onBranch(messageId: number): void;
+  onLoadMediaSource(media: unknown): void;
+}) {
   const thinking = row.thinking?.filter(Boolean) ?? [];
+  const media = row.media ?? [];
+  const voiceMedia = media.filter(isAudioMedia);
+  const otherMedia = media.filter((item) => !isAudioMedia(item));
+  const hasText = row.text.trim().length > 0;
+  const copyValue = row.text.trim()
+    || voiceMedia.map(mediaTranscription).filter(Boolean).join("\n\n")
+    || row.text;
   return (
     <article class={`message message-${row.role}`}>
       <div class="message-head">
@@ -390,7 +425,7 @@ function MessageBubble({ row, branchBusy, branchable = true, onCopy, onBranch }:
             <MoreIcon />
           </summary>
           <div class="message-menu-popover">
-            <button type="button" class="menu-action" onClick={(event) => { closeContainingChatMenu(event.currentTarget); onCopy(row.text); }}>
+            <button type="button" class="menu-action" onClick={(event) => { closeContainingChatMenu(event.currentTarget); onCopy(copyValue); }}>
               <CopyIcon />
               <span>Copy</span>
             </button>
@@ -414,18 +449,99 @@ function MessageBubble({ row, branchBusy, branchable = true, onCopy, onBranch }:
           <div>{thinking.join("\n\n")}</div>
         </details>
       ) : null}
-      {row.role === "assistant" ? (
+      {hasText && row.role === "assistant" ? (
         <div class="message-body message-markdown" dangerouslySetInnerHTML={{ __html: renderMarkdownHtml(row.text) }} />
-      ) : (
+      ) : hasText ? (
         <pre class="message-body">{row.text}</pre>
-      )}
-      {row.media && row.media.length > 0 ? (
+      ) : null}
+      {voiceMedia.length > 0 ? (
+        <div class="voice-message-list">
+          {voiceMedia.map((item, index) => (
+            <VoiceMessage
+              key={`${mediaSourceKey(item) ?? "voice"}:${index}`}
+              media={item}
+              source={mediaSourceFor(item, mediaSources)}
+              onLoadMediaSource={onLoadMediaSource}
+            />
+          ))}
+        </div>
+      ) : null}
+      {otherMedia.length > 0 ? (
         <div class="message-media">
-          {row.media.map((item, index) => <span key={index}>{describeAttachment(item)}</span>)}
+          {otherMedia.map((item, index) => <span key={index}>{describeAttachment(item)}</span>)}
         </div>
       ) : null}
     </article>
   );
+}
+
+function VoiceMessage(props: { media: unknown; source: string | null; onLoadMediaSource(media: unknown): void }) {
+  const record = asRecord(props.media);
+  const key = mediaSourceKey(props.media);
+  const filename = asString(record?.filename);
+  const duration = asNumber(record?.duration);
+  const transcription = asString(record?.transcription)?.trim() || "";
+  const durationLabel = formatAttachmentDuration(duration);
+
+  useEffect(() => {
+    if (!props.source && key) {
+      props.onLoadMediaSource(props.media);
+    }
+  }, [key, props.media, props.onLoadMediaSource, props.source]);
+
+  return (
+    <section class="voice-message">
+      <div class="voice-message-player">
+        <span class="voice-message-icon" aria-hidden="true"><MicIcon /></span>
+        <div class="voice-message-main">
+          <div class="voice-message-meta">
+            <span title={filename || undefined}>Voice message</span>
+            {durationLabel ? <time>{durationLabel}</time> : null}
+          </div>
+          {props.source ? (
+            <audio controls preload="metadata" src={props.source} />
+          ) : (
+            <div class="voice-message-loading">Loading audio...</div>
+          )}
+        </div>
+      </div>
+      {transcription ? (
+        <details class="voice-transcript">
+          <summary>Transcription</summary>
+          <p>{transcription}</p>
+        </details>
+      ) : null}
+    </section>
+  );
+}
+
+function isAudioMedia(media: unknown): boolean {
+  const record = asRecord(media);
+  const type = asString(record?.type);
+  const mimeType = asString(record?.mimeType);
+  return type === "audio" || Boolean(mimeType?.toLowerCase().startsWith("audio/"));
+}
+
+function mediaSourceFor(media: unknown, sources: Record<string, string>): string | null {
+  const record = asRecord(media);
+  const previewUrl = asString(record?.previewUrl);
+  if (previewUrl) return previewUrl;
+  const url = asString(record?.url);
+  if (url) return url;
+  const data = asString(record?.data);
+  if (data) return data.startsWith("data:") ? data : `data:${asString(record?.mimeType) || "application/octet-stream"};base64,${data}`;
+  const key = mediaSourceKey(media);
+  return key ? sources[key] ?? null : null;
+}
+
+function mediaSourceKey(media: unknown): string | null {
+  const record = asRecord(media);
+  return asString(record?.key);
+}
+
+function mediaTranscription(media: unknown): string {
+  const record = asRecord(media);
+  return asString(record?.transcription)?.trim() || "";
 }
 
 function ToolCard({ row }: { row: ToolRow }) {
@@ -855,5 +971,15 @@ function ArchiveRow({ row }: { row: LogRow }) {
   if (row.kind === "toolCall" || row.kind === "toolResult") {
     return <ToolCard row={row} />;
   }
-  return <MessageBubble row={row as MessageRow} branchBusy={false} branchable={false} onCopy={(text) => { void copyTextToClipboard(text).catch(() => {}); }} onBranch={() => {}} />;
+  return (
+    <MessageBubble
+      row={row as MessageRow}
+      branchBusy={false}
+      branchable={false}
+      mediaSources={{}}
+      onCopy={(text) => { void copyTextToClipboard(text).catch(() => {}); }}
+      onBranch={() => {}}
+      onLoadMediaSource={() => {}}
+    />
+  );
 }

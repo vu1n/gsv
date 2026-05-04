@@ -9,6 +9,7 @@ import {
   listConversationSegments,
   listProfiles,
   listWorkspaces,
+  readProcessMedia,
   readConversationSegment,
   sendMessage,
   spawnProcess,
@@ -35,6 +36,10 @@ export default class ChatBackend extends PackageBackendEntrypoint {
 
   async getHistory(args: unknown): Promise<unknown> {
     return getHistory(this.kernel, args);
+  }
+
+  async readProcessMedia(args: unknown): Promise<unknown> {
+    return readProcessMedia(this.kernel, args);
   }
 
   async listConversations(args: unknown): Promise<unknown> {

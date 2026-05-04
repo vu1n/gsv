@@ -1001,6 +1001,126 @@ textarea {
   gap: 7px;
 }
 
+.voice-message-list {
+  margin-top: 9px;
+  display: grid;
+  gap: 8px;
+}
+
+.voice-message {
+  width: min(100%, 390px);
+  display: grid;
+  gap: 7px;
+}
+
+.voice-message-player {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(31, 92, 153, 0.16);
+  border-radius: 999px;
+  padding: 7px 10px;
+  background: rgba(255, 255, 255, 0.74);
+}
+
+.message-user .voice-message-player {
+  border-color: rgba(31, 92, 153, 0.2);
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.voice-message-icon {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background: var(--blue);
+}
+
+.voice-message-icon svg {
+  width: 15px;
+  height: 15px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.voice-message-main {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: grid;
+  gap: 4px;
+}
+
+.voice-message-meta {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.voice-message-meta span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.voice-message-meta time {
+  flex: 0 0 auto;
+  color: var(--soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.voice-message audio {
+  width: 100%;
+  height: 32px;
+}
+
+.voice-message-loading {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  color: var(--soft);
+  font-size: 12px;
+}
+
+.voice-transcript {
+  width: min(100%, 390px);
+  padding-left: 40px;
+}
+
+.voice-transcript summary {
+  cursor: pointer;
+  color: var(--blue);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  list-style: none;
+}
+
+.voice-transcript summary::-webkit-details-marker {
+  display: none;
+}
+
+.voice-transcript p {
+  margin: 7px 0 0;
+  border-left: 2px solid rgba(31, 92, 153, 0.18);
+  padding-left: 9px;
+  color: var(--muted);
+  white-space: pre-wrap;
+}
+
 .message-media span,
 .attachment-chip {
   display: inline-flex;
