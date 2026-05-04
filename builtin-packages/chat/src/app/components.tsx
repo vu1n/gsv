@@ -478,12 +478,10 @@ function MessageBubble({
 }
 
 function VoiceMessage(props: { media: unknown; source: string | null; onLoadMediaSource(media: unknown): void }) {
-  const record = asRecord(props.media);
   const key = mediaSourceKey(props.media);
-  const filename = asString(record?.filename);
+  const record = asRecord(props.media);
   const duration = asNumber(record?.duration);
   const transcription = asString(record?.transcription)?.trim() || "";
-  const durationLabel = formatAttachmentDuration(duration);
 
   useEffect(() => {
     if (!props.source && key) {
@@ -496,10 +494,6 @@ function VoiceMessage(props: { media: unknown; source: string | null; onLoadMedi
       <div class="voice-message-player">
         <span class="voice-message-icon" aria-hidden="true"><MicIcon /></span>
         <div class="voice-message-main">
-          <div class="voice-message-meta">
-            <span title={filename || undefined}>Voice message</span>
-            {durationLabel ? <time>{durationLabel}</time> : null}
-          </div>
           {props.source ? (
             <VoiceAudioPlayer source={props.source} duration={duration} />
           ) : (

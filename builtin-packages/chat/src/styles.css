@@ -1061,31 +1061,6 @@ textarea {
   min-width: 0;
   flex: 1 1 auto;
   display: grid;
-  gap: 4px;
-}
-
-.voice-message-meta {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.voice-message-meta span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.voice-message-meta time {
-  flex: 0 0 auto;
-  color: var(--soft);
-  font-variant-numeric: tabular-nums;
 }
 
 .voice-audio-player {
