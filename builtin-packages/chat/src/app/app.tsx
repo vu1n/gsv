@@ -156,6 +156,13 @@ function revokeAttachmentPreview(attachment: Attachment): void {
   }
 }
 
+function cleanupAttachmentPreview(attachment: Attachment, previewUrls: Set<string>): void {
+  revokeAttachmentPreview(attachment);
+  if (attachment.previewUrl) {
+    previewUrls.delete(attachment.previewUrl);
+  }
+}
+
 function mediaSourceKey(media: unknown): string | null {
   const record = asRecord(media);
   return asString(record?.key);
@@ -876,12 +883,7 @@ export function App({ backend }: { backend: ChatBackend }) {
     setActive(null);
     setComposeText("");
     setAttachments((current) => {
-      current.forEach((attachment) => {
-        revokeAttachmentPreview(attachment);
-        if (attachment.previewUrl) {
-          previewUrlsRef.current.delete(attachment.previewUrl);
-        }
-      });
+      current.forEach((attachment) => cleanupAttachmentPreview(attachment, previewUrlsRef.current));
       return [];
     });
     setWorkspaceView("chat");
@@ -952,7 +954,10 @@ export function App({ backend }: { backend: ChatBackend }) {
         timestamp: Date.now(),
       }));
       setComposeText("");
-      setAttachments([]);
+      setAttachments((current) => {
+        current.forEach((attachment) => cleanupAttachmentPreview(attachment, previewUrlsRef.current));
+        return [];
+      });
       const result = await backend.sendMessage({
         message,
         pid: target.pid,
@@ -1207,10 +1212,7 @@ export function App({ backend }: { backend: ChatBackend }) {
     setAttachments((current) => {
       const removed = current[index];
       if (removed) {
-        revokeAttachmentPreview(removed);
-        if (removed.previewUrl) {
-          previewUrlsRef.current.delete(removed.previewUrl);
-        }
+        cleanupAttachmentPreview(removed, previewUrlsRef.current);
       }
       return current.filter((_, itemIndex) => itemIndex !== index);
     });
