@@ -2322,12 +2322,8 @@ function searchSkills(docs: SkillDocument[], query: string): SkillDocument[] {
 
 function formatSkillDocument(doc: SkillDocument): string {
   return [
-    `name: ${doc.name}`,
-    `id: ${doc.id}`,
-    `source: ${doc.source.label}`,
-    `writable: ${doc.source.writable ? "yes" : "no"}`,
     `path: ${doc.path}`,
-    `description: ${doc.description}`,
+    `writable: ${doc.source.writable ? "yes" : "no"}`,
     "",
     doc.content,
     "",
