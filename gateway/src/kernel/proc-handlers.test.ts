@@ -183,6 +183,53 @@ describe("proc handlers", () => {
       }),
     );
   });
+
+  it("preserves caller-supplied package source mount paths", async () => {
+    const pkg = makePackage("pkg-a", "Demo Tool", "sam/demo-a", "packages/demo-tool");
+    const ctx = {
+      env: {},
+      identity: {
+        process: IDENTITY,
+        capabilities: ["*"],
+      },
+      procs: {
+        get: vi.fn(() => null),
+        spawn: vi.fn(),
+      },
+      workspaces: {
+        get: vi.fn(),
+        touch: vi.fn(),
+      },
+      packages: {
+        resolve: vi.fn((packageId: string) => packageId === "pkg-a" ? pkg : null),
+        list: vi.fn(() => [pkg]),
+      },
+    } as unknown as KernelContext;
+
+    const result = await handleProcSpawn({
+      profile: "task",
+      mounts: [
+        { kind: "package-source", packageId: "pkg-a", mountPath: "/src/custom/demo" },
+      ],
+    }, ctx);
+
+    expect(result).toMatchObject({
+      ok: true,
+      cwd: "/src/custom/demo",
+    });
+    expect(ctx.procs.spawn).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ cwd: "/src/custom/demo" }),
+      expect.objectContaining({
+        mounts: [
+          expect.objectContaining({
+            mountPath: "/src/custom/demo",
+            subdir: "packages/demo-tool",
+          }),
+        ],
+      }),
+    );
+  });
 });
 
 function makeIpcCallContext() {

@@ -714,7 +714,10 @@ function materializeSpawnMounts(
 
   for (const spec of specs ?? []) {
     const record = resolveInstalledPackage(spec.packageId, ctx);
-    const mountPath = normalizePath(defaultMountPathForPackage(spec, record, sourcePackages));
+    const requestedMountPath = typeof spec.mountPath === "string" && spec.mountPath.trim()
+      ? spec.mountPath
+      : defaultMountPathForPackage(spec, record, sourcePackages);
+    const mountPath = normalizePath(requestedMountPath);
     if (mountPath === "/" || !mountPath.startsWith("/src")) {
       return { ok: false, error: `Unsupported mount path: ${mountPath}` };
     }
