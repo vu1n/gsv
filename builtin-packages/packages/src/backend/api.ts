@@ -648,6 +648,7 @@ export async function pullPackage(kernel: KernelClientLike, args: { packageId: s
   return kernel.request("repo.import", {
     repo: target.source.repo,
     ref: target.source.ref,
+    remoteRef: target.source.ref,
   });
 }
 
