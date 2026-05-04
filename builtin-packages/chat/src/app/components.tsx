@@ -280,8 +280,12 @@ export function ConversationBar(props: {
 export function ArchiveWorkspace(props: {
   archive: ArchiveState;
   userLabel: string;
+  mediaSources: Record<string, string>;
+  mediaSourceErrors: Record<string, string>;
   onRefresh(): void;
   onSelect(segmentId: string): void;
+  onLoadMediaSource(media: unknown): void;
+  onRetryMediaSource(media: unknown): void;
 }) {
   const { archive } = props;
   const selected = archive.segments.find((segment) => segment.id === archive.selectedSegmentId) ?? null;
@@ -320,7 +324,15 @@ export function ArchiveWorkspace(props: {
             <>
               <div class="archive-count">{archive.messages.length}/{archive.messageCount}{archive.truncated ? " shown" : ""}</div>
               {archiveRows.map((row, index) => (
-                <ArchiveRow key={`${row.kind}:${row.kind === "message" ? row.messageId ?? index : row.callId}:${index}`} row={row} userLabel={props.userLabel} />
+                <ArchiveRow
+                  key={`${row.kind}:${row.kind === "message" ? row.messageId ?? index : row.callId}:${index}`}
+                  row={row}
+                  userLabel={props.userLabel}
+                  mediaSources={props.mediaSources}
+                  mediaSourceErrors={props.mediaSourceErrors}
+                  onLoadMediaSource={props.onLoadMediaSource}
+                  onRetryMediaSource={props.onRetryMediaSource}
+                />
               ))}
             </>
           ) : (
@@ -345,10 +357,12 @@ export function Transcript(props: {
   branchBusy: boolean;
   refNode: { current: HTMLDivElement | null };
   mediaSources: Record<string, string>;
+  mediaSourceErrors: Record<string, string>;
   onCopy(text: string): void;
   onBranch(messageId: number): void;
   onHilDecision(requestId: string, decision: "approve" | "deny", remember?: boolean): void;
   onLoadMediaSource(media: unknown): void;
+  onRetryMediaSource(media: unknown): void;
 }) {
   const hilRendered = props.pendingHil
     ? props.rows.some((row) => row.kind === "toolCall" && row.callId === props.pendingHil?.callId)
@@ -377,9 +391,11 @@ export function Transcript(props: {
             userLabel={props.userLabel}
             branchBusy={props.branchBusy}
             mediaSources={props.mediaSources}
+            mediaSourceErrors={props.mediaSourceErrors}
             onCopy={props.onCopy}
             onBranch={props.onBranch}
             onLoadMediaSource={props.onLoadMediaSource}
+            onRetryMediaSource={props.onRetryMediaSource}
           />
         );
       })}
@@ -402,18 +418,22 @@ function MessageBubble({
   branchBusy,
   branchable = true,
   mediaSources,
+  mediaSourceErrors,
   onCopy,
   onBranch,
   onLoadMediaSource,
+  onRetryMediaSource,
 }: {
   row: MessageRow;
   userLabel: string;
   branchBusy: boolean;
   branchable?: boolean;
   mediaSources: Record<string, string>;
+  mediaSourceErrors: Record<string, string>;
   onCopy(text: string): void;
   onBranch(messageId: number): void;
   onLoadMediaSource(media: unknown): void;
+  onRetryMediaSource(media: unknown): void;
 }) {
   const thinking = row.thinking?.filter(Boolean) ?? [];
   const media = row.media ?? [];
@@ -473,7 +493,9 @@ function MessageBubble({
               key={`${mediaSourceKey(item) ?? "voice"}:${index}`}
               media={item}
               source={mediaSourceFor(item, mediaSources)}
+              error={mediaSourceErrorFor(item, mediaSourceErrors)}
               onLoadMediaSource={onLoadMediaSource}
+              onRetryMediaSource={onRetryMediaSource}
             />
           ))}
         </div>
@@ -485,7 +507,9 @@ function MessageBubble({
               key={`${mediaSourceKey(item) ?? mediaFilename(item) ?? mediaKind(item)}:${index}`}
               media={item}
               source={mediaSourceFor(item, mediaSources)}
+              error={mediaSourceErrorFor(item, mediaSourceErrors)}
               onLoadMediaSource={onLoadMediaSource}
+              onRetryMediaSource={onRetryMediaSource}
             />
           ))}
         </div>
@@ -494,15 +518,32 @@ function MessageBubble({
   );
 }
 
-function MediaAttachment(props: { media: unknown; source: string | null; onLoadMediaSource(media: unknown): void }) {
+function MediaAttachment(props: {
+  media: unknown;
+  source: string | null;
+  error: string;
+  onLoadMediaSource(media: unknown): void;
+  onRetryMediaSource(media: unknown): void;
+}) {
   const kind = mediaKind(props.media);
   const key = mediaSourceKey(props.media);
 
   useEffect(() => {
-    if (!props.source && key) {
+    if (!props.source && !props.error && key) {
       props.onLoadMediaSource(props.media);
     }
-  }, [key, props.media, props.onLoadMediaSource, props.source]);
+  }, [key, props.error, props.media, props.onLoadMediaSource, props.source]);
+
+  if (props.error) {
+    return (
+      <MediaLoadError
+        icon={mediaKindIcon(kind)}
+        label={`${mediaKindLabel(kind)} failed to load.`}
+        error={props.error}
+        onRetry={() => props.onRetryMediaSource(props.media)}
+      />
+    );
+  }
 
   if (kind === "image") {
     return <ImageAttachment media={props.media} source={props.source} />;
@@ -581,24 +622,45 @@ function MediaLoading(props: { icon: ComponentChildren; label: string }) {
   );
 }
 
-function VoiceMessage(props: { media: unknown; source: string | null; onLoadMediaSource(media: unknown): void }) {
+function MediaLoadError(props: { icon: ComponentChildren; label: string; error: string; onRetry(): void }) {
+  return (
+    <div class="media-loading is-error" title={props.error}>
+      <span aria-hidden="true">{props.icon}</span>
+      <span>{props.label}</span>
+      <button type="button" onClick={props.onRetry}>Retry</button>
+    </div>
+  );
+}
+
+function VoiceMessage(props: {
+  media: unknown;
+  source: string | null;
+  error: string;
+  onLoadMediaSource(media: unknown): void;
+  onRetryMediaSource(media: unknown): void;
+}) {
   const key = mediaSourceKey(props.media);
   const record = asRecord(props.media);
   const duration = asNumber(record?.duration);
   const transcription = asString(record?.transcription)?.trim() || "";
 
   useEffect(() => {
-    if (!props.source && key) {
+    if (!props.source && !props.error && key) {
       props.onLoadMediaSource(props.media);
     }
-  }, [key, props.media, props.onLoadMediaSource, props.source]);
+  }, [key, props.error, props.media, props.onLoadMediaSource, props.source]);
 
   return (
     <section class="voice-message">
       <div class="voice-message-player">
         <span class="voice-message-icon" aria-hidden="true"><MicIcon /></span>
         <div class="voice-message-main">
-          {props.source ? (
+          {props.error ? (
+            <div class="voice-message-loading is-error" title={props.error}>
+              <span>Audio failed to load.</span>
+              <button type="button" onClick={() => props.onRetryMediaSource(props.media)}>Retry</button>
+            </div>
+          ) : props.source ? (
             <VoiceAudioPlayer source={props.source} duration={duration} />
           ) : (
             <div class="voice-message-loading">Loading audio...</div>
@@ -747,6 +809,20 @@ function mediaKind(media: unknown): string {
   return "document";
 }
 
+function mediaKindIcon(kind: string): ComponentChildren {
+  if (kind === "image") return <ImageIcon />;
+  if (kind === "audio") return <MicIcon />;
+  if (kind === "video") return <VideoIcon />;
+  return <FileIcon />;
+}
+
+function mediaKindLabel(kind: string): string {
+  if (kind === "image") return "Image";
+  if (kind === "audio") return "Audio";
+  if (kind === "video") return "Video";
+  return "Attachment";
+}
+
 function mediaSourceFor(media: unknown, sources: Record<string, string>): string | null {
   const record = asRecord(media);
   const previewUrl = asString(record?.previewUrl);
@@ -762,6 +838,11 @@ function mediaSourceFor(media: unknown, sources: Record<string, string>): string
 function mediaSourceKey(media: unknown): string | null {
   const record = asRecord(media);
   return asString(record?.key);
+}
+
+function mediaSourceErrorFor(media: unknown, errors: Record<string, string>): string {
+  const key = mediaSourceKey(media);
+  return key ? errors[key] || "" : "";
 }
 
 function mediaTranscription(media: unknown): string {
@@ -1202,7 +1283,21 @@ export function CompactDialog(props: {
   );
 }
 
-function ArchiveRow({ row, userLabel }: { row: LogRow; userLabel: string }) {
+function ArchiveRow({
+  row,
+  userLabel,
+  mediaSources,
+  mediaSourceErrors,
+  onLoadMediaSource,
+  onRetryMediaSource,
+}: {
+  row: LogRow;
+  userLabel: string;
+  mediaSources: Record<string, string>;
+  mediaSourceErrors: Record<string, string>;
+  onLoadMediaSource(media: unknown): void;
+  onRetryMediaSource(media: unknown): void;
+}) {
   if (row.kind === "toolCall" || row.kind === "toolResult") {
     return <ToolCard row={row} />;
   }
@@ -1212,10 +1307,12 @@ function ArchiveRow({ row, userLabel }: { row: LogRow; userLabel: string }) {
       userLabel={userLabel}
       branchBusy={false}
       branchable={false}
-      mediaSources={{}}
+      mediaSources={mediaSources}
+      mediaSourceErrors={mediaSourceErrors}
       onCopy={(text) => { void copyTextToClipboard(text).catch(() => {}); }}
       onBranch={() => {}}
-      onLoadMediaSource={() => {}}
+      onLoadMediaSource={onLoadMediaSource}
+      onRetryMediaSource={onRetryMediaSource}
     />
   );
 }

@@ -161,6 +161,14 @@ function mediaSourceKey(media: unknown): string | null {
   return asString(record?.key);
 }
 
+function removeRecordKey(record: Record<string, string>, key: string): Record<string, string> {
+  if (!(key in record)) {
+    return record;
+  }
+  const next = { ...record };
+  delete next[key];
+  return next;
+}
 
 export function App({ backend }: { backend: ChatBackend }) {
   const [active, setActiveState] = useState<ThreadContext | null>(() => getStoredThreadContext());
@@ -189,6 +197,7 @@ export function App({ backend }: { backend: ChatBackend }) {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [voice, setVoice] = useState<VoiceRecordingState>(EMPTY_VOICE_RECORDING);
   const [mediaSources, setMediaSources] = useState<Record<string, string>>({});
+  const [mediaSourceErrors, setMediaSourceErrors] = useState<Record<string, string>>({});
   const [archive, setArchive] = useState<ArchiveState>(EMPTY_ARCHIVE);
   const [compactDialog, setCompactDialog] = useState<CompactDialogState>(null);
   const [notice, setNotice] = useState("");
@@ -1155,10 +1164,17 @@ export function App({ backend }: { backend: ChatBackend }) {
       .then((result) => {
         const response = asRecord(result);
         const dataUrl = asString(response?.dataUrl);
-        if (!response?.ok || !dataUrl || !mountedRef.current) {
-          mediaSourceFailedRef.current.add(key);
+        if (!mountedRef.current) {
           return;
         }
+        if (!response?.ok || !dataUrl) {
+          const error = safeText(response?.error || "media load failed");
+          mediaSourceFailedRef.current.add(key);
+          setMediaSourceErrors((current) => current[key] === error ? current : { ...current, [key]: error });
+          return;
+        }
+        mediaSourceFailedRef.current.delete(key);
+        setMediaSourceErrors((current) => removeRecordKey(current, key));
         setMediaSources((current) => {
           if (current[key] === dataUrl) {
             return current;
@@ -1167,12 +1183,24 @@ export function App({ backend }: { backend: ChatBackend }) {
         });
       })
       .catch((error) => {
+        const message = formatError(error);
         mediaSourceFailedRef.current.add(key);
-        appendSystem("media load failed: " + formatError(error));
+        setMediaSourceErrors((current) => current[key] === message ? current : { ...current, [key]: message });
+        appendSystem("media load failed: " + message);
       })
       .finally(() => {
         mediaSourceLoadingRef.current.delete(key);
       });
+  }
+
+  function retryMediaSource(media: unknown): void {
+    const key = mediaSourceKey(media);
+    if (!key) {
+      return;
+    }
+    mediaSourceFailedRef.current.delete(key);
+    setMediaSourceErrors((current) => removeRecordKey(current, key));
+    loadMediaSource(media);
   }
 
   function removeAttachment(index: number): void {
@@ -1296,8 +1324,12 @@ export function App({ backend }: { backend: ChatBackend }) {
           <ArchiveWorkspace
             archive={archive}
             userLabel={viewerUsername}
+            mediaSources={mediaSources}
+            mediaSourceErrors={mediaSourceErrors}
             onRefresh={() => void loadArchiveSegments(true)}
             onSelect={(segmentId) => void readArchiveSegment(segmentId)}
+            onLoadMediaSource={loadMediaSource}
+            onRetryMediaSource={retryMediaSource}
           />
         ) : (
           <>
@@ -1310,10 +1342,12 @@ export function App({ backend }: { backend: ChatBackend }) {
               branchBusy={branchBusy}
               refNode={transcriptRef}
               mediaSources={mediaSources}
+              mediaSourceErrors={mediaSourceErrors}
               onCopy={(text) => void copyText("message", text)}
               onBranch={(messageId) => void branchFromMessage(messageId)}
               onHilDecision={(requestId, decision, remember) => void decidePendingHil(requestId, decision, remember)}
               onLoadMediaSource={loadMediaSource}
+              onRetryMediaSource={retryMediaSource}
             />
 
             <Composer

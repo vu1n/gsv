@@ -1099,6 +1099,10 @@ textarea {
   color: var(--muted);
 }
 
+.media-loading.is-error {
+  color: var(--text);
+}
+
 .media-file-icon,
 .media-loading > span:first-child {
   flex: 0 0 auto;
@@ -1110,6 +1114,37 @@ textarea {
   justify-content: center;
   color: var(--blue);
   background: rgba(31, 92, 153, 0.08);
+}
+
+.media-loading.is-error > span:first-child {
+  color: var(--red);
+  background: rgba(177, 64, 64, 0.08);
+}
+
+.media-loading > span:nth-child(2) {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.media-loading button,
+.voice-message-loading button {
+  flex: 0 0 auto;
+  border: 1px solid rgba(31, 92, 153, 0.18);
+  border-radius: 5px;
+  padding: 5px 8px;
+  color: var(--blue);
+  background: rgba(31, 92, 153, 0.08);
+  font: 700 12px/1 var(--ui);
+  cursor: pointer;
+}
+
+.media-loading button:hover,
+.voice-message-loading button:hover {
+  border-color: rgba(31, 92, 153, 0.32);
+  background: rgba(31, 92, 153, 0.12);
 }
 
 .media-file-icon svg,
@@ -1204,6 +1239,25 @@ textarea {
   min-width: 0;
   flex: 1 1 auto;
   display: grid;
+}
+
+.voice-message-loading {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.voice-message-loading.is-error {
+  color: var(--text);
+}
+
+.voice-message-loading span {
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .voice-audio-player {
