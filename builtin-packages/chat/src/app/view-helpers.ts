@@ -879,6 +879,7 @@ export {
   fallbackProfiles,
   flattenHistory,
   formatAttachmentDuration,
+  formatAttachmentSize,
   formatContextPressure,
   formatError,
   formatMessageContent,

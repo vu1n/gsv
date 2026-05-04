@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "preact/hooks";
+import type { ComponentChildren } from "preact";
 import type {
   ArchiveState,
   Attachment,
@@ -19,8 +20,10 @@ import {
   BranchIcon,
   CheckIcon,
   CopyIcon,
+  FileIcon,
   GaugeIcon,
   HomeIcon,
+  ImageIcon,
   MessageIcon,
   MicIcon,
   MoreIcon,
@@ -31,6 +34,7 @@ import {
   RefreshIcon,
   SendIcon,
   StopIcon,
+  VideoIcon,
   XIcon,
 } from "./icons";
 import {
@@ -41,7 +45,6 @@ import {
   closeChatMenus,
   closeContainingChatMenu,
   copyTextToClipboard,
-  describeAttachment,
   describeHilSummary,
   describeToolCard,
   displayThreadLabel,
@@ -50,6 +53,7 @@ import {
   formatTimestamp,
   flattenHistory,
   formatAttachmentDuration,
+  formatAttachmentSize,
   inferToolSyscall,
   labelForRole,
   normalizeToolOutput,
@@ -411,8 +415,9 @@ function MessageBubble({
   const voiceMedia = media.filter(isAudioMedia);
   const otherMedia = media.filter((item) => !isAudioMedia(item));
   const hasText = row.text.trim().length > 0;
+  const mediaTranscript = media.map(mediaTranscription).filter(Boolean).join("\n\n");
   const copyValue = row.text.trim()
-    || voiceMedia.map(mediaTranscription).filter(Boolean).join("\n\n")
+    || mediaTranscript
     || row.text;
   return (
     <article class={`message message-${row.role}`}>
@@ -470,10 +475,104 @@ function MessageBubble({
       ) : null}
       {otherMedia.length > 0 ? (
         <div class="message-media">
-          {otherMedia.map((item, index) => <span key={index}>{describeAttachment(item)}</span>)}
+          {otherMedia.map((item, index) => (
+            <MediaAttachment
+              key={`${mediaSourceKey(item) ?? mediaFilename(item) ?? mediaKind(item)}:${index}`}
+              media={item}
+              source={mediaSourceFor(item, mediaSources)}
+              onLoadMediaSource={onLoadMediaSource}
+            />
+          ))}
         </div>
       ) : null}
     </article>
+  );
+}
+
+function MediaAttachment(props: { media: unknown; source: string | null; onLoadMediaSource(media: unknown): void }) {
+  const kind = mediaKind(props.media);
+  const key = mediaSourceKey(props.media);
+
+  useEffect(() => {
+    if (!props.source && key) {
+      props.onLoadMediaSource(props.media);
+    }
+  }, [key, props.media, props.onLoadMediaSource, props.source]);
+
+  if (kind === "image") {
+    return <ImageAttachment media={props.media} source={props.source} />;
+  }
+  if (kind === "video") {
+    return <VideoAttachment media={props.media} source={props.source} />;
+  }
+  return <DocumentAttachment media={props.media} source={props.source} />;
+}
+
+function ImageAttachment(props: { media: unknown; source: string | null }) {
+  const filename = mediaFilename(props.media) || "Image";
+  if (!props.source) {
+    return <MediaLoading icon={<ImageIcon />} label="Loading image..." />;
+  }
+  return (
+    <figure class="media-preview media-preview-image">
+      <img src={props.source} alt={filename} loading="lazy" />
+      <figcaption>{filename}</figcaption>
+    </figure>
+  );
+}
+
+function VideoAttachment(props: { media: unknown; source: string | null }) {
+  const filename = mediaFilename(props.media) || "Video";
+  const duration = asNumber(asRecord(props.media)?.duration);
+  if (!props.source) {
+    return <MediaLoading icon={<VideoIcon />} label="Loading video..." />;
+  }
+  return (
+    <section class="media-preview media-preview-video">
+      <video controls preload="metadata" src={props.source} />
+      <div class="media-preview-caption">
+        <span>{filename}</span>
+        {formatAttachmentDuration(duration) ? <time>{formatAttachmentDuration(duration)}</time> : null}
+      </div>
+    </section>
+  );
+}
+
+function DocumentAttachment(props: { media: unknown; source: string | null }) {
+  const filename = mediaFilename(props.media) || "Attachment";
+  const mimeType = mediaMimeType(props.media);
+  const size = asNumber(asRecord(props.media)?.size);
+  const sizeLabel = formatAttachmentSize(size);
+  const label = [mimeType, sizeLabel].filter(Boolean).join(" - ");
+  const content = (
+    <>
+      <span class="media-file-icon" aria-hidden="true"><FileIcon /></span>
+      <span class="media-file-main">
+        <span>{filename}</span>
+        {label ? <span>{label}</span> : null}
+      </span>
+    </>
+  );
+  if (props.source) {
+    return (
+      <a class="media-file" href={props.source} download={filename} target="_blank" rel="noreferrer">
+        {content}
+      </a>
+    );
+  }
+  return (
+    <div class="media-file is-loading">
+      {content}
+    </div>
+  );
+}
+
+function MediaLoading(props: { icon: ComponentChildren; label: string }) {
+  return (
+    <div class="media-loading">
+      <span aria-hidden="true">{props.icon}</span>
+      <span>{props.label}</span>
+    </div>
   );
 }
 
@@ -626,10 +725,21 @@ function formatAudioPlayerTime(value: number): string {
 }
 
 function isAudioMedia(media: unknown): boolean {
+  return mediaKind(media) === "audio";
+}
+
+function mediaKind(media: unknown): string {
   const record = asRecord(media);
   const type = asString(record?.type);
   const mimeType = asString(record?.mimeType);
-  return type === "audio" || Boolean(mimeType?.toLowerCase().startsWith("audio/"));
+  if (type === "image" || type === "audio" || type === "video" || type === "document") {
+    return type;
+  }
+  const normalizedMimeType = mimeType?.toLowerCase() || "";
+  if (normalizedMimeType.startsWith("image/")) return "image";
+  if (normalizedMimeType.startsWith("audio/")) return "audio";
+  if (normalizedMimeType.startsWith("video/")) return "video";
+  return "document";
 }
 
 function mediaSourceFor(media: unknown, sources: Record<string, string>): string | null {
@@ -652,6 +762,16 @@ function mediaSourceKey(media: unknown): string | null {
 function mediaTranscription(media: unknown): string {
   const record = asRecord(media);
   return asString(record?.transcription)?.trim() || "";
+}
+
+function mediaFilename(media: unknown): string | null {
+  const record = asRecord(media);
+  return asString(record?.filename);
+}
+
+function mediaMimeType(media: unknown): string | null {
+  const record = asRecord(media);
+  return asString(record?.mimeType);
 }
 
 function ToolCard({ row }: { row: ToolRow }) {
