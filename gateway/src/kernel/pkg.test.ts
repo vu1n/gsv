@@ -48,7 +48,7 @@ describe("pkg syscalls", () => {
         return Response.json({ heads: {}, tags: {} });
       }
       if (url.pathname === "/hyperspace/repos/alice/weather/read") {
-        if (url.searchParams.get("path") === "package.json") {
+        if (url.searchParams.get("path") === ".") {
           expect(url.searchParams.get("ref")).toBe("main");
         }
         return new Response("missing", { status: 404 });
@@ -237,7 +237,7 @@ describe("pkg syscalls", () => {
         return Response.json({ heads: { main: "mainhead123" }, tags: {} });
       }
       if (url.pathname === "/hyperspace/repos/alice/weather/read") {
-        if (url.searchParams.get("path") === "package.json") {
+        if (url.searchParams.get("path") === ".") {
           expect(url.searchParams.get("ref")).toBe("main");
         }
         return new Response("missing", { status: 404 });
@@ -395,5 +395,54 @@ describe("pkg syscalls", () => {
     const applyCall = fetcher.calls.find((call) => new URL(call.url).pathname.endsWith("/apply"));
     const applyBody = JSON.parse(String(applyCall?.init?.body));
     expect(applyBody.baseRef).toBe("main");
+  });
+
+  it("refuses to scaffold into a non-empty directory without overwrite", async () => {
+    const fetcher = makeFetcher((url) => {
+      if (url.pathname === "/hyperspace/repos/alice/weather/refs") {
+        return Response.json({ heads: { main: "mainhead123" }, tags: {} });
+      }
+      if (url.pathname === "/hyperspace/repos/alice/weather/read") {
+        expect(url.searchParams.get("path")).toBe(".");
+        return Response.json([
+          { name: "README.md", mode: "100644", hash: "readme1", type: "blob" },
+        ]);
+      }
+      throw new Error(`unexpected ripgit request: ${url.pathname}`);
+    });
+    const install = vi.fn();
+    const ctx = {
+      env: {
+        RIPGIT: fetcher,
+      },
+      config: makeConfig(),
+      packages: {
+        get: vi.fn(() => null),
+        install,
+      },
+      identity: {
+        role: "user",
+        capabilities: ["pkg.create"],
+        process: {
+          uid: 1000,
+          gid: 100,
+          gids: [100],
+          username: "alice",
+          home: "/home/alice",
+          cwd: "/home/alice",
+          workspaceId: null,
+        },
+      },
+    } as unknown as KernelContext;
+
+    await expect(handlePkgCreate({
+      repo: "weather",
+      displayName: "Weather Desk",
+      description: "Weather command center.",
+    }, ctx)).rejects.toThrow(
+      "Package source path is not empty at alice/weather:.",
+    );
+    expect(fetcher.calls.some((call) => new URL(call.url).pathname.endsWith("/apply"))).toBe(false);
+    expect(install).not.toHaveBeenCalled();
   });
 });

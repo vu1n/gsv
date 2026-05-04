@@ -324,6 +324,10 @@ class ProcessSourceMountBackend implements MountBackend {
 
   async rm(path: string, options?: RmOptions): Promise<void> {
     const resolved = this.resolveWritablePackagePath(path, "rm");
+    const removable = await this.assertRemovablePackagePath(resolved, options);
+    if (!removable) {
+      return;
+    }
     await this.stageOverlayDelete(resolved.pkg, resolved.relativePath, options?.recursive === true);
   }
 
@@ -483,6 +487,31 @@ class ProcessSourceMountBackend implements MountBackend {
     if (!this.storage) {
       throw new Error(`ENOSYS: source overlay storage is unavailable '${resolved.normalizedPath}'`);
     }
+  }
+
+  private async assertRemovablePackagePath(
+    resolved: {
+      pkg: SourcePackage;
+      relativePath: string;
+      normalizedPath: string;
+    },
+    options?: RmOptions,
+  ): Promise<boolean> {
+    try {
+      const stat = await this.stat(resolved.normalizedPath);
+      if (stat.isDirectory && !options?.recursive) {
+        const entries = await this.readdir(resolved.normalizedPath);
+        if (entries.length > 0) {
+          throw new Error(`ENOTEMPTY: directory not empty, rmdir '${resolved.normalizedPath}'`);
+        }
+      }
+    } catch (error) {
+      if (options?.force && error instanceof Error && error.message.includes("ENOENT")) {
+        return false;
+      }
+      throw error;
+    }
+    return true;
   }
 
   private repoRefForPackage(pkg: SourcePackage): RipgitRepoRef {

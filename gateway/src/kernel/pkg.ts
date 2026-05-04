@@ -303,16 +303,16 @@ export async function handlePkgCreate(
   const refs = await ripgit.refs(repo);
   const applyOptions = packageCreateApplyOptions(ref, refs.heads);
   const existingRef = refs.heads?.[ref] ? ref : applyOptions?.baseRef ?? ref;
-  const existingPackageFile = await ripgit.readPath(
-    { ...repo, branch: existingRef },
-    joinPackageSourcePath(subdir, "package.json"),
-  );
-  const created = existingPackageFile.kind === "missing";
-  if (!created && args.overwrite !== true) {
+  const target = await inspectPackageCreateTarget(ripgit, { ...repo, branch: existingRef }, subdir);
+  if (target.kind === "file") {
+    throw new Error(`Package source path is a file at ${repoSlug(repo)}:${subdir}`);
+  }
+  if (target.nonEmpty && args.overwrite !== true) {
     throw new Error(
-      `Package source already exists at ${repoSlug(repo)}:${subdir}. Pass overwrite to replace the scaffold files.`,
+      `Package source path is not empty at ${repoSlug(repo)}:${subdir}. Pass overwrite to replace the scaffold files.`,
     );
   }
+  const created = !target.hasPackageJson;
 
   const result = await ripgit.apply(
     { ...repo, branch: ref },
@@ -863,6 +863,31 @@ function joinPackageSourcePath(subdir: string, path: string): string {
     throw new Error("path is required");
   }
   return normalizedSubdir === "." ? normalizedPath : `${normalizedSubdir}/${normalizedPath}`;
+}
+
+async function inspectPackageCreateTarget(
+  ripgit: RipgitClient,
+  repo: RipgitRepoRef,
+  subdir: string,
+): Promise<{
+  kind: "missing" | "file" | "tree";
+  hasPackageJson: boolean;
+  nonEmpty: boolean;
+}> {
+  const target = await ripgit.readPath(repo, normalizeRepoPath(subdir) || ".");
+  if (target.kind === "missing") {
+    return { kind: "missing", hasPackageJson: false, nonEmpty: false };
+  }
+  if (target.kind === "file") {
+    return { kind: "file", hasPackageJson: false, nonEmpty: true };
+  }
+
+  const entries = target.entries.filter((entry) => entry.name !== ".dir");
+  return {
+    kind: "tree",
+    hasPackageJson: entries.some((entry) => entry.name === "package.json"),
+    nonEmpty: entries.length > 0,
+  };
 }
 
 function repoSlug(repo: Pick<RipgitRepoRef, "owner" | "repo">): string {

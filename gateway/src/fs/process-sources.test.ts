@@ -599,6 +599,54 @@ describe("createProcessSourceBackend", () => {
     await expect(backend!.readdir("/src/packages/ascii-starfield")).resolves.toEqual([]);
   });
 
+  it("rejects source rm for missing paths unless forced", async () => {
+    const storage = makeBucket();
+    const backend = createProcessSourceBackend({
+      identity: IDENTITY,
+      storage,
+      packages: [makePackage()],
+      processId: "task:source",
+      config: makeConfig(),
+      ripgit: {
+        readPath: async () => ({ kind: "missing" }),
+      } as any,
+    });
+
+    await expect(backend!.rm("/src/packages/ascii-starfield/missing.ts"))
+      .rejects.toThrow("ENOENT");
+    expect(storage.objects.size).toBe(0);
+
+    await expect(backend!.rm("/src/packages/ascii-starfield/missing.ts", { force: true }))
+      .resolves.toBeUndefined();
+    expect(storage.objects.size).toBe(0);
+  });
+
+  it("rejects non-recursive source rm for non-empty directories", async () => {
+    const storage = makeBucket();
+    const backend = createProcessSourceBackend({
+      identity: IDENTITY,
+      storage,
+      packages: [makePackage()],
+      processId: "task:source",
+      config: makeConfig(),
+      ripgit: {
+        readPath: async (_repo: unknown, path: string) => {
+          if (path === "packages/ascii-starfield/src") {
+            return {
+              kind: "tree",
+              entries: [{ name: "index.ts", mode: "100644", hash: "blob1", type: "blob" }],
+            };
+          }
+          return { kind: "missing" };
+        },
+      } as any,
+    });
+
+    await expect(backend!.rm("/src/packages/ascii-starfield/src"))
+      .rejects.toThrow("ENOTEMPTY");
+    expect(storage.objects.size).toBe(0);
+  });
+
   it("keeps package sources from other owners read-only", async () => {
     const backend = createProcessSourceBackend({
       identity: IDENTITY,
