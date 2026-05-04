@@ -81,6 +81,14 @@ export type Attachment = {
   data: string;
   filename?: string;
   size?: number;
+  duration?: number;
+  previewUrl?: string;
+};
+
+export type VoiceRecordingState = {
+  status: "idle" | "requesting" | "recording" | "processing";
+  elapsedMs: number;
+  error?: string;
 };
 
 export type MessageRow = {

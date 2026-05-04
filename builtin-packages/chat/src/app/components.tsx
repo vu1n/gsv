@@ -11,6 +11,7 @@ import type {
   Profile,
   ThreadContext,
   ToolRow,
+  VoiceRecordingState,
   WorkspaceEntry,
 } from "./types";
 import {
@@ -21,6 +22,7 @@ import {
   GaugeIcon,
   HomeIcon,
   MessageIcon,
+  MicIcon,
   MoreIcon,
   PaperclipIcon,
   PlusIcon,
@@ -45,6 +47,7 @@ import {
   formatRelativeTime,
   formatTimestamp,
   flattenHistory,
+  formatAttachmentDuration,
   inferToolSyscall,
   labelForRole,
   normalizeToolOutput,
@@ -674,14 +677,24 @@ export function Composer(props: {
   canSend: boolean;
   canStop: boolean;
   stopBusy: boolean;
+  voice: VoiceRecordingState;
+  canRecord: boolean;
   onValueChange(value: string): void;
   onSubmit(): void;
   onStop(): void;
   onFiles(files: FileList | null): void;
   onRemoveAttachment(index: number): void;
+  onStartVoice(): void;
+  onStopVoice(): void;
+  onCancelVoice(): void;
+  onClearVoiceError(): void;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const actionLabel = props.canStop ? (props.stopBusy ? "Stopping..." : "Stop") : "Send";
+  const voiceActive = props.voice.status !== "idle";
+  const showVoicePanel = voiceActive || Boolean(props.voice.error);
+  const voiceLabel = labelForVoiceState(props.voice);
+  const voiceElapsed = formatAttachmentDuration(props.voice.elapsedMs / 1000) || "0:00";
   useEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) {
@@ -698,11 +711,40 @@ export function Composer(props: {
       {props.attachments.length > 0 ? (
         <div class="attachment-list">
           {props.attachments.map((attachment, index) => (
-            <span class="attachment-chip" key={`${attachment.filename ?? "file"}:${index}`}>
-              <span>{attachment.filename || "attachment"}</span>
-              <button type="button" aria-label="Remove attachment" onClick={() => props.onRemoveAttachment(index)}>x</button>
-            </span>
+            <div class={"attachment-chip" + (attachment.type === "audio" ? " is-audio" : "")} key={`${attachment.filename ?? "file"}:${index}`}>
+              <span class="attachment-name">{attachment.filename || "attachment"}</span>
+              {attachment.duration ? <span class="attachment-duration">{formatAttachmentDuration(attachment.duration)}</span> : null}
+              {attachment.type === "audio" && attachment.previewUrl ? <audio controls preload="metadata" src={attachment.previewUrl} /> : null}
+              <button type="button" aria-label="Remove attachment" title="Remove attachment" onClick={() => props.onRemoveAttachment(index)}>x</button>
+            </div>
           ))}
+        </div>
+      ) : null}
+      {showVoicePanel ? (
+        <div class={"voice-panel is-" + props.voice.status}>
+          <div class="voice-state">
+            <span class="voice-dot" aria-hidden="true" />
+            <span>{voiceLabel}</span>
+            {props.voice.status === "idle" && props.voice.error ? null : <time>{voiceElapsed}</time>}
+          </div>
+          {props.voice.error ? <span class="voice-error">{props.voice.error}</span> : null}
+          <div class="voice-actions">
+            {props.voice.status === "recording" ? (
+              <button type="button" class="icon-button small" title="Finish recording" aria-label="Finish recording" onClick={props.onStopVoice}>
+                <StopIcon />
+              </button>
+            ) : null}
+            {props.voice.status === "requesting" || props.voice.status === "recording" ? (
+              <button type="button" class="icon-button small" title="Cancel recording" aria-label="Cancel recording" onClick={props.onCancelVoice}>
+                <XIcon />
+              </button>
+            ) : null}
+            {props.voice.status === "idle" && props.voice.error ? (
+              <button type="button" class="icon-button small" title="Dismiss" aria-label="Dismiss voice error" onClick={props.onClearVoiceError}>
+                <XIcon />
+              </button>
+            ) : null}
+          </div>
         </div>
       ) : null}
       <div class="composer-shell">
@@ -714,6 +756,16 @@ export function Composer(props: {
             input.value = "";
           }} />
         </label>
+        <button
+          class={"icon-button voice" + (props.voice.status === "recording" ? " is-recording" : "")}
+          type="button"
+          title={props.voice.status === "recording" ? "Recording voice" : "Record voice"}
+          aria-label={props.voice.status === "recording" ? "Recording voice" : "Record voice"}
+          disabled={props.disabled || !props.canRecord || voiceActive}
+          onClick={props.onStartVoice}
+        >
+          <MicIcon />
+        </button>
         <textarea
           ref={textareaRef}
           rows={1}
@@ -724,7 +776,9 @@ export function Composer(props: {
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
-              props.onSubmit();
+              if (props.canSend) {
+                props.onSubmit();
+              }
             }
           }}
         />
@@ -741,6 +795,14 @@ export function Composer(props: {
       </div>
     </form>
   );
+}
+
+function labelForVoiceState(state: VoiceRecordingState): string {
+  if (state.status === "requesting") return "Microphone";
+  if (state.status === "recording") return "Recording";
+  if (state.status === "processing") return "Preparing voice";
+  if (state.error) return "Voice input";
+  return "Voice input";
 }
 
 export function ContextMeter({ state }: { state: ContextState | null }) {

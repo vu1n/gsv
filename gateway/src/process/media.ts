@@ -13,6 +13,19 @@ export type StoredProcessMedia = {
   transcription?: string;
 };
 
+export type AudioTranscriptionBinding = {
+  run(model: string, input: Record<string, unknown>): Promise<unknown>;
+};
+
+export type StoreIncomingProcessMediaOptions = {
+  ai?: AudioTranscriptionBinding;
+  audioTranscriptionModel?: string;
+  maxTranscriptionBytes?: number;
+};
+
+export const DEFAULT_AUDIO_TRANSCRIPTION_MODEL = "@cf/openai/whisper-large-v3-turbo";
+export const DEFAULT_MAX_AUDIO_TRANSCRIPTION_BYTES = 25 * 1024 * 1024;
+
 export function processMediaPrefix(uid: number, pid: string): string {
   return `var/media/${uid}/${pid}/`;
 }
@@ -22,6 +35,7 @@ export async function storeIncomingProcessMedia(
   uid: number,
   pid: string,
   media: ProcMediaInput[] | undefined,
+  options: StoreIncomingProcessMediaOptions = {},
 ): Promise<string | null> {
   if (!media || media.length === 0) {
     return null;
@@ -40,8 +54,12 @@ export async function storeIncomingProcessMedia(
       transcription: item.transcription,
     };
 
+    let bytes: Uint8Array | null = null;
+    let base64: string | null = null;
+
     if (typeof item.data === "string" && item.data.length > 0) {
-      const bytes = base64ToUint8Array(item.data);
+      base64 = normalizeBase64Data(item.data);
+      bytes = base64ToUint8Array(base64);
       const key = `${prefix}${crypto.randomUUID()}${inferExtension(item.filename, item.mimeType)}`;
       await bucket.put(key, bytes, {
         httpMetadata: { contentType: item.mimeType },
@@ -50,6 +68,16 @@ export async function storeIncomingProcessMedia(
       next.size = bytes.byteLength;
     } else if (typeof item.url === "string" && item.url.length > 0) {
       next.url = item.url;
+    }
+
+    if (shouldTranscribeAudio(item, next, bytes, options)) {
+      const result = await transcribeAudio(options.ai, base64!, options.audioTranscriptionModel);
+      if (result) {
+        next.transcription = result.text;
+        if (next.duration === undefined && typeof result.duration === "number") {
+          next.duration = result.duration;
+        }
+      }
     }
 
     stored.push(next);
@@ -175,11 +203,80 @@ export function buildImageBlock(
   };
 }
 
-function base64ToUint8Array(base64: string): Uint8Array {
-  const normalized = base64.includes(",")
+function shouldTranscribeAudio(
+  input: ProcMediaInput,
+  stored: StoredProcessMedia,
+  bytes: Uint8Array | null,
+  options: StoreIncomingProcessMediaOptions,
+): boolean {
+  if (input.type !== "audio") {
+    return false;
+  }
+  if (typeof stored.transcription === "string" && stored.transcription.trim().length > 0) {
+    return false;
+  }
+  if (!options.ai || typeof options.ai.run !== "function") {
+    return false;
+  }
+  if (!bytes || bytes.byteLength === 0) {
+    return false;
+  }
+  const maxBytes = options.maxTranscriptionBytes ?? DEFAULT_MAX_AUDIO_TRANSCRIPTION_BYTES;
+  return bytes.byteLength <= maxBytes;
+}
+
+async function transcribeAudio(
+  ai: AudioTranscriptionBinding | undefined,
+  base64: string,
+  model = DEFAULT_AUDIO_TRANSCRIPTION_MODEL,
+): Promise<{ text: string; duration?: number } | null> {
+  if (!ai) {
+    return null;
+  }
+
+  try {
+    const response = await ai.run(model, {
+      audio: base64,
+      task: "transcribe",
+      vad_filter: true,
+      condition_on_previous_text: false,
+    });
+    return normalizeTranscriptionResponse(response);
+  } catch (error) {
+    console.warn("[ProcessMedia] audio transcription failed:", error);
+    return null;
+  }
+}
+
+function normalizeTranscriptionResponse(value: unknown): { text: string; duration?: number } | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const text = typeof record.text === "string" ? record.text.trim() : "";
+  if (!text) {
+    return null;
+  }
+
+  const info = record.transcription_info && typeof record.transcription_info === "object"
+    ? record.transcription_info as Record<string, unknown>
+    : null;
+  const duration = typeof info?.duration === "number" && Number.isFinite(info.duration)
+    ? info.duration
+    : undefined;
+
+  return duration === undefined ? { text } : { text, duration };
+}
+
+function normalizeBase64Data(base64: string): string {
+  return base64.includes(",")
     ? base64.slice(base64.indexOf(",") + 1)
     : base64;
-  const binary = atob(normalized);
+}
+
+function base64ToUint8Array(base64: string): Uint8Array {
+  const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) {
     bytes[index] = binary.charCodeAt(index);

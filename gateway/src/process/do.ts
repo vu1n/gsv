@@ -778,6 +778,7 @@ export class Process extends Host<Env> {
       this.identity.uid,
       this.pid,
       args.media,
+      { ai: this.env.AI },
     );
 
     if (this.currentRun) {

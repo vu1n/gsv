@@ -14,6 +14,7 @@ import type {
   PendingAssistantState,
   Profile,
   ThreadContext,
+  VoiceRecordingState,
   WorkspaceView,
   WorkspaceEntry,
 } from "./types";
@@ -62,6 +63,7 @@ import {
   normalizeProfile,
   normalizeThreadContext,
   normalizeWorkspace,
+  readAttachmentBlob,
   readAttachmentFile,
   safeText,
   setStoredThreadContext,
@@ -85,6 +87,74 @@ const EMPTY_ARCHIVE: ArchiveState = {
   messageCount: 0,
   truncated: false,
 };
+
+const EMPTY_VOICE_RECORDING: VoiceRecordingState = { status: "idle", elapsedMs: 0 };
+const VOICE_AUDIO_BITS_PER_SECOND = 128000;
+const MAX_VOICE_RECORDING_MS = 10 * 60 * 1000;
+const VOICE_RECORDER_MIME_TYPES = [
+  "audio/webm;codecs=opus",
+  "audio/ogg;codecs=opus",
+  "audio/mp4;codecs=mp4a.40.2",
+  "audio/mp4",
+  "audio/webm",
+];
+
+function canUseBrowserVoiceRecorder(): boolean {
+  return typeof navigator !== "undefined"
+    && Boolean(navigator.mediaDevices?.getUserMedia)
+    && typeof MediaRecorder !== "undefined";
+}
+
+async function requestVoiceStream(): Promise<MediaStream> {
+  try {
+    return await navigator.mediaDevices.getUserMedia({
+      audio: {
+        autoGainControl: true,
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+      },
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "OverconstrainedError") {
+      return navigator.mediaDevices.getUserMedia({ audio: true });
+    }
+    throw error;
+  }
+}
+
+function selectVoiceRecorderMimeType(): string {
+  if (typeof MediaRecorder === "undefined" || typeof MediaRecorder.isTypeSupported !== "function") {
+    return "";
+  }
+  return VOICE_RECORDER_MIME_TYPES.find((mimeType) => MediaRecorder.isTypeSupported(mimeType)) || "";
+}
+
+function extensionForVoiceMimeType(mimeType: string): string {
+  const normalized = mimeType.split(";")[0].trim().toLowerCase();
+  if (normalized === "audio/ogg") return "ogg";
+  if (normalized === "audio/mp4" || normalized === "audio/aac") return "m4a";
+  if (normalized === "audio/wav" || normalized === "audio/wave" || normalized === "audio/x-wav") return "wav";
+  if (normalized === "audio/mpeg") return "mp3";
+  return "webm";
+}
+
+function voiceRecordingFilename(mimeType: string): string {
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+  return `voice-${stamp}.${extensionForVoiceMimeType(mimeType)}`;
+}
+
+function stripAttachmentPreview(attachment: Attachment): Attachment {
+  const next = { ...attachment };
+  delete next.previewUrl;
+  return next;
+}
+
+function revokeAttachmentPreview(attachment: Attachment): void {
+  if (attachment.previewUrl) {
+    URL.revokeObjectURL(attachment.previewUrl);
+  }
+}
 
 
 export function App({ backend }: { backend: ChatBackend }) {
@@ -111,16 +181,30 @@ export function App({ backend }: { backend: ChatBackend }) {
   const [hostError, setHostError] = useState("");
   const [composeText, setComposeText] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [voice, setVoice] = useState<VoiceRecordingState>(EMPTY_VOICE_RECORDING);
   const [archive, setArchive] = useState<ArchiveState>(EMPTY_ARCHIVE);
   const [compactDialog, setCompactDialog] = useState<CompactDialogState>(null);
   const [notice, setNotice] = useState("");
   const [suppressNextAbortedComplete, setSuppressNextAbortedComplete] = useState(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef(active);
+  const mountedRef = useRef(true);
+  const attachmentsRef = useRef(attachments);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const recorderStreamRef = useRef<MediaStream | null>(null);
+  const recorderChunksRef = useRef<Blob[]>([]);
+  const recorderStartedAtRef = useRef(0);
+  const recorderElapsedMsRef = useRef(0);
+  const recorderTimerRef = useRef<number | null>(null);
+  const recorderCancelRef = useRef(false);
 
   useEffect(() => {
     activeRef.current = active;
   }, [active]);
+
+  useEffect(() => {
+    attachmentsRef.current = attachments;
+  }, [attachments]);
 
   const conversationProfiles = useMemo(
     () => profiles.filter((profile) => profile.interactive === true && profile.startable === true),
@@ -136,6 +220,7 @@ export function App({ backend }: { backend: ChatBackend }) {
       ?? conversationProfiles.find((profile) => profile.id === "task")
       ?? fallbackProfiles()[1];
   }, [conversationProfiles, draftProfileId, newConversationProfiles]);
+  const voiceRecorderAvailable = useMemo(() => canUseBrowserVoiceRecorder(), []);
 
   const activeConversationId = active?.conversationId || "default";
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId) ?? null;
@@ -152,11 +237,12 @@ export function App({ backend }: { backend: ChatBackend }) {
   });
   const interactive = !hostError;
   const hasDraft = composeText.trim().length > 0 || attachments.length > 0;
+  const voiceActive = voice.status !== "idle";
   const runActive = pendingAssistant !== null || pendingHil !== null;
   const runStateClass = hostError ? "is-error" : pendingHil ? "is-waiting" : runActive ? "is-running" : "is-ready";
   const runStateLabel = hostError ? "Error" : pendingHil ? "Approval" : runActive ? "Running" : "Ready";
-  const canSend = interactive && !messageBusy && hasDraft;
-  const canStop = interactive && Boolean(active?.pid) && !abortBusy && runActive && !hasDraft;
+  const canSend = interactive && !messageBusy && hasDraft && !voiceActive;
+  const canStop = interactive && Boolean(active?.pid) && !abortBusy && runActive && !hasDraft && !voiceActive;
   const canActOnConversation = interactive && Boolean(active?.pid) && !messageBusy && pendingAssistant === null;
 
   const setActive = useCallback((next: ThreadContext | null) => {
@@ -175,6 +261,186 @@ export function App({ backend }: { backend: ChatBackend }) {
   const appendSystem = useCallback((text: string) => {
     setRows((current) => dropEmptyPlaceholder(current).concat(systemRow(text)));
   }, []);
+
+  const clearVoiceTimer = useCallback(() => {
+    if (recorderTimerRef.current !== null) {
+      window.clearInterval(recorderTimerRef.current);
+      recorderTimerRef.current = null;
+    }
+  }, []);
+
+  const stopVoiceStream = useCallback(() => {
+    const stream = recorderStreamRef.current;
+    recorderStreamRef.current = null;
+    stream?.getTracks().forEach((track) => track.stop());
+  }, []);
+
+  const cleanupVoiceRecorder = useCallback(() => {
+    clearVoiceTimer();
+    const recorder = recorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      recorder.ondataavailable = null;
+      recorder.onerror = null;
+      recorder.onstop = null;
+      try {
+        recorder.stop();
+      } catch {
+        // Recorder state can change between the state check and stop call.
+      }
+    }
+    stopVoiceStream();
+    recorderRef.current = null;
+    recorderChunksRef.current = [];
+    recorderStartedAtRef.current = 0;
+    recorderElapsedMsRef.current = 0;
+  }, [clearVoiceTimer, stopVoiceStream]);
+
+  const finishVoiceRecording = useCallback(async () => {
+    clearVoiceTimer();
+    const recorder = recorderRef.current;
+    const chunks = recorderChunksRef.current.slice();
+    const cancelled = recorderCancelRef.current;
+    const startedAt = recorderStartedAtRef.current;
+    const elapsedMs = Math.max(recorderElapsedMsRef.current, startedAt > 0 ? Date.now() - startedAt : 0);
+    const mimeType = recorder?.mimeType || chunks.find((chunk) => chunk.type)?.type || "audio/webm";
+    cleanupVoiceRecorder();
+    recorderCancelRef.current = false;
+
+    if (!mountedRef.current) {
+      return;
+    }
+    if (cancelled) {
+      setVoice(EMPTY_VOICE_RECORDING);
+      return;
+    }
+
+    const blob = new Blob(chunks, { type: mimeType });
+    if (blob.size === 0) {
+      setVoice({ status: "idle", elapsedMs: 0, error: "No audio was captured." });
+      return;
+    }
+
+    const previewUrl = URL.createObjectURL(blob);
+    try {
+      const attachment = await readAttachmentBlob(blob, voiceRecordingFilename(mimeType), elapsedMs / 1000);
+      if (!mountedRef.current) {
+        URL.revokeObjectURL(previewUrl);
+        return;
+      }
+      setAttachments((current) => current.concat({ ...attachment, type: "audio", previewUrl }));
+      setVoice(EMPTY_VOICE_RECORDING);
+    } catch (error) {
+      URL.revokeObjectURL(previewUrl);
+      if (mountedRef.current) {
+        setVoice({ status: "idle", elapsedMs: 0, error: "Voice read failed: " + formatError(error) });
+      }
+    }
+  }, [cleanupVoiceRecorder, clearVoiceTimer]);
+
+  const stopVoiceRecording = useCallback(() => {
+    const recorder = recorderRef.current;
+    if (!recorder || recorder.state === "inactive") {
+      return;
+    }
+    const startedAt = recorderStartedAtRef.current;
+    const elapsedMs = Math.max(recorderElapsedMsRef.current, startedAt > 0 ? Date.now() - startedAt : 0);
+    recorderElapsedMsRef.current = elapsedMs;
+    setVoice({ status: "processing", elapsedMs });
+    recorder.stop();
+  }, []);
+
+  const cancelVoiceRecording = useCallback(() => {
+    recorderCancelRef.current = true;
+    const recorder = recorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      recorder.stop();
+      return;
+    }
+    cleanupVoiceRecorder();
+    setVoice(EMPTY_VOICE_RECORDING);
+  }, [cleanupVoiceRecorder]);
+
+  const startVoiceRecording = useCallback(async () => {
+    if (!interactive || messageBusy || voice.status !== "idle") {
+      return;
+    }
+    if (!voiceRecorderAvailable) {
+      setVoice({ status: "idle", elapsedMs: 0, error: "Voice recording is not available in this browser." });
+      return;
+    }
+
+    cleanupVoiceRecorder();
+    recorderCancelRef.current = false;
+    recorderChunksRef.current = [];
+    setVoice({ status: "requesting", elapsedMs: 0 });
+
+    try {
+      const stream = await requestVoiceStream();
+      if (!mountedRef.current || recorderCancelRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        recorderCancelRef.current = false;
+        if (mountedRef.current) {
+          setVoice(EMPTY_VOICE_RECORDING);
+        }
+        return;
+      }
+      const mimeType = selectVoiceRecorderMimeType();
+      const options: MediaRecorderOptions = { audioBitsPerSecond: VOICE_AUDIO_BITS_PER_SECOND };
+      if (mimeType) {
+        options.mimeType = mimeType;
+      }
+      const recorder = new MediaRecorder(stream, options);
+      recorderRef.current = recorder;
+      recorderStreamRef.current = stream;
+      recorderStartedAtRef.current = Date.now();
+      recorderElapsedMsRef.current = 0;
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          recorderChunksRef.current.push(event.data);
+        }
+      };
+      recorder.onerror = () => {
+        recorderCancelRef.current = true;
+        cleanupVoiceRecorder();
+        setVoice({ status: "idle", elapsedMs: 0, error: "Voice recording failed." });
+      };
+      recorder.onstop = () => {
+        void finishVoiceRecording();
+      };
+
+      recorder.start(1000);
+      recorderTimerRef.current = window.setInterval(() => {
+        const elapsedMs = Date.now() - recorderStartedAtRef.current;
+        recorderElapsedMsRef.current = elapsedMs;
+        setVoice((current) => current.status === "recording" ? { ...current, elapsedMs } : current);
+        if (elapsedMs >= MAX_VOICE_RECORDING_MS && recorderRef.current?.state === "recording") {
+          setVoice({ status: "processing", elapsedMs });
+          recorderRef.current.stop();
+        }
+      }, 250);
+      setVoice({ status: "recording", elapsedMs: 0 });
+    } catch (error) {
+      cleanupVoiceRecorder();
+      recorderCancelRef.current = false;
+      if (mountedRef.current) {
+        setVoice({ status: "idle", elapsedMs: 0, error: "Microphone failed: " + formatError(error) });
+      }
+    }
+  }, [cleanupVoiceRecorder, finishVoiceRecording, interactive, messageBusy, voice.status, voiceRecorderAvailable]);
+
+  const clearVoiceError = useCallback(() => {
+    setVoice(EMPTY_VOICE_RECORDING);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+      recorderCancelRef.current = true;
+      cleanupVoiceRecorder();
+      attachmentsRef.current.forEach(revokeAttachmentPreview);
+    };
+  }, [cleanupVoiceRecorder]);
 
   const loadProfiles = useCallback(async () => {
     try {
@@ -566,9 +832,13 @@ export function App({ backend }: { backend: ChatBackend }) {
   }
 
   function resetToNewThread(): void {
+    cancelVoiceRecording();
     setActive(null);
     setComposeText("");
-    setAttachments([]);
+    setAttachments((current) => {
+      current.forEach(revokeAttachmentPreview);
+      return [];
+    });
     setWorkspaceView("chat");
   }
 
@@ -585,8 +855,11 @@ export function App({ backend }: { backend: ChatBackend }) {
   }
 
   async function sendMessage(): Promise<void> {
+    if (voice.status !== "idle") {
+      return;
+    }
     const message = composeText.trim();
-    const media = attachments.slice();
+    const media = attachments.map(stripAttachmentPreview);
     if (!message && media.length === 0) {
       return;
     }
@@ -633,7 +906,10 @@ export function App({ backend }: { backend: ChatBackend }) {
         timestamp: Date.now(),
       }));
       setComposeText("");
-      setAttachments([]);
+      setAttachments((current) => {
+        current.forEach(revokeAttachmentPreview);
+        return [];
+      });
       const result = await backend.sendMessage({
         message,
         pid: target.pid,
@@ -823,6 +1099,16 @@ export function App({ backend }: { backend: ChatBackend }) {
     }
   }
 
+  function removeAttachment(index: number): void {
+    setAttachments((current) => {
+      const removed = current[index];
+      if (removed) {
+        revokeAttachmentPreview(removed);
+      }
+      return current.filter((_, itemIndex) => itemIndex !== index);
+    });
+  }
+
   function scrollTranscript(mode: "bottom" | "near-bottom"): void {
     const node = transcriptRef.current;
     if (!node) {
@@ -954,11 +1240,17 @@ export function App({ backend }: { backend: ChatBackend }) {
               canSend={canSend}
               canStop={canStop}
               stopBusy={abortBusy}
+              voice={voice}
+              canRecord={interactive && !messageBusy}
               onValueChange={setComposeText}
               onSubmit={() => void sendMessage()}
               onStop={() => void abortActiveRun()}
               onFiles={(files) => void readAttachments(files)}
-              onRemoveAttachment={(index) => setAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+              onRemoveAttachment={removeAttachment}
+              onStartVoice={() => void startVoiceRecording()}
+              onStopVoice={stopVoiceRecording}
+              onCancelVoice={cancelVoiceRecording}
+              onClearVoiceError={clearVoiceError}
             />
           </>
         )}
