@@ -714,7 +714,7 @@ function materializeSpawnMounts(
 
   for (const spec of specs ?? []) {
     const record = resolveInstalledPackage(spec.packageId, ctx);
-    const mountPath = normalizePath(defaultMountPathForPackage(record, sourcePackages));
+    const mountPath = normalizePath(defaultMountPathForPackage(spec, record, sourcePackages));
     if (mountPath === "/" || !mountPath.startsWith("/src")) {
       return { ok: false, error: `Unsupported mount path: ${mountPath}` };
     }
@@ -738,10 +738,22 @@ function materializeSpawnMounts(
 }
 
 function defaultMountPathForPackage(
+  spec: ProcSpawnMountSpec,
   record: InstalledPackageRecord,
   sourcePackages: InstalledPackageRecord[],
 ): string {
+  if (spec.kind === "package-repo") {
+    return `/src/repos/${packageSourceRepoPathName(record)}`;
+  }
   return `/src/packages/${packageSourcePathNameForRecord(record, sourcePackages)}`;
+}
+
+function packageSourceRepoPathName(record: InstalledPackageRecord): string {
+  return sanitizeMountPathSegment(record.manifest.source.repo) || sanitizeMountPathSegment(record.packageId) || "repo";
+}
+
+function sanitizeMountPathSegment(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
 function defaultMountCwd(mounts: ProcessMount[]): string | null {

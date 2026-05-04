@@ -238,7 +238,7 @@ class ProcessSourceMountBackend implements MountBackend {
 
   async stat(path: string): Promise<ExtendedMountStat> {
     const normalizedPath = normalizePath(path);
-    if (normalizedPath === "/src" || normalizedPath === "/src/packages") {
+    if (this.virtualDirectoryEntries(normalizedPath)) {
       return makeDirectoryStat(this.identity.uid, this.identity.gid, true);
     }
 
@@ -283,11 +283,9 @@ class ProcessSourceMountBackend implements MountBackend {
 
   async readdir(path: string): Promise<string[]> {
     const normalizedPath = normalizePath(path);
-    if (normalizedPath === "/src") {
-      return ["packages"];
-    }
-    if (normalizedPath === "/src/packages") {
-      return this.packages.map((pkg) => pkg.name).sort();
+    const virtualEntries = this.virtualDirectoryEntries(normalizedPath);
+    if (virtualEntries) {
+      return virtualEntries;
     }
 
     const resolved = this.resolvePackagePath(normalizedPath);
@@ -347,10 +345,11 @@ class ProcessSourceMountBackend implements MountBackend {
 
   async search(path: string, query: string): Promise<FsSearchBackendResult> {
     const normalizedPath = normalizePath(path);
-    if (normalizedPath === "/src" || normalizedPath === "/src/packages") {
+    const virtualPackages = this.virtualDirectoryPackages(normalizedPath);
+    if (virtualPackages) {
       const matches = [];
       let truncated = false;
-      for (const pkg of this.packages) {
+      for (const pkg of virtualPackages) {
         const result = await this.searchPackage(pkg, "", query);
         matches.push(...result.matches);
         truncated = truncated || result.truncated === true;
@@ -420,6 +419,40 @@ class ProcessSourceMountBackend implements MountBackend {
     };
   }
 
+  private virtualDirectoryEntries(path: string): string[] | null {
+    const normalizedPath = normalizePath(path);
+    if (normalizedPath !== "/src" && !normalizedPath.startsWith("/src/")) {
+      return null;
+    }
+    const entries = new Set<string>();
+    if (normalizedPath === "/src") {
+      entries.add("packages");
+    }
+    for (const pkg of this.packages) {
+      if (!pkg.mountPath.startsWith(`${normalizedPath}/`)) {
+        continue;
+      }
+      const remainder = pkg.mountPath.slice(normalizedPath.length + 1);
+      const [entry] = remainder.split("/");
+      if (entry) {
+        entries.add(entry);
+      }
+    }
+    if (normalizedPath === "/src" || normalizedPath === "/src/packages" || entries.size > 0) {
+      return [...entries].sort();
+    }
+    return null;
+  }
+
+  private virtualDirectoryPackages(path: string): SourcePackage[] | null {
+    const normalizedPath = normalizePath(path);
+    const entries = this.virtualDirectoryEntries(normalizedPath);
+    if (!entries) {
+      return null;
+    }
+    return this.packages.filter((pkg) => normalizedPath === "/src" || pkg.mountPath.startsWith(`${normalizedPath}/`));
+  }
+
   private resolveWritablePackagePath(path: string, operation: string): {
     pkg: SourcePackage;
     relativePath: string;
@@ -462,7 +495,11 @@ class ProcessSourceMountBackend implements MountBackend {
   }
 
   private async readOverlay(pkg: SourcePackage): Promise<SourceOverlayManifest> {
-    return readOverlayManifest(this.storage, this.processId, pkg);
+    return readOverlayManifest(this.storage, this.processId, pkg, this.overlayBaseRef(pkg));
+  }
+
+  private overlayBaseRef(pkg: SourcePackage): string {
+    return sourceBaseRefForPackage(pkg, this.readBranchState(pkg));
   }
 
   private async readOverlayPut(
@@ -598,8 +635,14 @@ export async function getProcessSourceStatus(
   record: InstalledPackageRecord,
 ): Promise<ProcessSourceStatus> {
   const pkg = sourcePackageForOptions(options, record);
-  const overlay = await readOverlayManifest(options.storage ?? null, options.processId ?? null, pkg);
-  return sourceStatusForPackage(options, pkg, overlay);
+  const state = readSourceBranchState(options.config ?? null, options.processId ?? null, pkg.record.packageId);
+  const overlay = await readOverlayManifest(
+    options.storage ?? null,
+    options.processId ?? null,
+    pkg,
+    sourceBaseRefForPackage(pkg, state),
+  );
+  return sourceStatusForPackage(options, pkg, overlay, state);
 }
 
 export async function diffProcessSourceChanges(
@@ -610,14 +653,19 @@ export async function diffProcessSourceChanges(
     throw new Error("RIPGIT binding is required");
   }
   const pkg = sourcePackageForOptions(options, record);
-  const overlay = await readOverlayManifest(options.storage ?? null, options.processId ?? null, pkg);
+  const state = readSourceBranchState(options.config ?? null, options.processId ?? null, pkg.record.packageId);
+  const overlay = await readOverlayManifest(
+    options.storage ?? null,
+    options.processId ?? null,
+    pkg,
+    sourceBaseRefForPackage(pkg, state),
+  );
   const changes = sortedOverlayChanges(overlay);
   if (changes.length === 0) {
     return `No staged source changes for ${pkg.name}\n`;
   }
 
-  const state = readSourceBranchState(options.config ?? null, options.processId ?? null, pkg.record.packageId);
-  const repoRef = repoRefForSourcePackage(pkg, state);
+  const repoRef = repoRefForOverlay(pkg, overlay);
   const lines: string[] = [];
   for (const change of changes) {
     if (change.type === "delete") {
@@ -675,13 +723,18 @@ export async function commitProcessSourceChanges(
   if (!pkg.writable) {
     throw new Error(`Package source is read-only: ${pkg.name}`);
   }
-  const overlay = await readOverlayManifest(options.storage, options.processId, pkg);
   const state = readSourceBranchState(options.config, options.processId, pkg.record.packageId);
-  const ops = await overlayApplyOps(options.storage, options.ripgit, pkg, overlay, state);
+  const overlay = await readOverlayManifest(
+    options.storage,
+    options.processId,
+    pkg,
+    sourceBaseRefForPackage(pkg, state),
+  );
+  const ops = await overlayApplyOps(options.storage, options.ripgit, pkg, overlay);
   if (ops.length === 0) {
     await discardOverlay(options.storage, options.processId, pkg, overlay);
     return {
-      ...sourceStatusForPackage(options, pkg, emptyOverlayManifest(pkg)),
+      ...sourceStatusForPackage(options, pkg, emptyOverlayManifest(pkg, sourceBaseRefForPackage(pkg, state)), state),
       committed: false,
       commitHead: state?.head ?? null,
       ops: 0,
@@ -691,7 +744,8 @@ export async function commitProcessSourceChanges(
   const branch = args.branch?.trim()
     ? normalizeSourceBranch(args.branch)
     : state?.branch ?? processBranchName(options.processId, pkg.name);
-  const baseRef = state?.baseRef ?? pkg.resolvedCommit ?? pkg.sourceRef;
+  const applyBaseRef = overlay.baseRef;
+  const branchBaseRef = state?.baseRef ?? overlay.baseRef;
   const expectedHead = state?.branch === branch ? state.head : null;
   const repo = parseRepoSlug(pkg.repo);
   const result = await options.ripgit.apply(
@@ -701,14 +755,14 @@ export async function commitProcessSourceChanges(
     message,
     ops,
     {
-      baseRef,
+      baseRef: applyBaseRef,
       ...(expectedHead ? { expectedHead } : {}),
     },
   );
   const now = Date.now();
   const nextState = {
     branch,
-    baseRef,
+    baseRef: branchBaseRef,
     head: result.head ?? state?.head ?? null,
     createdAt: state?.createdAt ?? now,
     updatedAt: now,
@@ -717,7 +771,7 @@ export async function commitProcessSourceChanges(
   await discardOverlay(options.storage, options.processId, pkg, overlay);
 
   return {
-    ...sourceStatusForPackage(options, pkg, emptyOverlayManifest(pkg), nextState),
+    ...sourceStatusForPackage(options, pkg, emptyOverlayManifest(pkg, sourceBaseRefForPackage(pkg, nextState)), nextState),
     committed: true,
     commitHead: nextState.head,
     ops: ops.length,
@@ -735,9 +789,15 @@ export async function discardProcessSourceChanges(
     throw new Error("Source changes require a process context");
   }
   const pkg = sourcePackageForOptions(options, record);
-  const overlay = await readOverlayManifest(options.storage, options.processId, pkg);
+  const state = readSourceBranchState(options.config ?? null, options.processId, pkg.record.packageId);
+  const overlay = await readOverlayManifest(
+    options.storage,
+    options.processId,
+    pkg,
+    sourceBaseRefForPackage(pkg, state),
+  );
   await discardOverlay(options.storage, options.processId, pkg, overlay);
-  return sourceStatusForPackage(options, pkg, emptyOverlayManifest(pkg));
+  return sourceStatusForPackage(options, pkg, emptyOverlayManifest(pkg, sourceBaseRefForPackage(pkg, state)), state);
 }
 
 function visibleSourcePackages(
@@ -953,11 +1013,15 @@ function parseRepoSlug(raw: string): RipgitRepoRef {
   return { owner, repo };
 }
 
-function repoRefForSourcePackage(pkg: SourcePackage, state: SourceBranchState | null): RipgitRepoRef {
+function repoRefForOverlay(pkg: SourcePackage, overlay: SourceOverlayManifest): RipgitRepoRef {
   return {
     ...parseRepoSlug(pkg.repo),
-    branch: state?.branch ?? pkg.resolvedCommit ?? pkg.sourceRef,
+    branch: overlay.baseRef,
   };
+}
+
+function sourceBaseRefForPackage(pkg: SourcePackage, state: SourceBranchState | null): string {
+  return state?.head ?? pkg.resolvedCommit ?? pkg.sourceRef;
 }
 
 function sourceBranchStateKey(processId: string, packageId: string): string {
@@ -1021,8 +1085,9 @@ async function readOverlayManifest(
   storage: R2Bucket | null,
   processId: string | null,
   pkg: SourcePackage,
+  baseRef = sourceBaseRefForPackage(pkg, null),
 ): Promise<SourceOverlayManifest> {
-  const empty = emptyOverlayManifest(pkg);
+  const empty = emptyOverlayManifest(pkg, baseRef);
   if (!storage || !processId) {
     return empty;
   }
@@ -1074,12 +1139,12 @@ async function readOverlayManifest(
   }
 }
 
-function emptyOverlayManifest(pkg: SourcePackage): SourceOverlayManifest {
+function emptyOverlayManifest(pkg: SourcePackage, baseRef = sourceBaseRefForPackage(pkg, null)): SourceOverlayManifest {
   const now = Date.now();
   return {
     version: 1,
     packageId: pkg.record.packageId,
-    baseRef: pkg.resolvedCommit ?? pkg.sourceRef,
+    baseRef,
     createdAt: now,
     updatedAt: now,
     changes: {},
@@ -1215,9 +1280,8 @@ async function overlayApplyOps(
   ripgit: RipgitClient,
   pkg: SourcePackage,
   overlay: SourceOverlayManifest,
-  state: SourceBranchState | null,
 ): Promise<RipgitApplyOp[]> {
-  const repoRef = repoRefForSourcePackage(pkg, state);
+  const repoRef = repoRefForOverlay(pkg, overlay);
   const ops: RipgitApplyOp[] = [];
   for (const change of sortedOverlayChanges(overlay)) {
     const repoPath = joinRepoPath(pkg.sourceSubdir, change.path);

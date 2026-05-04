@@ -131,6 +131,58 @@ describe("proc handlers", () => {
       call: "proc.setidentity",
     }));
   });
+
+  it("uses distinct default mount paths for package source and repo mounts", async () => {
+    const pkg = makePackage("pkg-a", "Demo Tool", "sam/demo-a", "packages/demo-tool");
+    const ctx = {
+      env: {},
+      identity: {
+        process: IDENTITY,
+        capabilities: ["*"],
+      },
+      procs: {
+        get: vi.fn(() => null),
+        spawn: vi.fn(),
+      },
+      workspaces: {
+        get: vi.fn(),
+        touch: vi.fn(),
+      },
+      packages: {
+        resolve: vi.fn((packageId: string) => packageId === "pkg-a" ? pkg : null),
+        list: vi.fn(() => [pkg]),
+      },
+    } as unknown as KernelContext;
+
+    const result = await handleProcSpawn({
+      profile: "task",
+      mounts: [
+        { kind: "package-source", packageId: "pkg-a" },
+        { kind: "package-repo", packageId: "pkg-a" },
+      ],
+    }, ctx);
+
+    expect(result).toMatchObject({
+      ok: true,
+      cwd: "/src/packages/demo-tool",
+    });
+    expect(ctx.procs.spawn).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ cwd: "/src/packages/demo-tool" }),
+      expect.objectContaining({
+        mounts: [
+          expect.objectContaining({
+            mountPath: "/src/packages/demo-tool",
+            subdir: "packages/demo-tool",
+          }),
+          expect.objectContaining({
+            mountPath: "/src/repos/sam-demo-a",
+            subdir: ".",
+          }),
+        ],
+      }),
+    );
+  });
 });
 
 function makeIpcCallContext() {
@@ -159,7 +211,7 @@ function makeIpcCallContext() {
   return { ctx, ipcCalls };
 }
 
-function makePackage(packageId: string, name: string, repo: string) {
+function makePackage(packageId: string, name: string, repo: string, subdir = ".") {
   return {
     packageId,
     scope: { kind: "user", uid: IDENTITY.uid },
@@ -171,7 +223,7 @@ function makePackage(packageId: string, name: string, repo: string) {
       source: {
         repo,
         ref: "main",
-        subdir: ".",
+        subdir,
         resolvedCommit: "base123",
       },
       entrypoints: [],

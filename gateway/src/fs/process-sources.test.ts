@@ -216,6 +216,65 @@ describe("createProcessSourceBackend", () => {
     expect(storage.objects.size).toBe(0);
   });
 
+  it("commits staged source edits against the overlay base snapshot", async () => {
+    const initialPackage = makePackage();
+    const refreshedPackage = makePackage({
+      manifest: {
+        ...makePackage().manifest,
+        source: {
+          repo: "sam/pkg-test",
+          ref: "main",
+          subdir: "packages/ascii-starfield",
+          resolvedCommit: "newbase456",
+        },
+      },
+    });
+    const config = makeConfig();
+    const storage = makeBucket();
+    const applyCalls: any[] = [];
+    const readCalls: Array<{ repo: { branch?: string }; path: string }> = [];
+    const ripgit = {
+      readPath: async (repo: { branch?: string }, path: string) => {
+        readCalls.push({ repo, path });
+        return {
+          kind: "file",
+          bytes: new TextEncoder().encode("export const changed = false;\n"),
+          size: 30,
+        };
+      },
+      apply: async (...args: any[]) => {
+        applyCalls.push(args);
+        return { head: "processhead123" };
+      },
+    } as any;
+    const backend = createProcessSourceBackend({
+      identity: IDENTITY,
+      storage,
+      packages: [initialPackage],
+      processId: "task:source",
+      config,
+      ripgit,
+    });
+
+    await backend!.writeFile("/src/packages/ascii-starfield/src/index.ts", "export const changed = true;\n");
+    await commitProcessSourceChanges({
+      identity: IDENTITY,
+      storage,
+      packages: [refreshedPackage],
+      processId: "task:source",
+      config,
+      ripgit,
+    }, refreshedPackage, { message: "pkg: commit staged base" });
+
+    expect(readCalls).toEqual([
+      {
+        repo: { owner: "sam", repo: "pkg-test", branch: "base123" },
+        path: "packages/ascii-starfield/src/index.ts",
+      },
+    ]);
+    expect(applyCalls[0][5]).toEqual({ baseRef: "base123" });
+  });
+
   it("keeps colliding package source path names visible with disambiguated names", async () => {
     const first = makePackage({
       packageId: "import:sam/demo-a:.",
@@ -404,7 +463,7 @@ describe("createProcessSourceBackend", () => {
       packages: [app, other],
       mounts: [{
         kind: "ripgit-source",
-        mountPath: "/src/packages/demo-app",
+        mountPath: "/src/repos/sam-mono",
         packageId: app.packageId,
         repo: "sam/mono",
         ref: "main",
@@ -425,8 +484,9 @@ describe("createProcessSourceBackend", () => {
       } as any,
     });
 
-    await expect(backend!.readdir("/src/packages")).resolves.toEqual(["demo-app"]);
-    await expect(backend!.readFile("/src/packages/demo-app/package.json")).resolves.toContain("package.json");
+    await expect(backend!.readdir("/src")).resolves.toEqual(["packages", "repos"]);
+    await expect(backend!.readdir("/src/repos")).resolves.toEqual(["sam-mono"]);
+    await expect(backend!.readFile("/src/repos/sam-mono/package.json")).resolves.toContain("package.json");
     await expect(backend!.readFile("/src/packages/other-tool/package.json")).rejects.toThrow("no such package source");
 
     expect(readCalls).toEqual([
@@ -484,7 +544,7 @@ describe("createProcessSourceBackend", () => {
       repo: "pkg-test",
       branch: "feature/package-work",
     });
-    expect(applyCalls[1][5]).toEqual({ baseRef: "base123" });
+    expect(applyCalls[1][5]).toEqual({ baseRef: "processhead123" });
 
     await backend!.writeFile("/src/packages/ascii-starfield/src/three.ts", "export const three = true;\n");
     await commitProcessSourceChanges({
@@ -502,7 +562,7 @@ describe("createProcessSourceBackend", () => {
       repo: "pkg-test",
       branch: "feature/package-work",
     });
-    expect(applyCalls[2][5]).toEqual({ baseRef: "base123", expectedHead: "featurehead456" });
+    expect(applyCalls[2][5]).toEqual({ baseRef: "featurehead456", expectedHead: "featurehead456" });
   });
 
   it("treats recursively deleted overlay directories as missing in readdir", async () => {
