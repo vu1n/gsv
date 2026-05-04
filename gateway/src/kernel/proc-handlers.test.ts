@@ -184,6 +184,58 @@ describe("proc handlers", () => {
     );
   });
 
+  it("prefers package source mounts for default spawn cwd", async () => {
+    const pkg = makePackage("pkg-a", "Demo Tool", "sam/demo-a", "packages/demo-tool");
+    const ctx = {
+      env: {},
+      identity: {
+        process: IDENTITY,
+        capabilities: ["*"],
+      },
+      procs: {
+        get: vi.fn(() => null),
+        spawn: vi.fn(),
+      },
+      workspaces: {
+        get: vi.fn(),
+        touch: vi.fn(),
+      },
+      packages: {
+        resolve: vi.fn((packageId: string) => packageId === "pkg-a" ? pkg : null),
+        list: vi.fn(() => [pkg]),
+      },
+    } as unknown as KernelContext;
+
+    const result = await handleProcSpawn({
+      profile: "task",
+      mounts: [
+        { kind: "package-repo", packageId: "pkg-a" },
+        { kind: "package-source", packageId: "pkg-a" },
+      ],
+    }, ctx);
+
+    expect(result).toMatchObject({
+      ok: true,
+      cwd: "/src/packages/demo-tool",
+    });
+    expect(ctx.procs.spawn).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ cwd: "/src/packages/demo-tool" }),
+      expect.objectContaining({
+        mounts: [
+          expect.objectContaining({
+            mountPath: "/src/repos/sam-demo-a",
+            subdir: ".",
+          }),
+          expect.objectContaining({
+            mountPath: "/src/packages/demo-tool",
+            subdir: "packages/demo-tool",
+          }),
+        ],
+      }),
+    );
+  });
+
   it("preserves caller-supplied package source mount paths", async () => {
     const pkg = makePackage("pkg-a", "Demo Tool", "sam/demo-a", "packages/demo-tool");
     const ctx = {

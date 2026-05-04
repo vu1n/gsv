@@ -766,12 +766,19 @@ export async function commitProcessSourceChanges(
   const repo = parseRepoSlug(pkg.repo);
   const target = await resolveSourceCommitTarget(options.ripgit, repo, branch, state, overlay, args.branch);
   const ops = await overlayApplyOps(options.storage, options.ripgit, pkg, overlay, target.opsBaseRef);
+  const explicitBranch = typeof args.branch === "string" && args.branch.trim().length > 0;
   if (ops.length === 0) {
+    const nextState = explicitBranch
+      ? sourceBranchStateForTarget(state, branch, target, null)
+      : state;
+    if (nextState && explicitBranch) {
+      writeSourceBranchState(options.config, options.processId, pkg.record, nextState);
+    }
     await discardOverlay(options.storage, options.processId, pkg, overlay);
     return {
-      ...sourceStatusForPackage(options, pkg, emptyOverlayManifest(pkg, sourceBaseRefForPackage(pkg, state)), state),
+      ...sourceStatusForPackage(options, pkg, emptyOverlayManifest(pkg, sourceBaseRefForPackage(pkg, nextState)), nextState),
       committed: false,
-      commitHead: state?.head ?? null,
+      commitHead: nextState?.head ?? null,
       ops: 0,
     };
   }
@@ -787,14 +794,7 @@ export async function commitProcessSourceChanges(
       ...(target.expectedHead ? { expectedHead: target.expectedHead } : {}),
     },
   );
-  const now = Date.now();
-  const nextState = {
-    branch,
-    baseRef: target.branchBaseRef,
-    head: result.head ?? state?.head ?? null,
-    createdAt: state?.createdAt ?? now,
-    updatedAt: now,
-  };
+  const nextState = sourceBranchStateForTarget(state, branch, target, result.head ?? null);
   writeSourceBranchState(options.config, options.processId, pkg.record, nextState);
   await discardOverlay(options.storage, options.processId, pkg, overlay);
 
@@ -1091,6 +1091,25 @@ async function resolveSourceCommitTarget(
     applyBaseRef: overlay.baseRef,
     branchBaseRef: state?.baseRef ?? overlay.baseRef,
     expectedHead: null,
+  };
+}
+
+function sourceBranchStateForTarget(
+  previous: SourceBranchState | null,
+  branch: string,
+  target: {
+    branchBaseRef: string;
+    expectedHead: string | null;
+  },
+  resultHead: string | null,
+): SourceBranchState {
+  const now = Date.now();
+  return {
+    branch,
+    baseRef: target.branchBaseRef,
+    head: resultHead ?? target.expectedHead ?? (previous?.branch === branch ? previous.head : null),
+    createdAt: previous?.branch === branch ? previous.createdAt : now,
+    updatedAt: now,
   };
 }
 

@@ -760,7 +760,9 @@ function sanitizeMountPathSegment(value: string): string {
 }
 
 function defaultMountCwd(mounts: ProcessMount[]): string | null {
-  return mounts[0]?.mountPath ?? null;
+  return mounts.find((mount) => mount.mountPath.startsWith("/src/packages/"))?.mountPath
+    ?? mounts[0]?.mountPath
+    ?? null;
 }
 
 function defaultWorkspaceSpec(identity: ProcessIdentity): ProcWorkspaceSpec {

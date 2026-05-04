@@ -723,6 +723,80 @@ describe("createProcessSourceBackend", () => {
     expect(applyCalls[0][5]).toEqual({ baseRef: "featurehead456", expectedHead: "featurehead456" });
   });
 
+  it("remembers an explicit target branch even when staged source edits are no-ops", async () => {
+    const config = makeConfig();
+    const storage = makeBucket();
+    const applyCalls: any[] = [];
+    const ripgit = {
+      readPath: async (repo: { branch?: string }) => {
+        if (repo.branch === "featurehead456") {
+          return {
+            kind: "file",
+            bytes: new TextEncoder().encode("export const same = true;\n"),
+            size: 26,
+          };
+        }
+        return { kind: "missing" };
+      },
+      refs: async () => ({ heads: { "feature/package-work": "featurehead456" }, tags: {} }),
+      apply: async (...args: any[]) => {
+        applyCalls.push(args);
+        return { head: "processhead123" };
+      },
+    } as any;
+    const backend = createProcessSourceBackend({
+      identity: IDENTITY,
+      storage,
+      packages: [makePackage()],
+      processId: "task:source",
+      config,
+      ripgit,
+    });
+
+    await backend!.writeFile("/src/packages/ascii-starfield/src/one.ts", "export const one = true;\n");
+    await commitProcessSourceChanges({
+      identity: IDENTITY,
+      storage,
+      packages: [makePackage()],
+      processId: "task:source",
+      config,
+      ripgit,
+    }, makePackage(), { message: "pkg: commit one" });
+
+    await backend!.writeFile("/src/packages/ascii-starfield/src/index.ts", "export const same = true;\n");
+    const result = await commitProcessSourceChanges({
+      identity: IDENTITY,
+      storage,
+      packages: [makePackage()],
+      processId: "task:source",
+      config,
+      ripgit,
+    }, makePackage(), { message: "pkg: select feature", branch: "feature/package-work" });
+
+    expect(result).toMatchObject({
+      committed: false,
+      branch: "feature/package-work",
+      baseRef: "featurehead456",
+      head: "featurehead456",
+      commitHead: "featurehead456",
+      ops: 0,
+      changes: [],
+    });
+    expect(applyCalls).toHaveLength(1);
+    await expect(getProcessSourceStatus({
+      identity: IDENTITY,
+      storage,
+      packages: [makePackage()],
+      processId: "task:source",
+      config,
+      ripgit,
+    }, makePackage())).resolves.toMatchObject({
+      branch: "feature/package-work",
+      baseRef: "featurehead456",
+      head: "featurehead456",
+    });
+  });
+
   it("treats recursively deleted overlay directories as missing in readdir", async () => {
     const backend = createProcessSourceBackend({
       identity: IDENTITY,
