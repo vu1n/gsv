@@ -1,6 +1,6 @@
 ---
 name: gsv-package-review
-description: Review, import, approve, enable, update, or publish GSV packages safely from source, refs, capabilities, and package metadata.
+description: Guide on how to review GSV packages before approval, including source inspection, manifests, capabilities, entrypoints, staged edits, refs, and trust boundaries.
 ---
 
 # GSV Package Review

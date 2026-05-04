@@ -1,6 +1,6 @@
 ---
 name: gsv-process-identity
-description: Orient inside GSV: current process identity, uid/gid, profile, cwd/home/workspace, OS-like paths, available tools/devices, and which runtime surface to use.
+description: Guide on what a GSV process is, how to orient around its identity, cwd, workspace, source mounts, and how to interpret runtime events.
 ---
 
 # GSV Process Identity

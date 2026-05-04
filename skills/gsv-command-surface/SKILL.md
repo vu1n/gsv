@@ -1,6 +1,6 @@
 ---
 name: gsv-command-surface
-description: Choose and use GSV command surfaces, including native shell commands, package-provided commands, host CLI commands, manuals, process IPC, schedules, packages, wiki, notifications, devices, auth, config, and infra.
+description: Guide on which GSV command surface to use for a task and when to use native commands, package commands, host CLI commands, man, skills, or device targets.
 ---
 
 # GSV Command Surface

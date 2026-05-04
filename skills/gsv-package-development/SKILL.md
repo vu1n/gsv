@@ -1,6 +1,6 @@
 ---
 name: gsv-package-development
-description: Create or modify GSV package apps and package CLI commands, including scaffold, manifest, staged source edits, commit, checkout, and sync.
+description: Guide on how to build and modify GSV packages, including source checkout, app/backend/CLI changes, manifests, validation, staged commits, and syncing.
 ---
 
 # GSV Package Development

@@ -1,29 +1,25 @@
 ---
 name: gsv-context-and-skills
-description: Decide what GSV context or reusable workflow to load or edit, including profile/home/workspace/process context, skills.d layers, and skills list/search/show/files/read.
+description: Guide on how context and skills work in GSV and how to add/edit them.
 ---
 
 # GSV Context and Skills
 
-## When to Use
+## Prompt Assembly
 
-Use this skill when deciding whether information belongs in prompt context, durable knowledge, workspace state, or a reusable skill.
-
-## Prompt Context Order
-
-GSV assembles process context in this order:
+GSV assembles process context from explicit, inspectable sources:
 
 1. Profile context from `config/ai/profile/{profile}/context.d/*.md`.
 2. Home context from `~/context.d/*.md`.
-3. Workspace context from `/workspaces/{workspaceId}/.gsv/context.d/*.md`.
-4. Available skills from layered `skills.d` directories as a compact index only.
+3. Workspace context from `/workspaces/{workspaceId}/.gsv/context.d/*.md`, when the process has a workspace.
+4. A compact index of available skills from layered `skills.d` directories.
 5. Process context supplied by the current assignment or runtime.
 
-The skill index contains ids and descriptions. It does not include full bodies or long source paths.
+The skill index contains ids and descriptions only. It does not include full bodies or long source paths.
 
 ## Skill Commands
 
-Use the native shell command surface:
+Use the native shell:
 
 ```bash
 skills list
@@ -33,26 +29,29 @@ skills files <skill>
 skills read <skill> <file>
 ```
 
-Read `skills show <skill>` before following a workflow that might matter. Use `skills files` and `skills read` for supporting references and templates.
+Read `skills show <skill>` before relying on a workflow. Use `skills files` and `skills read` for supporting references, templates, or examples.
 
-## Where Things Belong
+## Where Information Belongs
 
-- `~/context.d/*.md`: short standing user context that should be present for most processes.
+- `config/ai/profile/{profile}/context.d/*.md`: short operator-managed role and runtime guidance.
+- `~/context.d/*.md`: concise user-global standing context useful to most processes.
 - `/workspaces/{id}/.gsv/context.d/*.md`: task-local continuity, decisions, open loops, and handoff state.
 - `/workspaces/{id}/.gsv/summary.md`: fallback workspace summary when no workspace context files exist.
 - `~/skills.d/`: reusable user-level process workflows.
 - `/workspaces/{id}/.gsv/skills.d/`: project-specific workflows.
-- `/src/packages/{package}/skills.d/`: workflows shipped by a visible enabled package.
+- `/src/packages/{package}/skills.d/`: workflows shipped by visible package source.
 - `~/knowledge/`: durable searchable reference material, not always-loaded prompt context.
+- Process assignment context: current task instructions, temporary handoff notes, and files attached to a spawned process.
 
-Repo-root `skills/` in the `root/gsv` source tree is a distribution source. During bootstrap, GSV copies those files into user `~/skills.d/` when missing. Runtime processes read `skills.d`, not the repo-root `skills/` path directly.
+Repo-root `skills/` in `root/gsv` is only a distribution source. Bootstrap copies those files into user `~/skills.d/` when missing. Runtime processes read layered `skills.d`, not repo-root `skills/` directly.
 
 ## Editing Rules
 
 1. Read the current file before editing.
 2. Keep context files short and curated.
-3. Put reusable procedures in skills, not in general context.
-4. After a difficult reusable workflow or a correction, update the relevant writable skill source.
+3. Put reusable procedures in skills, not profile or home context.
+4. Put raw reference material in knowledge or a skill reference file, not always-loaded context.
 5. Preserve user-authored structure and do not overwrite local skills just because a seeded source exists.
+6. After a repeated correction or reusable workflow, update the relevant writable skill source.
 
-Package skills follow package source rules: edits under `/src/packages/<package>/skills.d` are staged until `pkg source commit`.
+Package skills follow package source rules. Edits under `/src/packages/<package>/skills.d` are staged until `pkg source commit`.
