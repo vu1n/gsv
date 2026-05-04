@@ -270,6 +270,7 @@ export async function handleProcSpawn(
     return { ok: false, error: materialized.error };
   }
 
+  const hasRequestedMounts = args.mounts !== undefined;
   const materializedMounts = materializeSpawnMounts(args.mounts, ctx);
   if (!materializedMounts.ok) {
     return { ok: false, error: materializedMounts.error };
@@ -279,7 +280,7 @@ export async function handleProcSpawn(
     ...materialized.identity,
     cwd: materialized.workspaceId
       ? materialized.identity.cwd
-      : defaultMountCwd(materializedMounts.mounts) ?? materialized.identity.cwd,
+      : (hasRequestedMounts ? defaultMountCwd(materializedMounts.mounts) : null) ?? materialized.identity.cwd,
   };
 
   ctx.procs.spawn(pid, spawnIdentity, {
@@ -632,6 +633,11 @@ type SpawnMountOutcome =
       error: string;
     };
 
+type SpawnMountSpecWithRecord = {
+  spec: ProcSpawnMountSpec;
+  record: InstalledPackageRecord;
+};
+
 async function materializeSpawnIdentity(
   workspace: ProcWorkspaceSpec | undefined,
   baseIdentity: ProcessIdentity,
@@ -711,9 +717,14 @@ function materializeSpawnMounts(
   const mounts: ProcessMount[] = [];
   const seen = new Set<string>();
   const sourcePackages = ctx.packages.list({ scopes: visiblePackageScopesForActor(ctx.identity?.process) });
+  const specsToMount: SpawnMountSpecWithRecord[] = specs
+    ? specs.map((spec) => ({ spec, record: resolveInstalledPackage(spec.packageId, ctx) }))
+    : sourcePackages.map((record) => ({
+      spec: { kind: "package-source" as const, packageId: record.packageId },
+      record,
+    }));
 
-  for (const spec of specs ?? []) {
-    const record = resolveInstalledPackage(spec.packageId, ctx);
+  for (const { spec, record } of specsToMount) {
     const requestedMountPath = typeof spec.mountPath === "string" && spec.mountPath.trim()
       ? spec.mountPath
       : defaultMountPathForPackage(spec, record, sourcePackages);
@@ -730,6 +741,7 @@ function materializeSpawnMounts(
       kind: "ripgit-source",
       mountPath,
       packageId: record.packageId,
+      scope: record.scope,
       repo: record.manifest.source.repo,
       ref: record.manifest.source.ref,
       resolvedCommit: record.manifest.source.resolvedCommit ?? null,

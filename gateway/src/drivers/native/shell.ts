@@ -63,6 +63,7 @@ import {
 } from "../../kernel/scheduler";
 import {
   packageRouteBase,
+  packageScopeEquals,
   visiblePackageScopesForActor,
   type InstalledPackageRecord,
   type PackageEntrypoint,
@@ -2377,7 +2378,7 @@ function currentMountedSourcePackage(
   packages: InstalledPackageRecord[],
 ): InstalledPackageRecord | null {
   const mounts = ctx.processId ? ctx.procs.getMounts(ctx.processId) : [];
-  let packageId: string | null = null;
+  let matchedMount: (typeof mounts)[number] | undefined;
   let matchedLength = -1;
   for (const mount of mounts) {
     const mountPath = normalizePath(mount.mountPath);
@@ -2389,11 +2390,17 @@ function currentMountedSourcePackage(
       continue;
     }
     if (mountPath.length > matchedLength) {
-      packageId = mount.packageId;
+      matchedMount = mount;
       matchedLength = mountPath.length;
     }
   }
-  return packageId ? packages.find((candidate) => candidate.packageId === packageId) ?? null : null;
+  if (!matchedMount?.packageId) {
+    return null;
+  }
+  return packages.find((candidate) =>
+    candidate.packageId === matchedMount.packageId &&
+    (!matchedMount.scope || packageScopeEquals(candidate.scope, matchedMount.scope))
+  ) ?? null;
 }
 
 async function runPkgSourceCommand(args: string[], ctx: KernelContext, cwd: string): Promise<ExecResult> {

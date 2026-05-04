@@ -138,6 +138,27 @@ describe("createProcessSourceBackend", () => {
     ]);
   });
 
+  it("does not expose package sources for an explicit empty mount scope", async () => {
+    const backend = createProcessSourceBackend({
+      identity: IDENTITY,
+      storage: makeBucket(),
+      packages: [makePackage()],
+      mounts: [],
+      processId: "task:source",
+      config: makeConfig(),
+      ripgit: {
+        readPath: async () => {
+          throw new Error("readPath should not be called");
+        },
+      } as any,
+    });
+
+    expect(backend).not.toBeNull();
+    await expect(backend!.readdir("/src/packages")).resolves.toEqual([]);
+    await expect(backend!.readFile("/src/packages/ascii-starfield/src/index.ts"))
+      .rejects.toThrow("no such package source");
+  });
+
   it("stages package source edits and commits them explicitly", async () => {
     const config = makeConfig();
     const storage = makeBucket();

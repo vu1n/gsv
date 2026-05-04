@@ -865,6 +865,9 @@ function visibleSourcePackages(
     }
     return packages.sort((left, right) => left.mountPath.localeCompare(right.mountPath));
   }
+  if (mounts) {
+    return [];
+  }
 
   const packages: SourcePackage[] = [];
   for (const record of records) {
@@ -896,7 +899,7 @@ function sourcePackageForOptions(
   if (found) {
     return found;
   }
-  if (normalizeSourceMounts(options.mounts).length > 0) {
+  if (options.mounts) {
     throw new Error(`Package source is not mounted: ${record.manifest.name}`);
   }
   return sourcePackageForRecord(record, options.identity, packageSourcePathNameForRecord(record, options.packages));
@@ -944,6 +947,10 @@ function sourceRecordForMount(
 ): InstalledPackageRecord | null {
   if (!mount.packageId) {
     return null;
+  }
+  if (mount.scope) {
+    const mountKey = packageSourceRecordKey({ packageId: mount.packageId, scope: mount.scope });
+    return records.find((record) => packageSourceRecordKey(record) === mountKey) ?? null;
   }
   return records.find((record) => record.packageId === mount.packageId) ?? null;
 }

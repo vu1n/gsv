@@ -132,6 +132,59 @@ describe("proc handlers", () => {
     }));
   });
 
+  it("materializes visible package source mounts by default without changing cwd", async () => {
+    const pkgA = makePackage("pkg-a", "Demo Tool", "sam/demo-a");
+    const pkgB = makePackage("pkg-b", "Other Tool", "sam/other-b");
+    const ctx = {
+      env: {},
+      identity: {
+        process: IDENTITY,
+        capabilities: ["*"],
+      },
+      procs: {
+        get: vi.fn(() => null),
+        spawn: vi.fn(),
+      },
+      workspaces: {
+        get: vi.fn(),
+        touch: vi.fn(),
+      },
+      packages: {
+        resolve: vi.fn((packageId: string) => {
+          if (packageId === "pkg-a") return pkgA;
+          if (packageId === "pkg-b") return pkgB;
+          return null;
+        }),
+        list: vi.fn(() => [pkgA, pkgB]),
+      },
+    } as unknown as KernelContext;
+
+    const result = await handleProcSpawn({ profile: "task" }, ctx);
+
+    expect(result).toMatchObject({
+      ok: true,
+      cwd: "/home/sam",
+    });
+    expect(ctx.procs.spawn).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ cwd: "/home/sam" }),
+      expect.objectContaining({
+        mounts: [
+          expect.objectContaining({
+            packageId: "pkg-a",
+            scope: pkgA.scope,
+            mountPath: "/src/packages/demo-tool",
+          }),
+          expect.objectContaining({
+            packageId: "pkg-b",
+            scope: pkgB.scope,
+            mountPath: "/src/packages/other-tool",
+          }),
+        ],
+      }),
+    );
+  });
+
   it("uses distinct default mount paths for package source and repo mounts", async () => {
     const pkg = makePackage("pkg-a", "Demo Tool", "sam/demo-a", "packages/demo-tool");
     const ctx = {
