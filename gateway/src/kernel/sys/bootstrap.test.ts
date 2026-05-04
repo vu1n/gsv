@@ -99,15 +99,33 @@ function makeContext(): KernelContext {
   } as KernelContext;
 }
 
+function setBootstrapEnv(ctx: KernelContext, upstream: string, ref?: string): void {
+  const env = ctx.env as Env & {
+    GSV_BOOTSTRAP_UPSTREAM: string;
+    GSV_BOOTSTRAP_REF?: string;
+  };
+  env.GSV_BOOTSTRAP_UPSTREAM = upstream;
+  if (ref !== undefined) {
+    env.GSV_BOOTSTRAP_REF = ref;
+  }
+}
+
 describe("handleSysBootstrap", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    importFromUpstreamMock.mockResolvedValue({
-      remoteUrl: "https://github.com/deathbyknowledge/gsv",
-      remoteRef: "main",
+    importFromUpstreamMock.mockImplementation((
+      _repo: unknown,
+      _actor: unknown,
+      _email: unknown,
+      _message: unknown,
+      remoteUrl: string,
+      ref: string,
+    ) => Promise.resolve({
+      remoteUrl,
+      remoteRef: ref,
       head: "abc123",
       changed: true,
-    });
+    }));
     readPathMock.mockImplementation((repo: { owner: string; repo: string }, path: string) => {
       if (repo.owner === "root" && repo.repo === "gsv" && path === "skills") {
         return {
@@ -232,6 +250,56 @@ describe("handleSysBootstrap", () => {
       "bootstrap root/gsv from https://github.com/example/custom-gsv#feature/main",
       "https://github.com/example/custom-gsv",
       "feature/main",
+    );
+  });
+
+  it("uses the configured upstream env when args are omitted", async () => {
+    const ctx = makeContext();
+    setBootstrapEnv(ctx, "example/dev-gsv#feature/bootstrap");
+
+    const result = await handleSysBootstrap(undefined, ctx);
+
+    expect(importFromUpstreamMock).toHaveBeenCalledWith(
+      expect.any(Object),
+      "root",
+      "root@gsv.local",
+      "bootstrap root/gsv from https://github.com/example/dev-gsv#feature/bootstrap",
+      "https://github.com/example/dev-gsv",
+      "feature/bootstrap",
+    );
+    expect(result.remoteUrl).toBe("https://github.com/example/dev-gsv");
+    expect(result.ref).toBe("feature/bootstrap");
+  });
+
+  it("lets configured ref env override an upstream env fragment", async () => {
+    const ctx = makeContext();
+    setBootstrapEnv(ctx, "https://git.example.com/team/gsv.git#feature/bootstrap", "release");
+
+    await handleSysBootstrap(undefined, ctx);
+
+    expect(importFromUpstreamMock).toHaveBeenCalledWith(
+      expect.any(Object),
+      "root",
+      "root@gsv.local",
+      "bootstrap root/gsv from https://git.example.com/team/gsv.git#release",
+      "https://git.example.com/team/gsv.git",
+      "release",
+    );
+  });
+
+  it("lets explicit bootstrap args override configured upstream env", async () => {
+    const ctx = makeContext();
+    setBootstrapEnv(ctx, "example/dev-gsv", "feature/bootstrap");
+
+    await handleSysBootstrap({ repo: "example/custom-gsv", ref: "release" }, ctx);
+
+    expect(importFromUpstreamMock).toHaveBeenCalledWith(
+      expect.any(Object),
+      "root",
+      "root@gsv.local",
+      "bootstrap root/gsv from https://github.com/example/custom-gsv#release",
+      "https://github.com/example/custom-gsv",
+      "release",
     );
   });
 
