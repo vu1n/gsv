@@ -409,9 +409,15 @@ class ProcessSourceMountBackend implements MountBackend {
     normalizedPath: string;
   } {
     const normalizedPath = normalizePath(path);
-    const pkg = this.packages.find((candidate) =>
-      normalizedPath === candidate.mountPath || normalizedPath.startsWith(`${candidate.mountPath}/`)
-    );
+    let pkg: SourcePackage | null = null;
+    for (const candidate of this.packages) {
+      if (normalizedPath !== candidate.mountPath && !normalizedPath.startsWith(`${candidate.mountPath}/`)) {
+        continue;
+      }
+      if (!pkg || candidate.mountPath.length > pkg.mountPath.length) {
+        pkg = candidate;
+      }
+    }
     if (!pkg) {
       throw new Error(`ENOENT: no such package source '${normalizedPath}'`);
     }

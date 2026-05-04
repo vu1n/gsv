@@ -451,6 +451,29 @@ describe("pkg shell command", () => {
     expect(result.stderr).toBe("");
   });
 
+  it("defaults to the current package from custom source mounts", async () => {
+    const result = await handleShellExec(
+      { input: "pkg manifest", cwd: "/src/package/src" },
+      makeContext({
+        procs: {
+          getMounts: vi.fn(() => [{
+            kind: "ripgit-source",
+            mountPath: "/src/package",
+            packageId: "import:root/pkg-test:.",
+            repo: "root/pkg-test",
+            ref: "main",
+            resolvedCommit: "abc123",
+            subdir: ".",
+          }]),
+        } as Partial<KernelContext["procs"]>,
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.stdout).toContain('"name": "ascii-starfield"');
+    expect(result.stderr).toBe("");
+  });
+
   it("shows review status in pkg list output", async () => {
     const result = await handleShellExec(
       { input: "pkg list" },

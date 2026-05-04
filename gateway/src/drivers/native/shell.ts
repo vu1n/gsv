@@ -25,6 +25,7 @@ import {
   RipgitClient,
   packageSourcePathNameMap,
   packageSourcePathName,
+  normalizePath,
   resolveUserPath,
 } from "../../fs";
 import type { KernelContext } from "../../kernel/context";
@@ -2360,15 +2361,43 @@ function resolvePkgTarget(rawPackageId: string | undefined, ctx: KernelContext, 
 }
 
 function currentSourcePackage(ctx: KernelContext, cwd: string): InstalledPackageRecord | null {
-  const normalizedCwd = cwd.replace(/\/+$/, "");
+  const normalizedCwd = normalizePath(cwd);
+  const packages = ctx.packages.list({ scopes: visiblePackageScopesForActor(ctx.identity?.process) });
   const match = normalizedCwd.match(/^\/src\/packages\/([^/]+)(?:\/|$)/);
   const packageName = match?.[1];
-  if (!packageName) {
-    return null;
+  if (packageName) {
+    const pathNames = packageSourcePathNameMap(packages);
+    const found = packages.find((candidate) => pathNames.get(candidate) === packageName);
+    if (found) {
+      return found;
+    }
   }
-  const packages = ctx.packages.list({ scopes: visiblePackageScopesForActor(ctx.identity?.process) });
-  const pathNames = packageSourcePathNameMap(packages);
-  return packages.find((candidate) => pathNames.get(candidate) === packageName) ?? null;
+  return currentMountedSourcePackage(ctx, normalizedCwd, packages);
+}
+
+function currentMountedSourcePackage(
+  ctx: KernelContext,
+  normalizedCwd: string,
+  packages: InstalledPackageRecord[],
+): InstalledPackageRecord | null {
+  const mounts = ctx.processId ? ctx.procs.getMounts(ctx.processId) : [];
+  let packageId: string | null = null;
+  let matchedLength = -1;
+  for (const mount of mounts) {
+    const mountPath = normalizePath(mount.mountPath);
+    if (
+      mount.kind !== "ripgit-source" ||
+      !mount.packageId ||
+      (normalizedCwd !== mountPath && !normalizedCwd.startsWith(`${mountPath}/`))
+    ) {
+      continue;
+    }
+    if (mountPath.length > matchedLength) {
+      packageId = mount.packageId;
+      matchedLength = mountPath.length;
+    }
+  }
+  return packageId ? packages.find((candidate) => candidate.packageId === packageId) ?? null : null;
 }
 
 async function runPkgSourceCommand(args: string[], ctx: KernelContext, cwd: string): Promise<ExecResult> {

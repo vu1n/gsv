@@ -586,6 +586,82 @@ describe("createProcessSourceBackend", () => {
     ]);
   });
 
+  it("resolves overlapping source mounts by longest mount path", async () => {
+    const parent = makePackage({
+      packageId: "import:sam/parent:.",
+      manifest: {
+        ...makePackage().manifest,
+        name: "Parent",
+        source: {
+          repo: "sam/parent",
+          ref: "main",
+          subdir: ".",
+          resolvedCommit: "parent123",
+        },
+      },
+    });
+    const child = makePackage({
+      packageId: "import:sam/child:.",
+      manifest: {
+        ...makePackage().manifest,
+        name: "Child",
+        source: {
+          repo: "sam/child",
+          ref: "main",
+          subdir: ".",
+          resolvedCommit: "child123",
+        },
+      },
+    });
+    const readCalls: Array<{ repo: { owner: string; repo: string; branch?: string }; path: string }> = [];
+    const backend = createProcessSourceBackend({
+      identity: IDENTITY,
+      storage: makeBucket(),
+      packages: [parent, child],
+      mounts: [
+        {
+          kind: "ripgit-source",
+          mountPath: "/src/repos/foo",
+          packageId: parent.packageId,
+          repo: "sam/parent",
+          ref: "main",
+          resolvedCommit: "parent123",
+          subdir: ".",
+        },
+        {
+          kind: "ripgit-source",
+          mountPath: "/src/repos/foo/bar",
+          packageId: child.packageId,
+          repo: "sam/child",
+          ref: "main",
+          resolvedCommit: "child123",
+          subdir: ".",
+        },
+      ],
+      processId: "task:source",
+      config: makeConfig(),
+      ripgit: {
+        readPath: async (repo: { owner: string; repo: string; branch?: string }, path: string) => {
+          readCalls.push({ repo, path });
+          return {
+            kind: "file",
+            bytes: new TextEncoder().encode(`${repo.owner}/${repo.repo}:${path}\n`),
+            size: path.length,
+          };
+        },
+      } as any,
+    });
+
+    await expect(backend!.readFile("/src/repos/foo/bar/index.ts"))
+      .resolves.toBe("sam/child:index.ts\n");
+    expect(readCalls).toEqual([
+      {
+        repo: { owner: "sam", repo: "child", branch: "child123" },
+        path: "index.ts",
+      },
+    ]);
+  });
+
   it("does not reuse expectedHead when committing to a different branch", async () => {
     const config = makeConfig();
     const storage = makeBucket();
