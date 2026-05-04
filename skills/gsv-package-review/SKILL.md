@@ -5,13 +5,9 @@ description: Guide on how to review GSV packages before approval, including sour
 
 # GSV Package Review
 
-## When to Use
-
-Use this skill when the task is to inspect, approve, enable, update, publish, or reject a GSV package. Use `gsv-package-development` instead when the task is to author code.
-
 ## Review Procedure
 
-1. Start from package metadata:
+Start from metadata, then verify with source:
 
 ```bash
 pkg list
@@ -20,19 +16,31 @@ pkg manifest <package>
 pkg capabilities <package>
 pkg refs <package>
 pkg log <package> --limit 20
+pkg source status <package>
 ```
 
-2. Inspect source under `/src/packages/<package>`. Prefer direct source evidence over manifest summaries.
-3. Check `pkg source status <package>`. A review should usually start from clean source. Explain any staged edits before trusting the tree.
-4. Identify browser, backend, CLI, public route, daemon, and package profile entrypoints.
-5. Compare requested Kernel capabilities to the code paths that actually need them.
-6. Call out risky behavior explicitly: filesystem writes/deletes, shell execution, repo mutation, package lifecycle calls, process spawning, adapter calls, public routes, network access, eval-like execution, parent-window messaging, and broad grants.
-7. Separate verdict from enablement. Approval means the package is trusted for its requested grants; enablement makes entrypoints active.
+A review should usually start from clean source. If staged edits exist, explain what they are before trusting the tree.
 
-## Commands
+Inspect `/src/packages/<package>` directly. Identify browser, backend, CLI, public route, daemon, signal, and package profile entrypoints.
+
+## What To Check
+
+- Requested Kernel capabilities match code paths that need them.
+- Filesystem writes/deletes are scoped and intentional.
+- Shell execution is justified and bounded.
+- Repository mutation uses the correct repo and ref.
+- Package lifecycle calls such as install, checkout, sync, approve, enable, and public visibility are justified.
+- Process spawning, IPC, schedules, adapter calls, notifications, and public routes are explicit.
+- Browser code does not abuse parent-window messaging or host bridge assumptions.
+- Backend/public routes do their own webhook signature or route-specific authorization.
+- Network access, dynamic import, eval-like behavior, and destructive actions are called out.
+
+## Mutating Commands
+
+Use these only when the user asked for that action:
 
 ```bash
-pkg add --repo owner/repo --ref main --subdir . 
+pkg add --repo owner/repo --ref main --subdir .
 pkg approve <package>
 pkg enable <package>
 pkg disable <package>
@@ -41,11 +49,14 @@ pkg public on <package>
 pkg public off <package>
 ```
 
-Use mutating commands only when the user asked for that action.
+Approval and enablement are separate. Approval trusts a package for its requested grants. Enablement activates entrypoints.
 
-## Pitfalls
+## Verdict
 
-- Do not commit staged source edits during package review unless the user explicitly changes the task to authoring.
-- Do not approve based only on display name, description, or UI appearance.
-- Do not treat `pkg approve` and `pkg enable` as the same operation.
-- Do not confuse package sync, checkout, and upstream pull. Checkout moves an installed package to a ref; sync reassembles from the current source ref; upstream pull refreshes local source from a remote.
+Lead with findings when risks exist. End with one clear verdict:
+
+- approve
+- do not approve
+- approve only after named fixes
+
+Do not approve based on display name, description, screenshots, or UI polish alone.

@@ -5,27 +5,87 @@ description: Guide on how to build and modify GSV packages, including source che
 
 # GSV Package Development
 
-## When to Use
+## Start From Package State
 
-Use this skill when the user asks you to build, modify, validate, or ship a reusable GSV package, package app, package CLI command, or package-owned workflow.
+Use native shell on `target: "gsv"`:
 
-## Procedure
+```bash
+pkg list
+pkg show <package>
+pkg manifest <package>
+pkg source status <package>
+```
 
-1. Inspect package state with `pkg list`, `pkg show <package>`, `pkg manifest <package>`, and `pkg source status <package>`.
-2. For a new user-owned package, run `pkg create --repo <username>/<repo> --template web-ui|command --enable`. Use the current user's repo owner unless the user explicitly asks for another owner.
-3. Edit source under `/src/packages/<package>`. When cwd is inside that tree, most `pkg source` commands can infer the package.
-4. Keep the manifest in `src/package.ts`. Browser apps use `browser.entry`; backends use `backend.entry`; CLI commands use `cli.commands`.
-5. Declare only the Kernel grants the package entrypoints need. Use `repo.*` for repository content operations and `pkg.*` only for package lifecycle operations.
-6. Make narrow edits. User-owned package writes are staged for the process until committed.
-7. Validate with the package's local checks when available, such as TypeScript, package tests, or a focused command run.
-8. Review staged changes with `pkg source status <package>` and `pkg source diff <package>`.
-9. Commit source edits with `pkg source commit <package> --message "..." --branch <branch>`.
-10. Use `pkg checkout <ref> <package>` when the installed package should move to a committed ref. Builtin package sync is separate and is normally done with `gsv packages sync` after the `root/gsv` source has been updated.
+Do not invent source paths. Visible package source lives under `/src/packages/<package-path>`. When cwd is inside a package source tree, most `pkg source` commands can infer the package.
+
+## Create a User-Owned Package
+
+Use the current user's repo owner unless the user explicitly asks for another owner:
+
+```bash
+pkg create --repo <username>/<repo> --template web-ui --enable
+pkg create --repo <username>/<repo> --template command --enable
+```
+
+Then edit the mounted source under `/src/packages/<package>`.
+
+## Manifest Shape
+
+Keep the manifest in `src/package.ts`. Browser apps use `browser.entry`, backends use `backend.entry`, and CLI commands use `cli.commands`.
+
+Declare only the Kernel grants the package entrypoints actually need:
+
+- use `fs.*` for filesystem work
+- use `repo.*` for ripgit repository content
+- use `pkg.*` only for package lifecycle operations
+- use adapter/process/scheduler grants only when the code directly needs them
+
+Capabilities are part of the package trust contract. Do not broaden them to make development convenient.
+
+## Edit and Validate
+
+1. Read source before editing.
+2. Make narrow changes.
+3. Validate with package-local checks when available, such as TypeScript, tests, or a focused command run.
+4. Inspect staged source changes:
+
+```bash
+pkg source status <package>
+pkg source diff <package>
+```
+
+Source writes are staged per process for ripgit-backed package source. They are not installed or shared until committed.
+
+## Commit, Checkout, and Sync
+
+Commit staged source edits:
+
+```bash
+pkg source commit <package> --message "short imperative message" --branch <branch>
+```
+
+Move an installed package to a committed ref:
+
+```bash
+pkg checkout <ref> <package>
+```
+
+Builtin package sync is a host CLI workflow after `root/gsv` has the desired source:
+
+```bash
+gsv packages sync
+```
+
+Pulling upstream, checking out a ref, and syncing are different:
+
+- upstream pull refreshes a local ripgit source from a remote branch
+- checkout moves the installed package pointer to a ref
+- sync re-seeds and reassembles builtin packages from `root/gsv`
 
 ## Pitfalls
 
-- Do not confuse package sync with pulling upstream. Pulling updates the local ripgit source from its upstream; syncing reassembles the package from the source ref it already points at.
-- Do not invent package source paths. Use `pkg list`, `pkg show`, and `/src/packages/<package>`.
-- Do not treat package source edits as installed until the package has been committed and synced or checked out as needed.
-- Do not use broad package capabilities because a syscall is convenient. Capabilities are part of the package's trust contract.
-- Do not commit staged package edits during review unless the user explicitly asked for authoring work.
+- Do not treat staged package source edits as installed behavior.
+- Do not commit package edits during review unless the user changes the task to authoring.
+- Do not use raw GitHub URLs for custom GSV packages unless the package is intentionally backed by a GitHub upstream.
+- Do not use broad grants because a syscall is nearby.
+- Do not confuse host `gsv packages sync` with native package source commit/checkout.
