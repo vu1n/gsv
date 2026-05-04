@@ -663,7 +663,7 @@ export async function pullSource(kernel: KernelClientLike, args: { repo: string 
   }
   const refs = unique(sourcePackages.map((pkg) => pkg.source.ref));
   for (const ref of refs) {
-    await kernel.request("repo.import", { repo, ref });
+    await kernel.request("repo.import", { repo, ref, remoteRef: ref });
   }
   return { ok: true };
 }

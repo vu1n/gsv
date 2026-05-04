@@ -694,7 +694,7 @@ export async function diffProcessSourceChanges(
     return `No staged source changes for ${pkg.name}\n`;
   }
 
-  const repoRef = repoRefForOverlay(pkg, overlay);
+  const repoRef = repoRefForOverlay(pkg, overlay.baseRef);
   const lines: string[] = [];
   for (const change of changes) {
     if (change.type === "delete") {
@@ -759,7 +759,12 @@ export async function commitProcessSourceChanges(
     pkg,
     sourceBaseRefForPackage(pkg, state),
   );
-  const ops = await overlayApplyOps(options.storage, options.ripgit, pkg, overlay);
+  const branch = args.branch?.trim()
+    ? normalizeSourceBranch(args.branch)
+    : state?.branch ?? processBranchName(options.processId, pkg.name);
+  const repo = parseRepoSlug(pkg.repo);
+  const target = await resolveSourceCommitTarget(options.ripgit, repo, branch, state, overlay, args.branch);
+  const ops = await overlayApplyOps(options.storage, options.ripgit, pkg, overlay, target.opsBaseRef);
   if (ops.length === 0) {
     await discardOverlay(options.storage, options.processId, pkg, overlay);
     return {
@@ -770,13 +775,6 @@ export async function commitProcessSourceChanges(
     };
   }
 
-  const branch = args.branch?.trim()
-    ? normalizeSourceBranch(args.branch)
-    : state?.branch ?? processBranchName(options.processId, pkg.name);
-  const applyBaseRef = overlay.baseRef;
-  const branchBaseRef = state?.baseRef ?? overlay.baseRef;
-  const expectedHead = state?.branch === branch ? state.head : null;
-  const repo = parseRepoSlug(pkg.repo);
   const result = await options.ripgit.apply(
     { ...repo, branch },
     options.identity.username,
@@ -784,14 +782,14 @@ export async function commitProcessSourceChanges(
     message,
     ops,
     {
-      baseRef: applyBaseRef,
-      ...(expectedHead ? { expectedHead } : {}),
+      baseRef: target.applyBaseRef,
+      ...(target.expectedHead ? { expectedHead: target.expectedHead } : {}),
     },
   );
   const now = Date.now();
   const nextState = {
     branch,
-    baseRef: branchBaseRef,
+    baseRef: target.branchBaseRef,
     head: result.head ?? state?.head ?? null,
     createdAt: state?.createdAt ?? now,
     updatedAt: now,
@@ -1042,15 +1040,57 @@ function parseRepoSlug(raw: string): RipgitRepoRef {
   return { owner, repo };
 }
 
-function repoRefForOverlay(pkg: SourcePackage, overlay: SourceOverlayManifest): RipgitRepoRef {
+function repoRefForOverlay(pkg: SourcePackage, baseRef: string): RipgitRepoRef {
   return {
     ...parseRepoSlug(pkg.repo),
-    branch: overlay.baseRef,
+    branch: baseRef,
   };
 }
 
 function sourceBaseRefForPackage(pkg: SourcePackage, state: SourceBranchState | null): string {
   return state?.head ?? pkg.resolvedCommit ?? pkg.sourceRef;
+}
+
+async function resolveSourceCommitTarget(
+  ripgit: RipgitClient,
+  repo: RipgitRepoRef,
+  branch: string,
+  state: SourceBranchState | null,
+  overlay: SourceOverlayManifest,
+  requestedBranch: string | undefined,
+): Promise<{
+  opsBaseRef: string;
+  applyBaseRef: string;
+  branchBaseRef: string;
+  expectedHead: string | null;
+}> {
+  if (state?.branch === branch) {
+    return {
+      opsBaseRef: overlay.baseRef,
+      applyBaseRef: overlay.baseRef,
+      branchBaseRef: state.baseRef,
+      expectedHead: state.head,
+    };
+  }
+
+  if (requestedBranch?.trim()) {
+    const refs = await ripgit.refs(repo);
+    const targetHead = refs.heads?.[branch] ?? null;
+    const targetBaseRef = targetHead ?? overlay.baseRef;
+    return {
+      opsBaseRef: targetBaseRef,
+      applyBaseRef: targetBaseRef,
+      branchBaseRef: targetBaseRef,
+      expectedHead: targetHead,
+    };
+  }
+
+  return {
+    opsBaseRef: overlay.baseRef,
+    applyBaseRef: overlay.baseRef,
+    branchBaseRef: state?.baseRef ?? overlay.baseRef,
+    expectedHead: null,
+  };
 }
 
 function sourceBranchStateKey(processId: string, packageId: string): string {
@@ -1309,8 +1349,9 @@ async function overlayApplyOps(
   ripgit: RipgitClient,
   pkg: SourcePackage,
   overlay: SourceOverlayManifest,
+  baseRef = overlay.baseRef,
 ): Promise<RipgitApplyOp[]> {
-  const repoRef = repoRefForOverlay(pkg, overlay);
+  const repoRef = repoRefForOverlay(pkg, baseRef);
   const ops: RipgitApplyOp[] = [];
   for (const change of sortedOverlayChanges(overlay)) {
     const repoPath = joinRepoPath(pkg.sourceSubdir, change.path);

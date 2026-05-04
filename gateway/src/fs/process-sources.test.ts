@@ -504,6 +504,7 @@ describe("createProcessSourceBackend", () => {
     const heads = ["processhead123", "featurehead456", "featurehead789"];
     const ripgit = {
       readPath: async () => ({ kind: "missing" }),
+      refs: async () => ({ heads: {}, tags: {} }),
       apply: async (...args: any[]) => {
         applyCalls.push(args);
         return { head: heads[applyCalls.length - 1] };
@@ -563,6 +564,74 @@ describe("createProcessSourceBackend", () => {
       branch: "feature/package-work",
     });
     expect(applyCalls[2][5]).toEqual({ baseRef: "featurehead456", expectedHead: "featurehead456" });
+  });
+
+  it("compares staged source changes against an existing target branch", async () => {
+    const config = makeConfig();
+    const storage = makeBucket();
+    const applyCalls: any[] = [];
+    const readCalls: Array<{ repo: { branch?: string }; path: string }> = [];
+    const ripgit = {
+      readPath: async (repo: { branch?: string }, path: string) => {
+        readCalls.push({ repo, path });
+        if (repo.branch === "base123") {
+          return {
+            kind: "file",
+            bytes: new TextEncoder().encode("export const changed = true;\n"),
+            size: 29,
+          };
+        }
+        return {
+          kind: "file",
+          bytes: new TextEncoder().encode("export const changed = false;\n"),
+          size: 30,
+        };
+      },
+      refs: async () => ({ heads: { "feature/package-work": "featurehead456" }, tags: {} }),
+      apply: async (...args: any[]) => {
+        applyCalls.push(args);
+        return { head: "featurehead789" };
+      },
+    } as any;
+    const backend = createProcessSourceBackend({
+      identity: IDENTITY,
+      storage,
+      packages: [makePackage()],
+      processId: "task:source",
+      config,
+      ripgit,
+    });
+
+    await backend!.writeFile("/src/packages/ascii-starfield/src/index.ts", "export const changed = true;\n");
+    await commitProcessSourceChanges({
+      identity: IDENTITY,
+      storage,
+      packages: [makePackage()],
+      processId: "task:source",
+      config,
+      ripgit,
+    }, makePackage(), { message: "pkg: commit to existing branch", branch: "feature/package-work" });
+
+    expect(readCalls).toEqual([
+      {
+        repo: { owner: "sam", repo: "pkg-test", branch: "featurehead456" },
+        path: "packages/ascii-starfield/src/index.ts",
+      },
+    ]);
+    expect(applyCalls).toHaveLength(1);
+    expect(applyCalls[0][0]).toEqual({
+      owner: "sam",
+      repo: "pkg-test",
+      branch: "feature/package-work",
+    });
+    expect(applyCalls[0][4]).toEqual([
+      {
+        type: "put",
+        path: "packages/ascii-starfield/src/index.ts",
+        contentBytes: Array.from(new TextEncoder().encode("export const changed = true;\n")),
+      },
+    ]);
+    expect(applyCalls[0][5]).toEqual({ baseRef: "featurehead456", expectedHead: "featurehead456" });
   });
 
   it("treats recursively deleted overlay directories as missing in readdir", async () => {
