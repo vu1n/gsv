@@ -1,9 +1,11 @@
 export type ChatBackend = {
+  getViewer(args?: unknown): Promise<unknown>;
   listProfiles(args?: unknown): Promise<unknown>;
   listWorkspaces(args?: unknown): Promise<unknown>;
   spawnProcess(args: unknown): Promise<unknown>;
   sendMessage(args: unknown): Promise<unknown>;
   getHistory(args: unknown): Promise<unknown>;
+  readProcessMedia(args: unknown): Promise<unknown>;
   listConversations(args: unknown): Promise<unknown>;
   compactConversation(args: unknown): Promise<unknown>;
   listConversationSegments(args: unknown): Promise<unknown>;
@@ -81,6 +83,14 @@ export type Attachment = {
   data: string;
   filename?: string;
   size?: number;
+  duration?: number;
+  previewUrl?: string;
+};
+
+export type VoiceRecordingState = {
+  status: "idle" | "requesting" | "recording" | "processing";
+  elapsedMs: number;
+  error?: string;
 };
 
 export type MessageRow = {

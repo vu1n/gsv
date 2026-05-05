@@ -5,10 +5,12 @@ import {
   decideHil,
   forkConversation,
   getHistory,
+  getViewer,
   listConversations,
   listConversationSegments,
   listProfiles,
   listWorkspaces,
+  readProcessMedia,
   readConversationSegment,
   sendMessage,
   spawnProcess,
@@ -35,6 +37,14 @@ export default class ChatBackend extends PackageBackendEntrypoint {
 
   async getHistory(args: unknown): Promise<unknown> {
     return getHistory(this.kernel, args);
+  }
+
+  async getViewer(): Promise<unknown> {
+    return getViewer(this);
+  }
+
+  async readProcessMedia(args: unknown): Promise<unknown> {
+    return readProcessMedia(this.kernel, args);
   }
 
   async listConversations(args: unknown): Promise<unknown> {

@@ -1,4 +1,5 @@
-import { useEffect, useRef } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
+import type { ComponentChildren } from "preact";
 import type {
   ArchiveState,
   Attachment,
@@ -11,6 +12,7 @@ import type {
   Profile,
   ThreadContext,
   ToolRow,
+  VoiceRecordingState,
   WorkspaceEntry,
 } from "./types";
 import {
@@ -18,15 +20,21 @@ import {
   BranchIcon,
   CheckIcon,
   CopyIcon,
+  FileIcon,
   GaugeIcon,
   HomeIcon,
+  ImageIcon,
   MessageIcon,
+  MicIcon,
   MoreIcon,
+  PauseIcon,
   PaperclipIcon,
+  PlayIcon,
   PlusIcon,
   RefreshIcon,
   SendIcon,
   StopIcon,
+  VideoIcon,
   XIcon,
 } from "./icons";
 import {
@@ -37,7 +45,6 @@ import {
   closeChatMenus,
   closeContainingChatMenu,
   copyTextToClipboard,
-  describeAttachment,
   describeHilSummary,
   describeToolCard,
   displayThreadLabel,
@@ -45,6 +52,8 @@ import {
   formatRelativeTime,
   formatTimestamp,
   flattenHistory,
+  formatAttachmentDuration,
+  formatAttachmentSize,
   inferToolSyscall,
   labelForRole,
   normalizeToolOutput,
@@ -270,8 +279,13 @@ export function ConversationBar(props: {
 
 export function ArchiveWorkspace(props: {
   archive: ArchiveState;
+  userLabel: string;
+  mediaSources: Record<string, string>;
+  mediaSourceErrors: Record<string, string>;
   onRefresh(): void;
   onSelect(segmentId: string): void;
+  onLoadMediaSource(media: unknown): void;
+  onRetryMediaSource(media: unknown): void;
 }) {
   const { archive } = props;
   const selected = archive.segments.find((segment) => segment.id === archive.selectedSegmentId) ?? null;
@@ -310,7 +324,15 @@ export function ArchiveWorkspace(props: {
             <>
               <div class="archive-count">{archive.messages.length}/{archive.messageCount}{archive.truncated ? " shown" : ""}</div>
               {archiveRows.map((row, index) => (
-                <ArchiveRow key={`${row.kind}:${row.kind === "message" ? row.messageId ?? index : row.callId}:${index}`} row={row} />
+                <ArchiveRow
+                  key={`${row.kind}:${row.kind === "message" ? row.messageId ?? index : row.callId}:${index}`}
+                  row={row}
+                  userLabel={props.userLabel}
+                  mediaSources={props.mediaSources}
+                  mediaSourceErrors={props.mediaSourceErrors}
+                  onLoadMediaSource={props.onLoadMediaSource}
+                  onRetryMediaSource={props.onRetryMediaSource}
+                />
               ))}
             </>
           ) : (
@@ -328,14 +350,19 @@ export function ArchiveWorkspace(props: {
 
 export function Transcript(props: {
   rows: LogRow[];
+  userLabel: string;
   pendingAssistant: PendingAssistantState;
   pendingHil: HilRequest | null;
   hilBusy: boolean;
   branchBusy: boolean;
   refNode: { current: HTMLDivElement | null };
+  mediaSources: Record<string, string>;
+  mediaSourceErrors: Record<string, string>;
   onCopy(text: string): void;
   onBranch(messageId: number): void;
   onHilDecision(requestId: string, decision: "approve" | "deny", remember?: boolean): void;
+  onLoadMediaSource(media: unknown): void;
+  onRetryMediaSource(media: unknown): void;
 }) {
   const hilRendered = props.pendingHil
     ? props.rows.some((row) => row.kind === "toolCall" && row.callId === props.pendingHil?.callId)
@@ -357,7 +384,20 @@ export function Transcript(props: {
           return <ToolCard key={`${row.callId}:${index}`} row={row} />;
         }
         const messageRow = row as MessageRow;
-        return <MessageBubble key={`${messageRow.messageId ?? index}:${messageRow.timestamp}`} row={messageRow} branchBusy={props.branchBusy} onCopy={props.onCopy} onBranch={props.onBranch} />;
+        return (
+          <MessageBubble
+            key={`${messageRow.messageId ?? index}:${messageRow.timestamp}`}
+            row={messageRow}
+            userLabel={props.userLabel}
+            branchBusy={props.branchBusy}
+            mediaSources={props.mediaSources}
+            mediaSourceErrors={props.mediaSourceErrors}
+            onCopy={props.onCopy}
+            onBranch={props.onBranch}
+            onLoadMediaSource={props.onLoadMediaSource}
+            onRetryMediaSource={props.onRetryMediaSource}
+          />
+        );
       })}
       {props.pendingHil && !hilRendered ? (
         <HilCard request={props.pendingHil} busy={props.hilBusy} onDecision={props.onHilDecision} />
@@ -372,12 +412,42 @@ export function Transcript(props: {
   );
 }
 
-function MessageBubble({ row, branchBusy, branchable = true, onCopy, onBranch }: { row: MessageRow; branchBusy: boolean; branchable?: boolean; onCopy(text: string): void; onBranch(messageId: number): void }) {
+function MessageBubble({
+  row,
+  userLabel,
+  branchBusy,
+  branchable = true,
+  mediaSources,
+  mediaSourceErrors,
+  onCopy,
+  onBranch,
+  onLoadMediaSource,
+  onRetryMediaSource,
+}: {
+  row: MessageRow;
+  userLabel: string;
+  branchBusy: boolean;
+  branchable?: boolean;
+  mediaSources: Record<string, string>;
+  mediaSourceErrors: Record<string, string>;
+  onCopy(text: string): void;
+  onBranch(messageId: number): void;
+  onLoadMediaSource(media: unknown): void;
+  onRetryMediaSource(media: unknown): void;
+}) {
   const thinking = row.thinking?.filter(Boolean) ?? [];
+  const media = row.media ?? [];
+  const voiceMedia = media.filter(isAudioMedia);
+  const otherMedia = media.filter((item) => !isAudioMedia(item));
+  const hasText = row.text.trim().length > 0;
+  const mediaTranscript = media.map(mediaTranscription).filter(Boolean).join("\n\n");
+  const copyValue = row.text.trim()
+    || mediaTranscript
+    || row.text;
   return (
     <article class={`message message-${row.role}`}>
       <div class="message-head">
-        <span>{labelForRole(row.role)}</span>
+        <span class="message-role-label">{labelForRole(row.role, userLabel)}</span>
         <span class="message-spacer" />
         <span>{formatTimestamp(row.timestamp)}</span>
         <details class="message-menu">
@@ -387,7 +457,7 @@ function MessageBubble({ row, branchBusy, branchable = true, onCopy, onBranch }:
             <MoreIcon />
           </summary>
           <div class="message-menu-popover">
-            <button type="button" class="menu-action" onClick={(event) => { closeContainingChatMenu(event.currentTarget); onCopy(row.text); }}>
+            <button type="button" class="menu-action" onClick={(event) => { closeContainingChatMenu(event.currentTarget); onCopy(copyValue); }}>
               <CopyIcon />
               <span>Copy</span>
             </button>
@@ -411,18 +481,402 @@ function MessageBubble({ row, branchBusy, branchable = true, onCopy, onBranch }:
           <div>{thinking.join("\n\n")}</div>
         </details>
       ) : null}
-      {row.role === "assistant" ? (
+      {hasText && row.role === "assistant" ? (
         <div class="message-body message-markdown" dangerouslySetInnerHTML={{ __html: renderMarkdownHtml(row.text) }} />
-      ) : (
+      ) : hasText ? (
         <pre class="message-body">{row.text}</pre>
-      )}
-      {row.media && row.media.length > 0 ? (
+      ) : null}
+      {voiceMedia.length > 0 ? (
+        <div class="voice-message-list">
+          {voiceMedia.map((item, index) => (
+            <VoiceMessage
+              key={`${mediaSourceKey(item) ?? "voice"}:${index}`}
+              media={item}
+              source={mediaSourceFor(item, mediaSources)}
+              error={mediaSourceErrorFor(item, mediaSourceErrors)}
+              onLoadMediaSource={onLoadMediaSource}
+              onRetryMediaSource={onRetryMediaSource}
+            />
+          ))}
+        </div>
+      ) : null}
+      {otherMedia.length > 0 ? (
         <div class="message-media">
-          {row.media.map((item, index) => <span key={index}>{describeAttachment(item)}</span>)}
+          {otherMedia.map((item, index) => (
+            <MediaAttachment
+              key={`${mediaSourceKey(item) ?? mediaFilename(item) ?? mediaKind(item)}:${index}`}
+              media={item}
+              source={mediaSourceFor(item, mediaSources)}
+              error={mediaSourceErrorFor(item, mediaSourceErrors)}
+              onLoadMediaSource={onLoadMediaSource}
+              onRetryMediaSource={onRetryMediaSource}
+            />
+          ))}
         </div>
       ) : null}
     </article>
   );
+}
+
+function MediaAttachment(props: {
+  media: unknown;
+  source: string | null;
+  error: string;
+  onLoadMediaSource(media: unknown): void;
+  onRetryMediaSource(media: unknown): void;
+}) {
+  const kind = mediaKind(props.media);
+  const key = mediaSourceKey(props.media);
+
+  useEffect(() => {
+    if (!props.source && !props.error && key) {
+      props.onLoadMediaSource(props.media);
+    }
+  }, [key, props.error, props.media, props.onLoadMediaSource, props.source]);
+
+  if (props.error) {
+    return (
+      <MediaLoadError
+        icon={mediaKindIcon(kind)}
+        label={`${mediaKindLabel(kind)} failed to load.`}
+        error={props.error}
+        onRetry={() => props.onRetryMediaSource(props.media)}
+      />
+    );
+  }
+
+  if (kind === "image") {
+    return <ImageAttachment media={props.media} source={props.source} />;
+  }
+  if (kind === "video") {
+    return <VideoAttachment media={props.media} source={props.source} />;
+  }
+  return <DocumentAttachment media={props.media} source={props.source} />;
+}
+
+function ImageAttachment(props: { media: unknown; source: string | null }) {
+  const filename = mediaFilename(props.media) || "Image";
+  if (!props.source) {
+    return <MediaLoading icon={<ImageIcon />} label="Loading image..." />;
+  }
+  return (
+    <figure class="media-preview media-preview-image">
+      <img src={props.source} alt={filename} loading="lazy" />
+      <figcaption>{filename}</figcaption>
+    </figure>
+  );
+}
+
+function VideoAttachment(props: { media: unknown; source: string | null }) {
+  const filename = mediaFilename(props.media) || "Video";
+  const duration = asNumber(asRecord(props.media)?.duration);
+  if (!props.source) {
+    return <MediaLoading icon={<VideoIcon />} label="Loading video..." />;
+  }
+  return (
+    <section class="media-preview media-preview-video">
+      <video controls preload="metadata" src={props.source} />
+      <div class="media-preview-caption">
+        <span>{filename}</span>
+        {formatAttachmentDuration(duration) ? <time>{formatAttachmentDuration(duration)}</time> : null}
+      </div>
+    </section>
+  );
+}
+
+function DocumentAttachment(props: { media: unknown; source: string | null }) {
+  const filename = mediaFilename(props.media) || "Attachment";
+  const mimeType = mediaMimeType(props.media);
+  const size = asNumber(asRecord(props.media)?.size);
+  const sizeLabel = formatAttachmentSize(size);
+  const label = [mimeType, sizeLabel].filter(Boolean).join(" - ");
+  const content = (
+    <>
+      <span class="media-file-icon" aria-hidden="true"><FileIcon /></span>
+      <span class="media-file-main">
+        <span>{filename}</span>
+        {label ? <span>{label}</span> : null}
+      </span>
+    </>
+  );
+  if (props.source) {
+    return (
+      <a class="media-file" href={props.source} download={filename} target="_blank" rel="noreferrer">
+        {content}
+      </a>
+    );
+  }
+  return (
+    <div class="media-file is-loading">
+      {content}
+    </div>
+  );
+}
+
+function MediaLoading(props: { icon: ComponentChildren; label: string }) {
+  return (
+    <div class="media-loading">
+      <span aria-hidden="true">{props.icon}</span>
+      <span>{props.label}</span>
+    </div>
+  );
+}
+
+function MediaLoadError(props: { icon: ComponentChildren; label: string; error: string; onRetry(): void }) {
+  return (
+    <div class="media-loading is-error" title={props.error}>
+      <span aria-hidden="true">{props.icon}</span>
+      <span>{props.label}</span>
+      <button type="button" onClick={props.onRetry}>Retry</button>
+    </div>
+  );
+}
+
+function VoiceMessage(props: {
+  media: unknown;
+  source: string | null;
+  error: string;
+  onLoadMediaSource(media: unknown): void;
+  onRetryMediaSource(media: unknown): void;
+}) {
+  const key = mediaSourceKey(props.media);
+  const record = asRecord(props.media);
+  const duration = asNumber(record?.duration);
+  const transcription = asString(record?.transcription)?.trim() || "";
+
+  useEffect(() => {
+    if (!props.source && !props.error && key) {
+      props.onLoadMediaSource(props.media);
+    }
+  }, [key, props.error, props.media, props.onLoadMediaSource, props.source]);
+
+  return (
+    <section class="voice-message">
+      <div class="voice-message-player">
+        <span class="voice-message-icon" aria-hidden="true"><MicIcon /></span>
+        <div class="voice-message-main">
+          {props.error ? (
+            <div class="voice-message-loading is-error" title={props.error}>
+              <span>Audio failed to load.</span>
+              <button type="button" onClick={() => props.onRetryMediaSource(props.media)}>Retry</button>
+            </div>
+          ) : props.source ? (
+            <VoiceAudioPlayer source={props.source} duration={duration} />
+          ) : (
+            <div class="voice-message-loading">Loading audio...</div>
+          )}
+        </div>
+      </div>
+      {transcription ? (
+        <details class="voice-transcript">
+          <summary>Transcription</summary>
+          <p>{transcription}</p>
+        </details>
+      ) : null}
+    </section>
+  );
+}
+
+function VoiceAudioPlayer(props: { source: string; duration: number | null }) {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(() => normalizeAudioTime(props.duration));
+  const [isPlaying, setIsPlaying] = useState(false);
+  const max = duration > 0 ? duration : Math.max(currentTime, 1);
+  const progress = max > 0 ? Math.min(100, Math.max(0, (currentTime / max) * 100)) : 0;
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) {
+      return;
+    }
+
+    const syncDuration = () => {
+      const nextDuration = normalizeAudioTime(audio.duration) || normalizeAudioTime(props.duration);
+      setDuration(nextDuration);
+    };
+    const syncTime = () => {
+      setCurrentTime(normalizeAudioTime(audio.currentTime));
+    };
+    const syncPlaying = () => {
+      setIsPlaying(!audio.paused && !audio.ended);
+    };
+
+    setCurrentTime(0);
+    setIsPlaying(false);
+    syncDuration();
+    audio.addEventListener("loadedmetadata", syncDuration);
+    audio.addEventListener("durationchange", syncDuration);
+    audio.addEventListener("timeupdate", syncTime);
+    audio.addEventListener("play", syncPlaying);
+    audio.addEventListener("pause", syncPlaying);
+    audio.addEventListener("ended", syncPlaying);
+
+    return () => {
+      audio.removeEventListener("loadedmetadata", syncDuration);
+      audio.removeEventListener("durationchange", syncDuration);
+      audio.removeEventListener("timeupdate", syncTime);
+      audio.removeEventListener("play", syncPlaying);
+      audio.removeEventListener("pause", syncPlaying);
+      audio.removeEventListener("ended", syncPlaying);
+    };
+  }, [props.duration, props.source]);
+
+  async function togglePlayback(): Promise<void> {
+    const audio = audioRef.current;
+    if (!audio) {
+      return;
+    }
+    if (audio.paused || audio.ended) {
+      try {
+        await audio.play();
+      } catch {
+        setIsPlaying(false);
+      }
+      return;
+    }
+    audio.pause();
+  }
+
+  function seek(event: Event): void {
+    const audio = audioRef.current;
+    if (!audio) {
+      return;
+    }
+    const input = event.currentTarget as HTMLInputElement;
+    const nextTime = Number(input.value);
+    if (!Number.isFinite(nextTime)) {
+      return;
+    }
+    audio.currentTime = nextTime;
+    setCurrentTime(nextTime);
+  }
+
+  return (
+    <div class="voice-audio-player">
+      <audio class="voice-audio-native" ref={audioRef} preload="metadata" src={props.source} />
+      <button
+        type="button"
+        class="voice-audio-button"
+        title={isPlaying ? "Pause voice message" : "Play voice message"}
+        aria-label={isPlaying ? "Pause voice message" : "Play voice message"}
+        onClick={() => void togglePlayback()}
+      >
+        {isPlaying ? <PauseIcon /> : <PlayIcon />}
+      </button>
+      <input
+        class="voice-audio-range"
+        type="range"
+        min="0"
+        max={String(max)}
+        step="0.01"
+        value={String(Math.min(currentTime, max))}
+        aria-label="Voice message position"
+        style={{ background: `linear-gradient(to right, var(--blue) 0%, var(--blue) ${progress}%, rgba(31, 92, 153, 0.14) ${progress}%, rgba(31, 92, 153, 0.14) 100%)` }}
+        onInput={seek}
+      />
+      <span class="voice-audio-time">{formatAudioPlayerTime(currentTime)} / {formatAudioPlayerTime(duration)}</span>
+    </div>
+  );
+}
+
+function normalizeAudioTime(value: number | null | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function formatAudioPlayerTime(value: number): string {
+  const totalSeconds = Math.floor(normalizeAudioTime(value));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
+function isAudioMedia(media: unknown): boolean {
+  return mediaKind(media) === "audio";
+}
+
+function mediaKind(media: unknown): string {
+  const record = asRecord(media);
+  const type = asString(record?.type);
+  const mimeType = asString(record?.mimeType);
+  if (type === "image" || type === "audio" || type === "video" || type === "document") {
+    return type;
+  }
+  const normalizedMimeType = mimeType?.toLowerCase() || "";
+  if (normalizedMimeType.startsWith("image/")) return "image";
+  if (normalizedMimeType.startsWith("audio/")) return "audio";
+  if (normalizedMimeType.startsWith("video/")) return "video";
+  return "document";
+}
+
+function mediaKindIcon(kind: string): ComponentChildren {
+  if (kind === "image") return <ImageIcon />;
+  if (kind === "audio") return <MicIcon />;
+  if (kind === "video") return <VideoIcon />;
+  return <FileIcon />;
+}
+
+function mediaKindLabel(kind: string): string {
+  if (kind === "image") return "Image";
+  if (kind === "audio") return "Audio";
+  if (kind === "video") return "Video";
+  return "Attachment";
+}
+
+function mediaSourceFor(media: unknown, sources: Record<string, string>): string | null {
+  const record = asRecord(media);
+  const previewUrl = asString(record?.previewUrl);
+  if (previewUrl) return safeMediaSourceUrl(previewUrl, ["blob:", "data:", "https:", "http:"]);
+  const url = asString(record?.url);
+  if (url) return safeMediaSourceUrl(url, ["https:", "http:"]);
+  const data = asString(record?.data);
+  if (data) {
+    const dataUrl = data.startsWith("data:")
+      ? data
+      : `data:${asString(record?.mimeType) || "application/octet-stream"};base64,${data}`;
+    return safeMediaSourceUrl(dataUrl, ["data:"]);
+  }
+  const key = mediaSourceKey(media);
+  return key ? sources[key] ?? null : null;
+}
+
+function safeMediaSourceUrl(value: string, allowedProtocols: string[]): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const base = typeof window !== "undefined" ? window.location.href : "https://gsv.local/";
+    const url = new URL(trimmed, base);
+    return allowedProtocols.includes(url.protocol) ? trimmed : null;
+  } catch {
+    return null;
+  }
+}
+
+function mediaSourceKey(media: unknown): string | null {
+  const record = asRecord(media);
+  return asString(record?.key);
+}
+
+function mediaSourceErrorFor(media: unknown, errors: Record<string, string>): string {
+  const key = mediaSourceKey(media);
+  return key ? errors[key] || "" : "";
+}
+
+function mediaTranscription(media: unknown): string {
+  const record = asRecord(media);
+  return asString(record?.transcription)?.trim() || "";
+}
+
+function mediaFilename(media: unknown): string | null {
+  const record = asRecord(media);
+  return asString(record?.filename);
+}
+
+function mediaMimeType(media: unknown): string | null {
+  const record = asRecord(media);
+  return asString(record?.mimeType);
 }
 
 function ToolCard({ row }: { row: ToolRow }) {
@@ -674,14 +1128,24 @@ export function Composer(props: {
   canSend: boolean;
   canStop: boolean;
   stopBusy: boolean;
+  voice: VoiceRecordingState;
+  canRecord: boolean;
   onValueChange(value: string): void;
   onSubmit(): void;
   onStop(): void;
   onFiles(files: FileList | null): void;
   onRemoveAttachment(index: number): void;
+  onStartVoice(): void;
+  onStopVoice(): void;
+  onCancelVoice(): void;
+  onClearVoiceError(): void;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const actionLabel = props.canStop ? (props.stopBusy ? "Stopping..." : "Stop") : "Send";
+  const voiceActive = props.voice.status !== "idle";
+  const showVoicePanel = voiceActive || Boolean(props.voice.error);
+  const voiceLabel = labelForVoiceState(props.voice);
+  const voiceElapsed = formatAttachmentDuration(props.voice.elapsedMs / 1000) || "0:00";
   useEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) {
@@ -698,11 +1162,47 @@ export function Composer(props: {
       {props.attachments.length > 0 ? (
         <div class="attachment-list">
           {props.attachments.map((attachment, index) => (
-            <span class="attachment-chip" key={`${attachment.filename ?? "file"}:${index}`}>
-              <span>{attachment.filename || "attachment"}</span>
-              <button type="button" aria-label="Remove attachment" onClick={() => props.onRemoveAttachment(index)}>x</button>
-            </span>
+            attachment.type === "audio" ? (
+              <DraftVoiceAttachment
+                key={`${attachment.filename ?? "voice"}:${index}`}
+                attachment={attachment}
+                onRemove={() => props.onRemoveAttachment(index)}
+              />
+            ) : (
+              <div class="attachment-chip" key={`${attachment.filename ?? "file"}:${index}`}>
+                <span class="attachment-name">{attachment.filename || "attachment"}</span>
+                {attachment.duration ? <span class="attachment-duration">{formatAttachmentDuration(attachment.duration)}</span> : null}
+                <button type="button" aria-label="Remove attachment" title="Remove attachment" onClick={() => props.onRemoveAttachment(index)}>x</button>
+              </div>
+            )
           ))}
+        </div>
+      ) : null}
+      {showVoicePanel ? (
+        <div class={"voice-panel is-" + props.voice.status}>
+          <div class="voice-state">
+            <span class="voice-dot" aria-hidden="true" />
+            <span>{voiceLabel}</span>
+            {props.voice.status === "idle" && props.voice.error ? null : <time>{voiceElapsed}</time>}
+          </div>
+          {props.voice.error ? <span class="voice-error">{props.voice.error}</span> : null}
+          <div class="voice-actions">
+            {props.voice.status === "recording" ? (
+              <button type="button" class="icon-button small" title="Finish recording" aria-label="Finish recording" onClick={props.onStopVoice}>
+                <StopIcon />
+              </button>
+            ) : null}
+            {props.voice.status === "requesting" || props.voice.status === "recording" ? (
+              <button type="button" class="icon-button small" title="Cancel recording" aria-label="Cancel recording" onClick={props.onCancelVoice}>
+                <XIcon />
+              </button>
+            ) : null}
+            {props.voice.status === "idle" && props.voice.error ? (
+              <button type="button" class="icon-button small" title="Dismiss" aria-label="Dismiss voice error" onClick={props.onClearVoiceError}>
+                <XIcon />
+              </button>
+            ) : null}
+          </div>
         </div>
       ) : null}
       <div class="composer-shell">
@@ -714,6 +1214,16 @@ export function Composer(props: {
             input.value = "";
           }} />
         </label>
+        <button
+          class={"icon-button voice" + (props.voice.status === "recording" ? " is-recording" : "")}
+          type="button"
+          title={props.voice.status === "recording" ? "Recording voice" : "Record voice"}
+          aria-label={props.voice.status === "recording" ? "Recording voice" : "Record voice"}
+          disabled={props.disabled || !props.canRecord || voiceActive}
+          onClick={props.onStartVoice}
+        >
+          <MicIcon />
+        </button>
         <textarea
           ref={textareaRef}
           rows={1}
@@ -724,7 +1234,9 @@ export function Composer(props: {
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
-              props.onSubmit();
+              if (props.canSend) {
+                props.onSubmit();
+              }
             }
           }}
         />
@@ -741,6 +1253,33 @@ export function Composer(props: {
       </div>
     </form>
   );
+}
+
+function DraftVoiceAttachment(props: { attachment: Attachment; onRemove(): void }) {
+  const source = props.attachment.previewUrl || props.attachment.data;
+  return (
+    <div class="attachment-chip is-audio" title={props.attachment.filename || "Voice recording"}>
+      <span class="voice-message-icon" aria-hidden="true"><MicIcon /></span>
+      <div class="attachment-voice-main">
+        {source ? (
+          <VoiceAudioPlayer source={source} duration={props.attachment.duration ?? null} />
+        ) : (
+          <div class="voice-message-loading">Loading audio...</div>
+        )}
+      </div>
+      <button type="button" aria-label="Remove voice recording" title="Remove voice recording" onClick={props.onRemove}>
+        <XIcon />
+      </button>
+    </div>
+  );
+}
+
+function labelForVoiceState(state: VoiceRecordingState): string {
+  if (state.status === "requesting") return "Microphone";
+  if (state.status === "recording") return "Recording";
+  if (state.status === "processing") return "Preparing voice";
+  if (state.error) return "Voice input";
+  return "Voice input";
 }
 
 export function ContextMeter({ state }: { state: ContextState | null }) {
@@ -789,9 +1328,36 @@ export function CompactDialog(props: {
   );
 }
 
-function ArchiveRow({ row }: { row: LogRow }) {
+function ArchiveRow({
+  row,
+  userLabel,
+  mediaSources,
+  mediaSourceErrors,
+  onLoadMediaSource,
+  onRetryMediaSource,
+}: {
+  row: LogRow;
+  userLabel: string;
+  mediaSources: Record<string, string>;
+  mediaSourceErrors: Record<string, string>;
+  onLoadMediaSource(media: unknown): void;
+  onRetryMediaSource(media: unknown): void;
+}) {
   if (row.kind === "toolCall" || row.kind === "toolResult") {
     return <ToolCard row={row} />;
   }
-  return <MessageBubble row={row as MessageRow} branchBusy={false} branchable={false} onCopy={(text) => { void copyTextToClipboard(text).catch(() => {}); }} onBranch={() => {}} />;
+  return (
+    <MessageBubble
+      row={row as MessageRow}
+      userLabel={userLabel}
+      branchBusy={false}
+      branchable={false}
+      mediaSources={mediaSources}
+      mediaSourceErrors={mediaSourceErrors}
+      onCopy={(text) => { void copyTextToClipboard(text).catch(() => {}); }}
+      onBranch={() => {}}
+      onLoadMediaSource={onLoadMediaSource}
+      onRetryMediaSource={onRetryMediaSource}
+    />
+  );
 }

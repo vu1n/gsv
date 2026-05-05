@@ -23,6 +23,7 @@ export const PROC_IPC_DELIVER = "proc.ipc.deliver";
 export const PROC_ABORT = "proc.abort";
 export const PROC_HIL = "proc.hil";
 export const PROC_HISTORY = "proc.history";
+export const PROC_MEDIA_READ = "proc.media.read";
 export const PROC_CONVERSATION_OPEN = "proc.conversation.open";
 export const PROC_CONVERSATION_LIST = "proc.conversation.list";
 export const PROC_CONVERSATION_GET = "proc.conversation.get";

@@ -237,6 +237,7 @@ async function dispatchNative(
       case "proc.hil":
       case "proc.kill":
       case "proc.history":
+      case "proc.media.read":
       case "proc.conversation.open":
       case "proc.conversation.list":
       case "proc.conversation.get":

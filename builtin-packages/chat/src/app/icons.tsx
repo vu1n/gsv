@@ -5,7 +5,7 @@ export function PlusIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14" /><path d="M5 12h14" /></svg>;
 }
 export function RefreshIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0 2 5.5" /><path d="M20 4v7h-7" /></svg>;
+  return <svg class="refresh-icon" viewBox="0 0 32 32" aria-hidden="true"><path d="M20.7 5.9c-.5-.2-1.1 0-1.3.5s0 1.1.5 1.3C23.6 9.4 26 13 26 17c0 5.5-4.5 10-10 10S6 22.5 6 17 10.5 7 16 7c.4 0 .8-.3.9-.7s0-.9-.3-1.1l-4-3c-.4-.3-1.1-.2-1.4.2s-.2 1.1.2 1.4l2 1.5C8 6.5 4 11.3 4 17c0 6.6 5.4 12 12 12s12-5.4 12-12c0-4.8-2.9-9.2-7.3-11.1" /></svg>;
 }
 export function MoreIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h.01" /><path d="M12 12h.01" /><path d="M19 12h.01" /></svg>;
@@ -15,6 +15,15 @@ export function CopyIcon() {
 }
 export function MessageIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H9l-5 4v-4H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z" /></svg>;
+}
+export function FileIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l5 5v13H7z" /><path d="M14 3v5h5" /></svg>;
+}
+export function ImageIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2" /><path d="m7 16 4-4 3 3 2-2 2 3" /><path d="M8.5 9.5h.01" /></svg>;
+}
+export function VideoIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="6" width="12" height="12" rx="2" /><path d="m16 10 4-2v8l-4-2" /></svg>;
 }
 export function ArchiveIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16" /><path d="M6 7v12a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V7" /><path d="M8 4h8l2 3H6z" /><path d="M9 11h6" /></svg>;
@@ -34,6 +43,12 @@ export function TerminalIcon() {
 export function StopIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5" /></svg>;
 }
+export function PlayIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>;
+}
+export function PauseIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14" /><path d="M16 5v14" /></svg>;
+}
 export function SendIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12 20 4l-4 16-4-7-8-1z" /><path d="m12 13 8-9" /></svg>;
 }
@@ -45,6 +60,9 @@ export function BranchIcon() {
 }
 export function PaperclipIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.44 11.05 12 20.5a6 6 0 0 1-8.49-8.49l9.19-9.2a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 1 1-2.82-2.83l8.49-8.48" /></svg>;
+}
+export function MicIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z" /><path d="M5 11a7 7 0 0 0 14 0" /><path d="M12 18v3" /><path d="M8 21h8" /></svg>;
 }
 export function CheckIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.2 4.2L19 7" /></svg>;

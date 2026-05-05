@@ -1,5 +1,11 @@
+import type { PackageViewerBinding } from "@gsv/package/backend";
+
 type KernelClient = {
   request(call: string, args: Record<string, unknown>): Promise<any>;
+};
+
+type ViewerRuntime = {
+  viewer?: PackageViewerBinding;
 };
 
 type AppBinding = {
@@ -83,6 +89,20 @@ export async function getHistory(kernel: KernelClient, input: unknown) {
     ...(pid ? { pid } : {}),
     ...(conversationId ? { conversationId } : {}),
     ...(typeof offset === "number" ? { offset } : {}),
+  });
+}
+
+export async function readProcessMedia(kernel: KernelClient, input: unknown) {
+  const args = normalizeArgs(input);
+  const pid = normalizePid(args.pid);
+  const key = typeof args.key === "string" ? args.key.trim() : "";
+  const mimeType = typeof args.mimeType === "string" && args.mimeType.trim()
+    ? args.mimeType.trim()
+    : undefined;
+  return kernel.request("proc.media.read", {
+    ...(pid ? { pid } : {}),
+    key,
+    ...(mimeType ? { mimeType } : {}),
   });
 }
 
@@ -225,4 +245,15 @@ export async function unwatchProcessSignals(kernel: KernelClient, app: AppBindin
     removed += count;
   }));
   return { pid, removed };
+}
+
+export function getViewer(runtime: ViewerRuntime) {
+  const uid = typeof runtime.viewer?.uid === "number" ? runtime.viewer.uid : 0;
+  const username = typeof runtime.viewer?.username === "string" && runtime.viewer.username.trim().length > 0
+    ? runtime.viewer.username.trim()
+    : uid === 0 ? "root" : "user";
+  return {
+    uid,
+    username,
+  };
 }

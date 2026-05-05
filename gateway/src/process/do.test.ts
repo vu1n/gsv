@@ -408,9 +408,10 @@ describe("Process DO — mechanical", () => {
       });
     });
 
-    it("stores process-scoped media and hydrates image context blocks", async () => {
+    it("stores process-scoped media, reads it back, and hydrates image context blocks", async () => {
       const pid = "mech-send-media";
       const stub = await initProcess(pid, ROOT_IDENTITY);
+      let mediaKey = "";
 
       const res = (await stub.recvFrame(
         makeReq("proc.send", {
@@ -437,6 +438,7 @@ describe("Process DO — mechanical", () => {
         const media = JSON.parse(record.media!);
         expect(media).toHaveLength(1);
         expect(media[0].key).toContain(`/0/${pid}/`);
+        mediaKey = media[0].key;
 
         const stored = await env.STORAGE.get(media[0].key);
         expect(stored).not.toBeNull();
@@ -448,6 +450,17 @@ describe("Process DO — mechanical", () => {
         expect(user.content[1].type).toBe("image");
         expect(user.content[1].mimeType).toBe("image/png");
         expect(user.content[1].data).toBe("AQID");
+      });
+
+      const read = (await stub.recvFrame(
+        makeReq("proc.media.read", { key: mediaKey, mimeType: "image/png" }),
+      )) as ResponseOkFrame;
+      expect(read.ok).toBe(true);
+      expect(read.data).toMatchObject({
+        ok: true,
+        key: mediaKey,
+        mimeType: "image/png",
+        dataUrl: "data:image/png;base64,AQID",
       });
     });
   });

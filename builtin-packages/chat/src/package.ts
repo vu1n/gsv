@@ -17,6 +17,7 @@ export default definePackage({
         "proc.abort",
         "proc.hil",
         "proc.history",
+        "proc.media.read",
         "proc.conversation.compact",
         "proc.conversation.fork",
         "proc.conversation.list",

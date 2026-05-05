@@ -238,6 +238,22 @@ export type ProcHistoryResult =
     }
   | { ok: false; error: string };
 
+export type ProcMediaReadArgs = {
+  pid?: string;
+  key: string;
+  mimeType?: string;
+};
+
+export type ProcMediaReadResult =
+  | {
+      ok: true;
+      key: string;
+      mimeType: string;
+      size: number;
+      dataUrl: string;
+    }
+  | { ok: false; error: string };
+
 export type ProcConversationStatus = "open" | "closed";
 
 export type ProcConversation = {

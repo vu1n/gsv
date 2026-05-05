@@ -77,7 +77,9 @@ function flattenHistory(messages: unknown[]): LogRow[] {
     const role = record?.role === "user" ? "user" : record?.role === "assistant" ? "assistant" : "system";
     const contentRecord = asRecord(record?.content);
     const media = Array.isArray(contentRecord?.media) ? contentRecord.media : [];
-    const text = contentRecord ? (asString(contentRecord.text) || formatMessageContent(record?.content)) : formatMessageContent(record?.content);
+    const text = contentRecord && "text" in contentRecord
+      ? asString(contentRecord.text) ?? ""
+      : formatMessageContent(record?.content);
     rows.push({ kind: "message", role, text, media, timestamp, messageId });
   }
   return rows.length > 0 ? rows : systemRows("No messages yet. Send your first prompt.");
@@ -259,12 +261,7 @@ function extractThinkingBlocks(value: unknown): string[] {
 }
 
 async function readAttachmentFile(file: File): Promise<Attachment> {
-  const data = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(reader.error || new Error("Failed to read file"));
-    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
-    reader.readAsDataURL(file);
-  });
+  const data = await readBlobAsDataUrl(file);
   return {
     type: inferAttachmentKind(file.type, file.name),
     mimeType: file.type || "application/octet-stream",
@@ -272,6 +269,31 @@ async function readAttachmentFile(file: File): Promise<Attachment> {
     filename: file.name || undefined,
     size: typeof file.size === "number" ? file.size : undefined,
   };
+}
+
+async function readAttachmentBlob(blob: Blob, filename: string, duration?: number): Promise<Attachment> {
+  const data = await readBlobAsDataUrl(blob);
+  const roundedDuration = typeof duration === "number" && Number.isFinite(duration) && duration > 0
+    ? Math.round(duration * 10) / 10
+    : undefined;
+  return {
+    type: inferAttachmentKind(blob.type, filename),
+    mimeType: blob.type || "application/octet-stream",
+    data,
+    filename: filename || undefined,
+    size: typeof blob.size === "number" ? blob.size : undefined,
+    duration: roundedDuration,
+  };
+}
+
+async function readBlobAsDataUrl(blob: Blob): Promise<string> {
+  const data = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error || new Error("Failed to read file"));
+    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
+    reader.readAsDataURL(blob);
+  });
+  return data;
 }
 
 function inferAttachmentKind(mimeType: string, filename: string): string {
@@ -510,8 +532,8 @@ function deriveThreadLabel(message: string): string | undefined {
   return firstLine.length > 72 ? firstLine.slice(0, 69) + "..." : firstLine;
 }
 
-function labelForRole(role: string): string {
-  if (role === "user") return "You";
+function labelForRole(role: string, userLabel = "You"): string {
+  if (role === "user") return userLabel.trim() || "You";
   if (role === "assistant") return "Assistant";
   return "System";
 }
@@ -563,11 +585,14 @@ function describeAttachment(value: unknown): string {
   const filename = asString(record.filename);
   const mimeType = asString(record.mimeType);
   const size = asNumber(record.size);
+  const duration = asNumber(record.duration);
   const parts = ["Attached " + type];
   if (filename) parts.push(`"${filename}"`);
   if (mimeType) parts.push(`[${mimeType}]`);
   const sizeLabel = formatAttachmentSize(size);
   if (sizeLabel) parts.push(sizeLabel);
+  const durationLabel = formatAttachmentDuration(duration);
+  if (durationLabel) parts.push(durationLabel);
   return parts.join(" ");
 }
 
@@ -576,6 +601,14 @@ function formatAttachmentSize(size: number | null): string {
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatAttachmentDuration(duration: number | null): string {
+  if (!duration || duration <= 0 || !Number.isFinite(duration)) return "";
+  const totalSeconds = Math.max(1, Math.round(duration));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
 function inferToolSyscall(toolName: string, syscall?: string | null): string | null {
@@ -845,6 +878,8 @@ export {
   draftConversationTitle,
   fallbackProfiles,
   flattenHistory,
+  formatAttachmentDuration,
+  formatAttachmentSize,
   formatContextPressure,
   formatError,
   formatMessageContent,
@@ -868,6 +903,7 @@ export {
   normalizeToolOutput,
   normalizeWorkspace,
   prettyJson,
+  readAttachmentBlob,
   readAttachmentFile,
   renderMarkdownHtml,
   safeText,

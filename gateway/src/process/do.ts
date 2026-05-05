@@ -39,6 +39,8 @@ import type {
   ProcHistoryArgs,
   ProcHistoryResult,
   ProcHistoryMessage,
+  ProcMediaReadArgs,
+  ProcMediaReadResult,
   ProcConversation,
   ProcConversationOpenArgs,
   ProcConversationOpenResult,
@@ -110,6 +112,7 @@ import {
   deleteProcessMedia,
   describeStoredProcessMedia,
   parseStoredProcessMedia,
+  processMediaPrefix,
   storeIncomingProcessMedia,
 } from "./media";
 import {
@@ -180,6 +183,7 @@ const CHECKPOINTED_MESSAGE_COUNT_KEY = "checkpointedMessageCount";
 const TOOL_APPROVAL_OVERRIDES_KEY = "toolApprovalOverrides";
 const TEXT_ENCODER = new TextEncoder();
 const PROCESS_MEDIA_CACHE_LIMIT = 32;
+const MAX_PROCESS_MEDIA_READ_BYTES = 25 * 1024 * 1024;
 const CODE_MODE_NESTED_SYSCALL_TIMEOUT_MS = 55_000;
 const CODE_MODE_APPROVAL_TIMEOUT_MS = 55_000;
 const COMPACTION_SUMMARY_WINDOW_CHARS = 24_000;
@@ -679,6 +683,11 @@ export class Process extends Host<Env> {
             frame.args as ProcHistoryArgs,
           );
           break;
+        case "proc.media.read":
+          data = await this.handleProcMediaRead(
+            frame.args as ProcMediaReadArgs,
+          );
+          break;
         case "proc.conversation.open":
           data = this.handleConversationOpen(
             (frame.args ?? {}) as ProcConversationOpenArgs,
@@ -778,6 +787,7 @@ export class Process extends Host<Env> {
       this.identity.uid,
       this.pid,
       args.media,
+      { ai: this.env.AI },
     );
 
     if (this.currentRun) {
@@ -1140,6 +1150,38 @@ export class Process extends Host<Env> {
       truncated: (args.offset ?? 0) + messages.length < total,
       pendingHil: this.toProcHilRequest(this.store.getPendingHil()),
       context: await this.getContextStateForHistory(conversationId),
+    };
+  }
+
+  private async handleProcMediaRead(args: ProcMediaReadArgs): Promise<ProcMediaReadResult> {
+    const key = typeof args.key === "string" ? args.key.trim() : "";
+    if (!key) {
+      return { ok: false, error: "proc.media.read requires key" };
+    }
+
+    const prefix = processMediaPrefix(this.identity.uid, this.pid);
+    if (!key.startsWith(prefix)) {
+      return { ok: false, error: "media key is outside this process" };
+    }
+
+    const object = await this.env.STORAGE.get(key);
+    if (!object) {
+      return { ok: false, error: "media not found" };
+    }
+    if (object.size > MAX_PROCESS_MEDIA_READ_BYTES) {
+      return { ok: false, error: "media is too large to read inline" };
+    }
+
+    const mimeType = object.httpMetadata?.contentType
+      || (typeof args.mimeType === "string" && args.mimeType.trim() ? args.mimeType.trim() : "application/octet-stream");
+    const data = uint8ArrayToBase64(new Uint8Array(await object.arrayBuffer()));
+
+    return {
+      ok: true,
+      key,
+      mimeType,
+      size: object.size,
+      dataUrl: `data:${mimeType};base64,${data}`,
     };
   }
 
