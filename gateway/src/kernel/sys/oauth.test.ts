@@ -116,7 +116,12 @@ describe("sys.oauth handlers", () => {
     expect(url.searchParams.get("redirect_uri")).toBe("https://gsv.example.com/oauth/callback");
     expect(url.searchParams.get("code_challenge_method")).toBe("S256");
     expect(url.searchParams.get("code_challenge")).toBeTruthy();
-    expect(url.searchParams.get("state")).toBeTruthy();
+    const state = url.searchParams.get("state");
+    expect(state).toBeTruthy();
+    // MCP OAuth callbacks are claimed only for nonce.serverId states. Generic
+    // OAuth state must stay opaque so shared /oauth/callback routing falls
+    // through to sys.oauth instead of the MCP callback handler.
+    expect(state).not.toContain(".");
     expect(url.searchParams.get("prompt")).toBe("consent");
     expect(oauth.createFlow).toHaveBeenCalledWith(expect.objectContaining({
       uid: 1000,
