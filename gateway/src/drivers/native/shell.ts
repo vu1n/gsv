@@ -62,6 +62,13 @@ import {
   handleSchedulerUpdate,
 } from "../../kernel/scheduler";
 import {
+  handleSysMcpAdd,
+  handleSysMcpCall,
+  handleSysMcpList,
+  handleSysMcpRefresh,
+  handleSysMcpRemove,
+} from "../../kernel/sys/mcp";
+import {
   packageRouteBase,
   packageScopeEquals,
   visiblePackageScopesForActor,
@@ -76,12 +83,24 @@ import {
 } from "../../kernel/skills";
 import type { ShellExecArgs, ShellExecResult } from "../../syscalls/shell";
 import type { SyscallName } from "../../syscalls";
-import type { ProcessIdentity } from "@gsv/protocol/syscalls/system";
+import type {
+  ProcessIdentity,
+  SysMcpCallResult,
+  SysMcpServerSummary,
+  SysMcpTransportType,
+} from "@gsv/protocol/syscalls/system";
 import type { Frame } from "../../protocol/frames";
 import { renderManualPage } from "./man-pages";
 import { buildNotifyCommands } from "./notify-shell";
 import { sendFrameToProcess } from "../../shared/utils";
-import { CODEMODE_RUN } from "../../syscalls/constants";
+import {
+  CODEMODE_RUN,
+  SYS_MCP_ADD,
+  SYS_MCP_CALL,
+  SYS_MCP_LIST,
+  SYS_MCP_REFRESH,
+  SYS_MCP_REMOVE,
+} from "../../syscalls/constants";
 import type { CodeModeRunResult } from "../../syscalls/codemode";
 import type { SchedulerAddArgs, ScheduleExpression, ScheduleTarget } from "../../syscalls/scheduler";
 import type { AiContextProfile } from "../../syscalls/ai";
@@ -868,6 +887,257 @@ function codeModeUsage(): string {
   ].join("\n");
 }
 
+type McpAddCommand = {
+  name: string;
+  url: string;
+  transport: SysMcpTransportType;
+  callbackHost?: string;
+  headers: Record<string, string>;
+  json: boolean;
+};
+
+type McpServerIdCommand = {
+  serverId: string;
+  json: boolean;
+};
+
+type McpCallCommand = {
+  serverId: string;
+  name: string;
+  args: Record<string, unknown>;
+  json: boolean;
+};
+
+function parseMcpJsonOptions(args: string[]): { json: boolean } {
+  const options = { json: false };
+  for (const arg of args) {
+    if (arg === "--json") {
+      options.json = true;
+      continue;
+    }
+    throw new Error(`unknown option: ${arg}`);
+  }
+  return options;
+}
+
+function parseMcpAddCommand(args: string[]): McpAddCommand {
+  const options: McpAddCommand = {
+    name: "",
+    url: "",
+    transport: "auto",
+    headers: {},
+    json: false,
+  };
+  const positional: string[] = [];
+
+  for (let index = 0; index < args.length; index += 1) {
+    const current = args[index];
+    if (current === "--json") {
+      options.json = true;
+      continue;
+    }
+    if (current === "--transport") {
+      index += 1;
+      options.transport = parseMcpTransport(requireOptionValue(args[index], current));
+      continue;
+    }
+    if (current === "--callback-host") {
+      index += 1;
+      options.callbackHost = requireOptionValue(args[index], current);
+      continue;
+    }
+    if (current === "--header") {
+      index += 1;
+      const { key, value } = parseKeyValue(requireOptionValue(args[index], current), "--header");
+      options.headers[key] = value;
+      continue;
+    }
+    positional.push(current);
+  }
+
+  if (positional.length !== 2) {
+    throw new Error("usage: mcp add <name> <url> [--transport auto|streamable-http|sse] [--callback-host origin] [--header key=value] [--json]");
+  }
+  options.name = positional[0];
+  options.url = positional[1];
+  return options;
+}
+
+function parseMcpServerIdCommand(args: string[], command: string): McpServerIdCommand {
+  const options = { serverId: "", json: false };
+  const positional: string[] = [];
+  for (const arg of args) {
+    if (arg === "--json") {
+      options.json = true;
+      continue;
+    }
+    positional.push(arg);
+  }
+  if (positional.length !== 1) {
+    throw new Error(`usage: mcp ${command} <server-id> [--json]`);
+  }
+  options.serverId = positional[0];
+  return options;
+}
+
+function parseMcpCallCommand(args: string[]): McpCallCommand {
+  const options: McpCallCommand = {
+    serverId: "",
+    name: "",
+    args: {},
+    json: false,
+  };
+  const positional: string[] = [];
+
+  for (let index = 0; index < args.length; index += 1) {
+    const current = args[index];
+    if (current === "--json") {
+      options.json = true;
+      continue;
+    }
+    if (current === "--arg") {
+      index += 1;
+      const { key, value } = parseKeyValue(requireOptionValue(args[index], current), "--arg");
+      options.args[key] = value;
+      continue;
+    }
+    if (current === "--args-json") {
+      index += 1;
+      options.args = parseJsonObjectOption(requireOptionValue(args[index], current), "--args-json");
+      continue;
+    }
+    positional.push(current);
+  }
+
+  if (positional.length !== 2) {
+    throw new Error("usage: mcp call <server-id> <tool-name> [--arg key=value] [--args-json json] [--json]");
+  }
+  options.serverId = positional[0];
+  options.name = positional[1];
+  return options;
+}
+
+function parseMcpTransport(value: string): SysMcpTransportType {
+  if (value === "auto" || value === "streamable-http" || value === "sse") {
+    return value;
+  }
+  throw new Error("transport must be auto, streamable-http, or sse");
+}
+
+function parseKeyValue(spec: string, option: string): { key: string; value: string } {
+  const eq = spec.indexOf("=");
+  if (eq <= 0) {
+    throw new Error(`${option} requires key=value`);
+  }
+  return {
+    key: spec.slice(0, eq),
+    value: spec.slice(eq + 1),
+  };
+}
+
+function parseJsonObjectOption(value: string, option: string): Record<string, unknown> {
+  const parsed = JSON.parse(value) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${option} must be a JSON object`);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function requireOptionValue(value: string | undefined, option: string): string {
+  if (value === undefined || value.length === 0) {
+    throw new Error(`${option} requires a value`);
+  }
+  return value;
+}
+
+function formatMcpServerList(servers: SysMcpServerSummary[]): string {
+  const lines = ["SERVER_ID\tSTATE\tTOOLS\tNAME\tURL"];
+  for (const server of servers) {
+    lines.push([
+      server.serverId,
+      server.state,
+      String(server.tools.length),
+      server.name,
+      server.url,
+    ].join("\t"));
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function formatMcpServerDetail(server: SysMcpServerSummary): string {
+  const lines = [
+    `server_id=${server.serverId}`,
+    `state=${server.state}`,
+    `name=${server.name}`,
+    `url=${server.url}`,
+    `tools=${server.tools.length}`,
+  ];
+  if (server.authUrl) {
+    lines.push(`auth_url=${server.authUrl}`);
+  }
+  if (server.error) {
+    lines.push(`error=${server.error}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function formatMcpCallResult(result: SysMcpCallResult, json: boolean): ExecResult {
+  if (json) {
+    return {
+      stdout: `${JSON.stringify(result, null, 2)}\n`,
+      stderr: "",
+      exitCode: result.isError ? 1 : 0,
+    };
+  }
+
+  const text = textFromMcpContent(result.content);
+  if (text !== null) {
+    return {
+      stdout: text.endsWith("\n") ? text : `${text}\n`,
+      stderr: "",
+      exitCode: result.isError ? 1 : 0,
+    };
+  }
+
+  const value = result.structuredContent !== undefined
+    ? result.structuredContent
+    : result.content;
+  return {
+    stdout: formatCodeModeValue(value),
+    stderr: "",
+    exitCode: result.isError ? 1 : 0,
+  };
+}
+
+function textFromMcpContent(content: unknown): string | null {
+  if (!Array.isArray(content)) {
+    return null;
+  }
+  const chunks: string[] = [];
+  for (const item of content) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      return null;
+    }
+    const record = item as Record<string, unknown>;
+    if (record.type !== "text" || typeof record.text !== "string") {
+      return null;
+    }
+    chunks.push(record.text);
+  }
+  return chunks.join("\n");
+}
+
+function mcpUsage(): string {
+  return [
+    "mcp list [--json]",
+    "mcp add <name> <url> [--transport auto|streamable-http|sse] [--callback-host origin] [--header key=value] [--json]",
+    "mcp refresh <server-id> [--json]",
+    "mcp call <server-id> <tool-name> [--arg key=value] [--args-json json] [--json]",
+    "mcp remove <server-id> [--json]",
+    "",
+  ].join("\n");
+}
+
 function buildCustomCommands(
   fs: GsvFs,
   identity: ProcessIdentity,
@@ -992,6 +1262,7 @@ function buildCustomCommands(
   const ls = buildLsCommand(fs, identity, ctx);
   const stat = buildStatCommand(fs, identity, ctx);
   const codemode = buildCodeModeCommand(fs, identity, ctx);
+  const mcp = buildMcpCommand(ctx);
   const pkg = buildPkgCommand(ctx);
   const skills = buildSkillsCommand(fs, ctx, identity);
   const proc = buildProcCommand(ctx);
@@ -1011,6 +1282,7 @@ function buildCustomCommands(
     ls,
     stat,
     codemode,
+    mcp,
     proc,
     sched,
     pkg,
@@ -1041,6 +1313,7 @@ function buildPackageCommands(identity: ProcessIdentity, ctx: KernelContext) {
     "wiki",
     "skills",
     "codemode",
+    "mcp",
   ]);
   const packageRecords = ctx.packages.list({
     enabled: true,
@@ -1159,6 +1432,104 @@ function buildSchedCommand(ctx: KernelContext) {
       };
     }
   });
+}
+
+function buildMcpCommand(ctx: KernelContext) {
+  return defineCommand("mcp", async (args): Promise<ExecResult> => {
+    try {
+      return await runMcpCommand(args, ctx);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        stdout: "",
+        stderr: `mcp: ${message}\n`,
+        exitCode: 1,
+      };
+    }
+  });
+}
+
+async function runMcpCommand(args: string[], ctx: KernelContext): Promise<ExecResult> {
+  const [subcommand = "help", ...rest] = args;
+
+  switch (subcommand) {
+    case "help":
+    case "--help":
+    case "-h":
+      return { stdout: mcpUsage(), stderr: "", exitCode: 0 };
+    case "list": {
+      requireCommandCapability(ctx, SYS_MCP_LIST);
+      const options = parseMcpJsonOptions(rest);
+      const result = handleSysMcpList({}, ctx);
+      return {
+        stdout: options.json
+          ? `${JSON.stringify(result, null, 2)}\n`
+          : formatMcpServerList(result.servers),
+        stderr: "",
+        exitCode: 0,
+      };
+    }
+    case "add": {
+      requireCommandCapability(ctx, SYS_MCP_ADD);
+      const parsed = parseMcpAddCommand(rest);
+      const result = await handleSysMcpAdd({
+        name: parsed.name,
+        url: parsed.url,
+        ...(parsed.callbackHost ? { callbackHost: parsed.callbackHost } : {}),
+        transport: {
+          type: parsed.transport,
+          ...(Object.keys(parsed.headers).length > 0 ? { headers: parsed.headers } : {}),
+        },
+      }, ctx);
+      return {
+        stdout: parsed.json
+          ? `${JSON.stringify(result, null, 2)}\n`
+          : formatMcpServerDetail(result.server),
+        stderr: "",
+        exitCode: 0,
+      };
+    }
+    case "remove": {
+      requireCommandCapability(ctx, SYS_MCP_REMOVE);
+      const parsed = parseMcpServerIdCommand(rest, "remove");
+      const result = await handleSysMcpRemove({ serverId: parsed.serverId }, ctx);
+      return {
+        stdout: parsed.json
+          ? `${JSON.stringify(result, null, 2)}\n`
+          : `removed=${result.removed}\n`,
+        stderr: "",
+        exitCode: result.removed ? 0 : 1,
+      };
+    }
+    case "refresh": {
+      requireCommandCapability(ctx, SYS_MCP_REFRESH);
+      const parsed = parseMcpServerIdCommand(rest, "refresh");
+      const result = await handleSysMcpRefresh({ serverId: parsed.serverId }, ctx);
+      return {
+        stdout: parsed.json
+          ? `${JSON.stringify(result, null, 2)}\n`
+          : result.server ? formatMcpServerDetail(result.server) : "server=null\n",
+        stderr: "",
+        exitCode: result.server ? 0 : 1,
+      };
+    }
+    case "call": {
+      requireCommandCapability(ctx, SYS_MCP_CALL);
+      const parsed = parseMcpCallCommand(rest);
+      const result = await handleSysMcpCall({
+        serverId: parsed.serverId,
+        name: parsed.name,
+        arguments: parsed.args,
+      }, ctx);
+      return formatMcpCallResult(result, parsed.json);
+    }
+    default:
+      return {
+        stdout: "",
+        stderr: `mcp: unknown command: ${subcommand}\n${mcpUsage()}`,
+        exitCode: 1,
+      };
+  }
 }
 
 async function runProcCommand(args: string[], ctx: KernelContext): Promise<ExecResult> {

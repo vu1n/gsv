@@ -128,7 +128,10 @@ import {
 } from "../syscalls/constants";
 import { RipgitClient } from "../fs/ripgit/client";
 import { workspaceRepoRef } from "../fs/ripgit/repos";
-import { executeCodeMode } from "./codemode";
+import {
+  buildCodeModeMcpToolBindings,
+  executeCodeMode,
+} from "./codemode";
 import {
   DEFAULT_CONVERSATION_ID,
   normalizeConversationId,
@@ -3002,6 +3005,7 @@ export class Process extends Host<Env> {
           defaultCwd: normalizeOptionalString(args.cwd),
           argv: normalizeStringArray(args.argv),
           args: args.args ?? null,
+          mcpToolBindings: await this.getCodeModeMcpToolBindings(),
         },
       );
     } catch (error) {
@@ -3048,6 +3052,9 @@ export class Process extends Host<Env> {
           toolArgs,
           approvalPolicy,
         ),
+        {
+          mcpToolBindings: await this.getCodeModeMcpToolBindings(),
+        },
       );
       this.store.resolve(toolCallId, result);
     } catch (error) {
@@ -3055,6 +3062,15 @@ export class Process extends Host<Env> {
         status: "failed",
         error: error instanceof Error ? error.message : String(error),
       });
+    }
+  }
+
+  private async getCodeModeMcpToolBindings() {
+    try {
+      const result = await this.kernelRpc("sys.mcp.list", {});
+      return buildCodeModeMcpToolBindings(result.servers);
+    } catch {
+      return [];
     }
   }
 

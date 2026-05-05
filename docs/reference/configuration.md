@@ -94,6 +94,7 @@ Policy shape:
   "default": "auto",
   "rules": [
     { "match": "shell.exec", "action": "ask" },
+    { "match": "sys.mcp.call", "action": "ask" },
     { "match": "fs.delete", "action": "deny" },
     { "match": "fs.*", "when": { "target": "device" }, "action": "ask" }
   ]
@@ -106,8 +107,8 @@ Default policies:
 
 | Profiles | Default | Rules |
 |---|---|---|
-| `init`, `task`, `review`, `app`, `mcp` | `auto` | Ask for `shell.exec` and `fs.delete`. |
-| `cron` | `auto` | Deny `fs.delete`; allow `shell.exec`. |
+| `init`, `task`, `review`, `app`, `mcp` | `auto` | Ask for `shell.exec`, `fs.delete`, and `sys.mcp.call`. |
+| `cron` | `auto` | Deny `fs.delete` and `sys.mcp.call`; allow `shell.exec`. |
 
 ## Runtime Config Keys
 

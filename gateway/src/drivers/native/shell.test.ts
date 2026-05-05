@@ -183,6 +183,85 @@ describe("pkg shell command", () => {
     expect(result.stderr).toBe("");
   });
 
+  it("shows mcp command usage", async () => {
+    const result = await handleShellExec(
+      { input: "mcp --help" },
+      makeContext(),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.stdout).toContain("mcp list");
+    expect(result.stdout).toContain("mcp call <server-id> <tool-name>");
+    expect(result.stderr).toBe("");
+  });
+
+  it("lists MCP servers through the native shell command", async () => {
+    const ctx = makeContext({ capabilities: ["sys.mcp.list"] }) as KernelContext;
+    Object.assign(ctx, {
+      mcpServers: {
+        list: () => [{
+          serverId: "server-1",
+          uid: IDENTITY.uid,
+          name: "Search",
+          url: "https://mcp.example.com/mcp",
+          transport: "auto",
+          createdAt: 1,
+          updatedAt: 2,
+        }],
+      },
+      mcp: {
+        mcpConnections: {
+          "server-1": { connectionState: "ready" },
+        },
+        listServers: () => [],
+        listTools: () => [{ name: "lookup", description: "Lookup", inputSchema: {} }],
+        listResources: () => [],
+        listPrompts: () => [],
+      },
+    });
+
+    const result = await handleShellExec(
+      { input: "mcp list" },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.stdout).toContain("SERVER_ID\tSTATE\tTOOLS\tNAME\tURL");
+    expect(result.stdout).toContain("server-1\tready\t1\tSearch\thttps://mcp.example.com/mcp");
+    expect(result.stderr).toBe("");
+  });
+
+  it("calls MCP tools through the native shell command", async () => {
+    const ctx = makeContext({ capabilities: ["sys.mcp.call"] }) as KernelContext;
+    const callMcpTool = vi.fn(async () => ({
+      content: [{ type: "text", text: "found" }],
+    }));
+    Object.assign(ctx, {
+      mcpServers: {
+        get: () => ({
+          serverId: "server-1",
+          uid: IDENTITY.uid,
+          name: "Search",
+          url: "https://mcp.example.com/mcp",
+          transport: "auto",
+          createdAt: 1,
+          updatedAt: 2,
+        }),
+      },
+      callMcpTool,
+    });
+
+    const result = await handleShellExec(
+      { input: "mcp call server-1 lookup --arg query=gsv" },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(callMcpTool).toHaveBeenCalledWith("server-1", "lookup", { query: "gsv" });
+    expect(result.stdout).toBe("found\n");
+    expect(result.stderr).toBe("");
+  });
+
   it("shows proc command usage", async () => {
     const result = await handleShellExec(
       { input: "proc --help" },

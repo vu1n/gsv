@@ -87,7 +87,7 @@ Example policy:
 
 ```bash
 gsv config set config/ai/profile/task/tools/approval \
-  '{"default":"auto","rules":[{"match":"shell.exec","action":"ask"},{"match":"fs.delete","action":"ask"},{"match":"fs.*","when":{"target":"device"},"action":"ask"}]}'
+  '{"default":"auto","rules":[{"match":"shell.exec","action":"ask"},{"match":"fs.delete","action":"ask"},{"match":"sys.mcp.call","action":"ask"},{"match":"fs.*","when":{"target":"device"},"action":"ask"}]}'
 ```
 
 Rules match exact syscalls or domain wildcards such as `fs.*`. Conditions can

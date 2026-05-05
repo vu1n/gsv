@@ -6,7 +6,7 @@ GSV uses several storage planes. The Kernel chooses the plane based on whether t
 
 | Plane | Backing Store | Used For |
 |---|---|---|
-| Kernel SQLite | Kernel Durable Object SQL | Users, groups, tokens, config, devices, routing tables, process registry, workspaces, packages, adapter links, automation, notifications. |
+| Kernel SQLite | Kernel Durable Object SQL | Users, groups, tokens, OAuth accounts, config, devices, routing tables, process registry, workspaces, packages, adapter links, automation, notifications. |
 | Process SQLite | Process Durable Object SQL | Active messages, pending tool calls, message queue, HIL state, process-local metadata. |
 | AppRunner SQLite/KV | AppRunner Durable Object storage | Package runtime SQL, daemon schedules, loaded package runtime props. |
 | R2 `STORAGE` bucket | Cloudflare R2 | Ordinary virtual filesystem files, process media, process archives, package artifacts, CLI download mirrors. |
@@ -39,6 +39,8 @@ Kernel SQLite is the authoritative control-plane store. Important tables include
 | Table | Purpose |
 |---|---|
 | `passwd`, `shadow`, `groups`, `auth_tokens` | Users, passwords, groups, and issued auth tokens. |
+| `oauth_accounts`, `oauth_flows` | Stored generic OAuth account credentials and pending authorization-code + PKCE flows. |
+| `mcp_servers`, `cf_agents_mcp_servers` | User-owned MCP server metadata plus the Agent MCP client manager's connection/OAuth state. |
 | `config_kv` | Runtime configuration exposed under `/sys/config` and `/sys/users`. |
 | `group_capabilities` | Capability grants by group id. |
 | `devices`, `device_access` | Registered devices and group access. |
