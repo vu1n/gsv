@@ -826,13 +826,32 @@ function mediaKindLabel(kind: string): string {
 function mediaSourceFor(media: unknown, sources: Record<string, string>): string | null {
   const record = asRecord(media);
   const previewUrl = asString(record?.previewUrl);
-  if (previewUrl) return previewUrl;
+  if (previewUrl) return safeMediaSourceUrl(previewUrl, ["blob:", "data:", "https:", "http:"]);
   const url = asString(record?.url);
-  if (url) return url;
+  if (url) return safeMediaSourceUrl(url, ["https:", "http:"]);
   const data = asString(record?.data);
-  if (data) return data.startsWith("data:") ? data : `data:${asString(record?.mimeType) || "application/octet-stream"};base64,${data}`;
+  if (data) {
+    const dataUrl = data.startsWith("data:")
+      ? data
+      : `data:${asString(record?.mimeType) || "application/octet-stream"};base64,${data}`;
+    return safeMediaSourceUrl(dataUrl, ["data:"]);
+  }
   const key = mediaSourceKey(media);
   return key ? sources[key] ?? null : null;
+}
+
+function safeMediaSourceUrl(value: string, allowedProtocols: string[]): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const base = typeof window !== "undefined" ? window.location.href : "https://gsv.local/";
+    const url = new URL(trimmed, base);
+    return allowedProtocols.includes(url.protocol) ? trimmed : null;
+  } catch {
+    return null;
+  }
 }
 
 function mediaSourceKey(media: unknown): string | null {

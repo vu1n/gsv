@@ -168,6 +168,11 @@ function mediaSourceKey(media: unknown): string | null {
   return asString(record?.key);
 }
 
+function mediaOwnerPidFromKey(key: string): string | null {
+  const match = /^var\/media\/[^/]+\/(.+)\/[^/]+$/.exec(key);
+  return match?.[1] || null;
+}
+
 function removeRecordKey(record: Record<string, string>, key: string): Record<string, string> {
   if (!(key in record)) {
     return record;
@@ -1157,15 +1162,15 @@ export function App({ backend }: { backend: ChatBackend }) {
     ) {
       return;
     }
-    const target = activeRef.current;
-    if (!target?.pid) {
+    const targetPid = mediaOwnerPidFromKey(key) ?? activeRef.current?.pid ?? "";
+    if (!targetPid) {
       return;
     }
 
     const record = asRecord(media);
     const mimeType = asString(record?.mimeType) || undefined;
     mediaSourceLoadingRef.current.add(key);
-    backend.readProcessMedia({ pid: target.pid, key, mimeType })
+    backend.readProcessMedia({ pid: targetPid, key, mimeType })
       .then((result) => {
         const response = asRecord(result);
         const dataUrl = asString(response?.dataUrl);
