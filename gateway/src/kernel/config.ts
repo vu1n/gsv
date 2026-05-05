@@ -29,6 +29,7 @@ const GSV_RUNTIME_CONTEXT = [
 
 const GSV_CONTEXT_DISCOVERY = [
   "Load detailed procedures on demand: use `skills list`, `skills search <query>`, and `skills show <skill>` for reusable workflows; use `man` and `man <topic>` for exact native command syntax.",
+  "Connected MCP integrations may be exposed through CodeMode rather than as top-level tools. Before saying an MCP server or integration is unavailable, inspect CodeMode `mcpTools` or use the native `mcp` shell command.",
   "After completing a complex workflow, create a skill if one didn't exist. If a skill's instructions were partially wrong, you should amend them."
 ].join("\n");
 

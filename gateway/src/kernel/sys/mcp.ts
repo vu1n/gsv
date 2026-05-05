@@ -37,6 +37,10 @@ export type McpAddConnectionResult = {
 
 const MCP_TRANSPORT_TYPES = new Set<SysMcpTransportType>(["auto", "streamable-http", "sse"]);
 
+export function canRediscoverMcpConnectionState(input: unknown): boolean {
+  return input === "connected" || input === "ready";
+}
+
 export async function handleSysMcpAdd(
   args: SysMcpAddArgs,
   ctx: KernelContext,

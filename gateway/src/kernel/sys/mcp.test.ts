@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { KernelContext } from "../context";
 import type { McpServerRecord } from "../mcp-store";
 import {
+  canRediscoverMcpConnectionState,
   handleSysMcpAdd,
   handleSysMcpCall,
   handleSysMcpList,
@@ -182,5 +183,12 @@ describe("sys.mcp handlers", () => {
       serverId: "missing",
       name: "lookup",
     }, ctx)).rejects.toThrow("MCP server not found");
+  });
+
+  it("classifies ready and connected MCP clients as rediscoverable", () => {
+    expect(canRediscoverMcpConnectionState("ready")).toBe(true);
+    expect(canRediscoverMcpConnectionState("connected")).toBe(true);
+    expect(canRediscoverMcpConnectionState("failed")).toBe(false);
+    expect(canRediscoverMcpConnectionState("authenticating")).toBe(false);
   });
 });

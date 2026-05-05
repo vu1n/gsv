@@ -109,8 +109,11 @@ scripts and an `mcp` command for connected MCP servers:
 codemode ./check.js --target macbook --cwd ~/projects/gsv --json
 codemode run ./check.js --target macbook --cwd ~/projects/gsv --json
 codemode -e 'return await shell("pwd")'
-mcp list
-mcp call server-1 lookup --args-json '{"query":"gsv"}' --json
+mcp status
+mcp tools Linear
+mcp describe Linear list_issues
+mcp codemode
+mcp call Linear list_issues --args-json '{"assignee":"me","limit":5}' --json
 ```
 
 Scripts use the same CodeMode shape exposed to agents. A script is treated as
@@ -160,7 +163,10 @@ names, server ids, original tool names, input schemas, and output schemas.
 Generated functions unwrap MCP result envelopes: structured content is returned
 directly, text-only content is parsed as JSON when possible or returned as a
 string, and MCP tool errors throw. Server management remains available from the
-native shell as `mcp list`, `mcp refresh`, and `mcp call`.
+native shell as `mcp status`, `mcp tools`, `mcp describe`, `mcp search`,
+`mcp codemode`, `mcp refresh`, and `mcp call`. The shell command accepts either
+server ids or unique server names, and tool selectors may use either the
+original MCP tool name or the generated CodeMode function name.
 
 ## CLI Device Targets
 

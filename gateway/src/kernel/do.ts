@@ -58,9 +58,10 @@ import {
   type OAuthCallbackInput,
   type OAuthCallbackResult,
 } from "./sys/oauth";
-import type {
-  McpAddConnectionInput,
-  McpAddConnectionResult,
+import {
+  canRediscoverMcpConnectionState,
+  type McpAddConnectionInput,
+  type McpAddConnectionResult,
 } from "./sys/mcp";
 import { oauthCallbackHtmlResponse } from "../oauth-http";
 import { isInternalOnlySyscall } from "./syscall-exposure";
@@ -340,6 +341,14 @@ export class Kernel extends Host<Env> {
   }
 
   private async refreshMcpServerConnection(serverId: string): Promise<void> {
+    const connection = this.mcp.mcpConnections[serverId] as {
+      connectionState?: unknown;
+    } | undefined;
+    if (canRediscoverMcpConnectionState(connection?.connectionState)) {
+      await this.mcp.discoverIfConnected(serverId);
+      return;
+    }
+
     const result = await this.mcp.connectToServer(serverId);
     if (result.state === "connected") {
       await this.mcp.discoverIfConnected(serverId);

@@ -11,7 +11,7 @@ type McpPanelProps = {
   selectedServerId: string | null;
   pendingAction: string | null;
   onSelectServer: (serverId: string | null) => void;
-  onAddServer: (args: AddMcpServerArgs) => Promise<void>;
+  onAddServer: (args: AddMcpServerArgs) => Promise<ControlMcpServer | null>;
   onRefreshServer: (serverId: string) => Promise<void>;
   onRemoveServer: (serverId: string) => Promise<void>;
 };
@@ -85,8 +85,12 @@ export function McpPanel({
             void onAddServer({
               ...form,
               callbackHost: window.location.origin,
-            }).then(() => {
+            }).then((server) => {
               setForm({ name: "", url: "", transport: "auto" });
+              if (server?.state === "authenticating" && server.authUrl) {
+                window.open(server.authUrl, "_blank", "noopener,noreferrer");
+                setSignInOpenedFor(server.serverId);
+              }
             }).catch(() => {});
           }}
         >

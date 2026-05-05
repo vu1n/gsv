@@ -167,6 +167,7 @@ export function App({ backend }: AppProps) {
               setState(result.state);
               setSelectedMcpServerId(result.server?.serverId ?? null);
               setError(null);
+              return result.server;
             } catch (cause) {
               setError(formatError(cause));
               throw cause;
