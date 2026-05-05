@@ -911,7 +911,6 @@ export function App({ backend }: { backend: ChatBackend }) {
       return;
     }
     const message = composeText.trim();
-    const displayMedia = attachments.slice();
     const media = attachments.map(stripAttachmentPreview);
     if (!message && media.length === 0) {
       return;
@@ -955,7 +954,7 @@ export function App({ backend }: { backend: ChatBackend }) {
         kind: "message",
         role: "user",
         text: message,
-        media: displayMedia,
+        media,
         timestamp: Date.now(),
       }));
       setComposeText("");
