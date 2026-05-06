@@ -78,6 +78,10 @@ const TARGET_CHAT_PROCESS_EVENT = "gsv:target-chat-process";
 const PENDING_TARGETS_KEY = "__gsvPendingChatProcessTargets";
 const WINDOW_ID = new URL(window.location.href).searchParams.get("windowId")?.trim() || "";
 
+function historyTargetKey(target: Pick<ThreadContext, "pid" | "conversationId">): string {
+  return `${target.pid}\n${target.conversationId || "default"}`;
+}
+
 const EMPTY_ARCHIVE: ArchiveState = {
   loading: false,
   error: "",
@@ -230,6 +234,7 @@ export function App({ backend }: { backend: ChatBackend }) {
   const recorderElapsedMsRef = useRef(0);
   const recorderTimerRef = useRef<number | null>(null);
   const recorderCancelRef = useRef(false);
+  const skipNextHistoryLoadRef = useRef<string | null>(null);
 
   useEffect(() => {
     activeRef.current = active;
@@ -725,7 +730,12 @@ export function App({ backend }: { backend: ChatBackend }) {
     if (active?.pid) {
       void backend.watchProcessSignals({ pid: active.pid }).catch((error) => setHostError(formatError(error)));
       void loadConversations(active.pid);
-      void loadHistory(active);
+      const historyKey = historyTargetKey(active);
+      if (skipNextHistoryLoadRef.current === historyKey) {
+        skipNextHistoryLoadRef.current = null;
+      } else {
+        void loadHistory(active);
+      }
       return () => {
         void backend.unwatchProcessSignals({ pid: active.pid }).catch(() => {});
       };
@@ -973,6 +983,7 @@ export function App({ backend }: { backend: ChatBackend }) {
           appendSystem("thread start failed: invalid process target");
           return;
         }
+        skipNextHistoryLoadRef.current = historyTargetKey(target);
         setActive(target);
         await backend.watchProcessSignals({ pid: target.pid }).catch((error) => setHostError(formatError(error)));
         void loadThreads();
