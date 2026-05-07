@@ -187,6 +187,9 @@ export type ProcHistoryArgs = {
   conversationId?: string;
   limit?: number;
   offset?: number;
+  beforeMessageId?: number;
+  afterMessageId?: number;
+  tail?: boolean;
 };
 
 export type ProcHistoryMessage = {
@@ -233,6 +236,8 @@ export type ProcHistoryResult =
       messages: ProcHistoryMessage[];
       messageCount: number;
       truncated?: boolean;
+      hasMoreBefore?: boolean;
+      hasMoreAfter?: boolean;
       pendingHil?: ProcHilRequest | null;
       context?: ProcContextState | null;
     }

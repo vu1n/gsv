@@ -402,6 +402,7 @@ function normalizeContextState(value: unknown): ContextState | null {
     : "unknown";
   return {
     conversationId: asString(record.conversationId) || "default",
+    runId: asString(record.runId) || undefined,
     messageCount: asNumber(record.messageCount) ?? undefined,
     lastMessageId: asNumber(record.lastMessageId),
     provider: asString(record.provider),

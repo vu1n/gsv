@@ -58,6 +58,9 @@ export function CompactIcon() {
 export function BranchIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3v7a4 4 0 0 0 4 4h8" /><path d="M15 10l4 4-4 4" /><path d="M6 21v-7" /></svg>;
 }
+export function ArrowDownIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14" /><path d="m6 13 6 6 6-6" /></svg>;
+}
 export function PaperclipIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.44 11.05 12 20.5a6 6 0 0 1-8.49-8.49l9.19-9.2a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 1 1-2.82-2.83l8.49-8.48" /></svg>;
 }

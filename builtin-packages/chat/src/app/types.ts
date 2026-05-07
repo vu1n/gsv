@@ -60,6 +60,7 @@ export type ConversationRecord = {
 
 export type ContextState = {
   conversationId: string;
+  runId?: string;
   messageCount?: number;
   lastMessageId?: number | null;
   provider: string | null;

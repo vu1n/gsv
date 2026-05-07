@@ -1078,13 +1078,52 @@ export class Process extends Host<Env> {
   private async handleProcHistory(args: ProcHistoryArgs): Promise<ProcHistoryResult> {
     const pid = this.pid;
     const conversationId = normalizeConversationId(args.conversationId);
+    const limit = args.limit ?? 200;
+    const offset = args.offset ?? 0;
+    const beforeMessageId = args.beforeMessageId;
+    const afterMessageId = args.afterMessageId;
+    const tail = args.tail === true;
+
+    if (!isPositiveInteger(limit)) {
+      return { ok: false, error: "proc.history limit must be a positive integer" };
+    }
+    if (!isNonNegativeInteger(offset)) {
+      return { ok: false, error: "proc.history offset must be a non-negative integer" };
+    }
+    if (beforeMessageId !== undefined && !isPositiveInteger(beforeMessageId)) {
+      return { ok: false, error: "proc.history beforeMessageId must be a positive integer" };
+    }
+    if (afterMessageId !== undefined && !isPositiveInteger(afterMessageId)) {
+      return { ok: false, error: "proc.history afterMessageId must be a positive integer" };
+    }
+    const cursorCount = (tail ? 1 : 0)
+      + (beforeMessageId !== undefined ? 1 : 0)
+      + (afterMessageId !== undefined ? 1 : 0);
+    if (cursorCount > 1) {
+      return { ok: false, error: "proc.history accepts only one cursor: tail, beforeMessageId, or afterMessageId" };
+    }
+    if (cursorCount > 0 && args.offset !== undefined) {
+      return { ok: false, error: "proc.history offset cannot be combined with cursor pagination" };
+    }
+
     this.store.ensureConversation(conversationId);
     const total = this.store.messageCount(conversationId);
     const records = this.store.getMessages({
       conversationId,
-      limit: args.limit,
-      offset: args.offset,
+      limit,
+      offset,
+      beforeMessageId,
+      afterMessageId,
+      tail,
     });
+    const firstMessageId = records[0]?.id ?? null;
+    const lastMessageId = records[records.length - 1]?.id ?? null;
+    const hasMoreBefore = firstMessageId === null
+      ? false
+      : this.store.hasMessageBefore(conversationId, firstMessageId);
+    const hasMoreAfter = lastMessageId === null
+      ? false
+      : this.store.hasMessageAfter(conversationId, lastMessageId);
 
     const messages: ProcHistoryMessage[] = records.map((r) => {
       if (r.role === "toolResult") {
@@ -1151,7 +1190,9 @@ export class Process extends Host<Env> {
       conversationId,
       messages,
       messageCount: total,
-      truncated: (args.offset ?? 0) + messages.length < total,
+      truncated: cursorCount > 0 ? hasMoreBefore || hasMoreAfter : offset + messages.length < total,
+      hasMoreBefore,
+      hasMoreAfter,
       pendingHil: this.toProcHilRequest(this.store.getPendingHil()),
       context: await this.getContextStateForHistory(conversationId),
     };

@@ -239,6 +239,40 @@ describe("ProcessStore", () => {
       });
     });
 
+    it("getMessages returns all messages when no limit is provided", async () => {
+      const stub = await getProcessByPid("msg-no-implicit-limit");
+      await runInDurableObject(stub, (instance: Process) => {
+        const store = (instance as any).store;
+        for (let i = 0; i < 205; i++) {
+          store.appendMessage("user", `msg-${i}`);
+        }
+        const messages = store.getMessages();
+        expect(messages).toHaveLength(205);
+        expect(messages[204].content).toBe("msg-204");
+      });
+    });
+
+    it("getMessages supports tail and cursor pagination", async () => {
+      const stub = await getProcessByPid("msg-tail-pagination");
+      await runInDurableObject(stub, (instance: Process) => {
+        const store = (instance as any).store;
+        for (let i = 0; i < 10; i++) {
+          store.appendMessage("user", `msg-${i}`);
+        }
+
+        const tail = store.getMessages({ tail: true, limit: 3 });
+        expect(tail.map((message: any) => message.content)).toEqual(["msg-7", "msg-8", "msg-9"]);
+
+        const older = store.getMessages({ beforeMessageId: tail[0].id, limit: 3 });
+        expect(older.map((message: any) => message.content)).toEqual(["msg-4", "msg-5", "msg-6"]);
+        expect(store.hasMessageBefore(older[0].conversationId, older[0].id)).toBe(true);
+        expect(store.hasMessageAfter(older[2].conversationId, older[2].id)).toBe(true);
+
+        const newer = store.getMessages({ afterMessageId: older[2].id, limit: 2 });
+        expect(newer.map((message: any) => message.content)).toEqual(["msg-7", "msg-8"]);
+      });
+    });
+
     it("clearMessages removes all and returns count", async () => {
       const stub = await getProcessByPid("msg-clear");
       await runInDurableObject(stub, (instance: Process) => {

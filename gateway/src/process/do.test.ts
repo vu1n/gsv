@@ -202,6 +202,54 @@ describe("Process DO — mechanical", () => {
       });
     });
 
+    it("does not drop tool results after 200 stored messages", async () => {
+      const pid = "mech-context-tool-result-after-200";
+      const stub = await initProcess(pid, ROOT_IDENTITY);
+
+      await runInDurableObject(stub, async (instance: Process) => {
+        const process = instance as any;
+        for (let i = 1; i <= 199; i += 1) {
+          process.store.appendMessage("user", `filler-${i}`);
+        }
+        process.store.appendMessage("assistant", "", {
+          toolCalls: JSON.stringify({
+            toolCalls: [
+              {
+                type: "toolCall",
+                id: "call-boundary|fc_boundary",
+                name: "Search",
+                arguments: { query: "thinking-status" },
+              },
+            ],
+          }),
+        });
+        process.store.appendToolResult(
+          "call-boundary|fc_boundary",
+          "fs.search",
+          JSON.stringify({ ok: true, count: 0, matches: [] }),
+          false,
+        );
+
+        const messages = await process.buildContextMessages("default");
+        expect(messages).toHaveLength(201);
+        expect(messages[199]).toMatchObject({
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call-boundary|fc_boundary",
+              name: "Search",
+            },
+          ],
+        });
+        expect(messages[200]).toMatchObject({
+          role: "toolResult",
+          toolCallId: "call-boundary|fc_boundary",
+          toolName: "Search",
+        });
+      });
+    });
+
     it("emits live process.message signals for scheduled runtime events", async () => {
       const pid = "mech-schedule-live-message";
       const stub = await initProcess(pid, ROOT_IDENTITY);
@@ -1791,6 +1839,64 @@ describe("Process DO — mechanical", () => {
       expect(data.messages).toHaveLength(3);
       expect(data.messageCount).toBe(10);
       expect(data.truncated).toBe(true);
+    });
+
+    it("keeps proc.history paged by default", async () => {
+      const pid = "mech-history-default-page";
+      const stub = await initProcess(pid, ROOT_IDENTITY);
+
+      await runInDurableObject(stub, (instance: Process) => {
+        const store = (instance as any).store;
+        for (let i = 0; i < 205; i++) {
+          store.appendMessage("user", `msg-${i}`);
+        }
+      });
+
+      const res = (await stub.recvFrame(
+        makeReq("proc.history", {}),
+      )) as ResponseOkFrame;
+
+      const data = res.data as any;
+      expect(data.messages).toHaveLength(200);
+      expect(data.messageCount).toBe(205);
+      expect(data.truncated).toBe(true);
+    });
+
+    it("supports tail-first and cursor history pagination", async () => {
+      const pid = "mech-history-tail-page";
+      const stub = await initProcess(pid, ROOT_IDENTITY);
+
+      await runInDurableObject(stub, (instance: Process) => {
+        const store = (instance as any).store;
+        for (let i = 0; i < 10; i++) {
+          store.appendMessage("user", `msg-${i}`);
+        }
+      });
+
+      const tailRes = (await stub.recvFrame(
+        makeReq("proc.history", { tail: true, limit: 3 }),
+      )) as ResponseOkFrame;
+      const tailData = tailRes.data as any;
+      expect(tailData.messages.map((message: any) => message.content)).toEqual(["msg-7", "msg-8", "msg-9"]);
+      expect(tailData.hasMoreBefore).toBe(true);
+      expect(tailData.hasMoreAfter).toBe(false);
+      expect(tailData.truncated).toBe(true);
+
+      const beforeRes = (await stub.recvFrame(
+        makeReq("proc.history", { beforeMessageId: tailData.messages[0].id, limit: 3 }),
+      )) as ResponseOkFrame;
+      const beforeData = beforeRes.data as any;
+      expect(beforeData.messages.map((message: any) => message.content)).toEqual(["msg-4", "msg-5", "msg-6"]);
+      expect(beforeData.hasMoreBefore).toBe(true);
+      expect(beforeData.hasMoreAfter).toBe(true);
+
+      const afterRes = (await stub.recvFrame(
+        makeReq("proc.history", { afterMessageId: beforeData.messages[2].id, limit: 2 }),
+      )) as ResponseOkFrame;
+      const afterData = afterRes.data as any;
+      expect(afterData.messages.map((message: any) => message.content)).toEqual(["msg-7", "msg-8"]);
+      expect(afterData.hasMoreBefore).toBe(true);
+      expect(afterData.hasMoreAfter).toBe(true);
     });
 
     it("reads history for the requested conversation", async () => {
