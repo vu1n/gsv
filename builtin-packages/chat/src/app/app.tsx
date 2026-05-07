@@ -712,6 +712,7 @@ export function App({ backend }: { backend: ChatBackend }) {
     const node = transcriptRef.current;
     const previousScrollHeight = node?.scrollHeight ?? 0;
     const previousScrollTop = node?.scrollTop ?? 0;
+    stickToBottomRef.current = false;
     updateHistoryWindow({ ...currentWindow, loadingOlder: true });
 
     try {

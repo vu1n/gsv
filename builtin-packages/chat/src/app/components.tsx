@@ -56,7 +56,6 @@ import {
   formatAttachmentDuration,
   formatAttachmentSize,
   inferToolSyscall,
-  isNearBottom,
   labelForRole,
   normalizeToolOutput,
   prettyJson,
@@ -385,9 +384,7 @@ export function Transcript(props: {
           if (props.hasOlderHistory && !props.loadingOlderHistory && node.scrollTop <= 96) {
             props.onLoadOlderHistory();
           }
-          if (isNearBottom(node)) {
-            props.onViewedLatest(node);
-          }
+          props.onViewedLatest(node);
         }}
       >
         {props.hasOlderHistory || props.loadingOlderHistory ? (
