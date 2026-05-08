@@ -2262,8 +2262,13 @@ export class Process extends Host<Env> {
       (b): b is ToolCall => b.type === "toolCall",
     );
 
-    if (text.trim()) {
-      await this.sendSignal("chat.text", { text, pid: this.pid, runId });
+    if (text.trim() || thinkingBlocks.length > 0) {
+      await this.sendSignal("chat.text", {
+        text,
+        thinking: thinkingBlocks,
+        pid: this.pid,
+        runId,
+      });
       if (this.handleRunStopped(runId)) {
         return;
       }

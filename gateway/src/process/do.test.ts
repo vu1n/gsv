@@ -384,6 +384,73 @@ describe("Process DO — mechanical", () => {
         source: "provider",
       });
     });
+
+    it("includes assistant thinking blocks in live chat.text signals", async () => {
+      const pid = "mech-chat-text-thinking";
+      const stub = await initProcess(pid, ROOT_IDENTITY);
+
+      const emitted = await runInDurableObject(stub, async (instance: Process) => {
+        const process = instance as any;
+        const emitted: Array<{ signal: string; payload: unknown }> = [];
+        process.sendSignal = async (signal: string, payload: unknown) => {
+          emitted.push({ signal, payload });
+        };
+        process.generation = {
+          async generate() {
+            return {
+              role: "assistant",
+              content: [
+                { type: "thinking", thinking: "Need to preserve this reasoning." },
+                { type: "text", text: "done" },
+              ],
+              api: "test",
+              provider: "test",
+              model: "test",
+              stopReason: "stop",
+              timestamp: Date.now(),
+            };
+          },
+          async generateText() {
+            return "done";
+          },
+        };
+
+        process.store.appendMessage("user", "include reasoning");
+        process.currentRun = {
+          runId: "run-chat-text-thinking",
+          queued: false,
+          conversationId: "default",
+          config: {
+            profile: "task",
+            provider: "workers-ai",
+            model: "@cf/nvidia/nemotron-3-120b-a12b",
+            apiKey: "",
+            reasoning: "high",
+            maxTokens: 8192,
+            contextWindowTokens: 256000,
+            contextWindowSource: "config",
+            maxContextBytes: 32768,
+          },
+          tools: [],
+          devices: [],
+          systemPrompt: "Test system prompt.",
+          approvalPolicy: { default: "auto", rules: [] },
+        };
+        await process.continueAgentLoop("run-chat-text-thinking");
+        return emitted;
+      });
+
+      const textSignal = (emitted as Array<{ signal: string; payload: any }>)
+        .find((entry) => entry.signal === "chat.text");
+      expect(textSignal?.payload).toMatchObject({
+        text: "done",
+        pid,
+        runId: "run-chat-text-thinking",
+        thinking: [
+          { type: "thinking", thinking: "Need to preserve this reasoning." },
+        ],
+      });
+    });
   });
 
   describe("proc.send", () => {
