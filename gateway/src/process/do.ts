@@ -929,6 +929,7 @@ export class Process extends Host<Env> {
       reason: "user",
       pid,
       runId,
+      conversationId: run.conversationId,
     });
 
     let continuedQueuedRunId: string | undefined;
@@ -995,6 +996,7 @@ export class Process extends Host<Env> {
         callId: pendingHil.toolCallId,
         pid,
         runId: pendingHil.runId,
+        conversationId: pendingHil.conversationId,
       });
       if (this.handleRunStopped(pendingHil.runId)) {
         return {
@@ -2224,6 +2226,7 @@ export class Process extends Host<Env> {
         error: displayError,
         pid: this.pid,
         runId,
+        conversationId,
       });
       if (this.handleRunStopped(runId)) {
         return;
@@ -2242,6 +2245,7 @@ export class Process extends Host<Env> {
         error: displayError,
         pid: this.pid,
         runId,
+        conversationId,
       });
       if (this.handleRunStopped(runId)) {
         return;
@@ -2268,6 +2272,7 @@ export class Process extends Host<Env> {
         thinking: thinkingBlocks,
         pid: this.pid,
         runId,
+        conversationId,
       });
       if (this.handleRunStopped(runId)) {
         return;
@@ -2306,6 +2311,7 @@ export class Process extends Host<Env> {
         text,
         pid: this.pid,
         runId,
+        conversationId,
         usage: response.usage,
       });
       if (this.handleRunStopped(runId)) {
@@ -2357,6 +2363,7 @@ export class Process extends Host<Env> {
         error: message,
         pid: this.pid,
         runId,
+        conversationId,
       });
       await this.finishRun("context.policy.fail");
       return "stopped";
@@ -2381,6 +2388,7 @@ export class Process extends Host<Env> {
         error: message,
         pid: this.pid,
         runId,
+        conversationId,
       });
       await this.finishRun("context.auto_compact.empty");
       return "stopped";
@@ -2405,6 +2413,7 @@ export class Process extends Host<Env> {
         error: message,
         pid: this.pid,
         runId,
+        conversationId,
       });
       await this.finishRun("context.auto_compact.failed");
       return "stopped";
@@ -2907,6 +2916,7 @@ export class Process extends Host<Env> {
         error,
         pid: this.pid,
         runId,
+        conversationId,
       });
     }
 
@@ -2999,6 +3009,7 @@ export class Process extends Host<Env> {
           callId: tc.id,
           pid: this.pid,
           runId,
+          conversationId: run.conversationId,
         });
         if (this.handleRunStopped(runId)) {
           return null;
@@ -3100,6 +3111,7 @@ export class Process extends Host<Env> {
           call,
           toolArgs,
           approvalPolicy,
+          conversationId,
         ),
         {
           mcpToolBindings: await this.getCodeModeMcpToolBindings(),
@@ -3128,6 +3140,7 @@ export class Process extends Host<Env> {
     call: SyscallName,
     args: Record<string, unknown>,
     approvalPolicy: ToolApprovalPolicy,
+    conversationId: string,
   ): Promise<unknown> {
     if (this.handleRunStopped(runId)) {
       throw new Error("Run stopped before CodeMode tool execution completed");
@@ -3172,6 +3185,7 @@ export class Process extends Host<Env> {
       callId: toolCallId,
       pid: this.pid,
       runId,
+      conversationId,
     });
     if (this.handleRunStopped(runId)) {
       throw new Error("Run stopped before CodeMode tool execution completed");
@@ -3195,6 +3209,7 @@ export class Process extends Host<Env> {
         error: message,
         pid: this.pid,
         runId,
+        conversationId,
       });
       throw error;
     }
@@ -3209,6 +3224,7 @@ export class Process extends Host<Env> {
         output,
         pid: this.pid,
         runId,
+        conversationId,
       });
       return output;
     }
@@ -3222,6 +3238,7 @@ export class Process extends Host<Env> {
       error,
       pid: this.pid,
       runId,
+      conversationId,
     });
     throw new Error(error);
   }
@@ -3458,6 +3475,7 @@ export class Process extends Host<Env> {
       error: errorMessage,
       pid: this.pid,
       runId,
+      conversationId,
     });
   }
 

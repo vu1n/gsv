@@ -415,11 +415,12 @@ describe("Process DO — mechanical", () => {
           },
         };
 
-        process.store.appendMessage("user", "include reasoning");
+        process.store.openConversation({ conversationId: "side", title: "Side" });
+        process.store.appendMessage("user", "include reasoning", { conversationId: "side" });
         process.currentRun = {
           runId: "run-chat-text-thinking",
           queued: false,
-          conversationId: "default",
+          conversationId: "side",
           config: {
             profile: "task",
             provider: "workers-ai",
@@ -446,6 +447,7 @@ describe("Process DO — mechanical", () => {
         text: "done",
         pid,
         runId: "run-chat-text-thinking",
+        conversationId: "side",
         thinking: [
           { type: "thinking", thinking: "Need to preserve this reasoning." },
         ],

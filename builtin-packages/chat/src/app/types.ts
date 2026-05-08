@@ -123,6 +123,7 @@ export type LogRow = MessageRow | ToolRow;
 export type HilRequest = {
   requestId: string;
   runId: string;
+  conversationId?: string;
   callId: string;
   toolName: string;
   syscall: string;

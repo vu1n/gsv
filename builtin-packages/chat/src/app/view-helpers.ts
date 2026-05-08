@@ -92,10 +92,7 @@ function applyProcessMessageSignal(
   setPendingAssistant: (value: PendingAssistantState) => void,
 ) {
   const record = asRecord(payload);
-  const pid = asString(record?.pid);
-  if (pid && pid !== active.pid) return;
-  const conversationId = asString(record?.conversationId) || "default";
-  if (conversationId !== active.conversationId) return;
+  if (!signalMatchesActiveThread(record, active)) return;
   const content = asString(record?.content) ?? "";
   if (!content.trim()) return;
   const messageId = asNumber(record?.messageId);
@@ -117,8 +114,7 @@ function applyProcessMessageSignal(
 
 function applyAssistantSignal(payload: unknown, active: ThreadContext, setRows: (update: (current: LogRow[]) => LogRow[]) => void) {
   const record = asRecord(payload);
-  const pid = asString(record?.pid);
-  if (pid && pid !== active.pid) return;
+  if (!signalMatchesActiveThread(record, active)) return;
   const text = asString(record?.text) ?? "";
   const thinking = extractThinkingBlocks(record);
   if (!text.trim() && thinking.length === 0) return;
@@ -138,8 +134,7 @@ function applyAssistantSignal(payload: unknown, active: ThreadContext, setRows: 
 
 function applyToolCallSignal(payload: unknown, active: ThreadContext, setRows: (update: (current: LogRow[]) => LogRow[]) => void) {
   const record = asRecord(payload);
-  const pid = asString(record?.pid);
-  if (pid && pid !== active.pid) return;
+  if (!signalMatchesActiveThread(record, active)) return;
   const callId = asString(record?.callId);
   if (!callId) return;
   const row: ToolRow = {
@@ -156,8 +151,7 @@ function applyToolCallSignal(payload: unknown, active: ThreadContext, setRows: (
 
 function applyToolResultSignal(payload: unknown, active: ThreadContext, setRows: (update: (current: LogRow[]) => LogRow[]) => void) {
   const record = asRecord(payload);
-  const pid = asString(record?.pid);
-  if (pid && pid !== active.pid) return;
+  if (!signalMatchesActiveThread(record, active)) return;
   const callId = asString(record?.callId);
   if (!callId) return;
   setRows((current) => {
@@ -198,6 +192,15 @@ function findToolRow(rows: LogRow[], callId: string): ToolRow | null {
     }
   }
   return null;
+}
+
+function signalMatchesActiveThread(payload: unknown, active: ThreadContext): boolean {
+  const record = asRecord(payload);
+  if (!record) return false;
+  const pid = asString(record.pid);
+  if (pid && pid !== active.pid) return false;
+  const conversationId = asString(record.conversationId) || "default";
+  return conversationId === (active.conversationId || "default");
 }
 
 function normalizeContextSignal(payload: unknown, active: ThreadContext): ContextState | null {
@@ -387,11 +390,12 @@ function normalizeHilRequest(value: unknown): HilRequest | null {
   const record = asRecord(value);
   const requestId = asString(record?.requestId);
   const runId = asString(record?.runId);
+  const conversationId = asString(record?.conversationId) || "default";
   const callId = asString(record?.callId);
   const toolName = asString(record?.toolName);
   const syscall = asString(record?.syscall);
   if (!requestId || !runId || !callId || !toolName || !syscall) return null;
-  return { requestId, runId, callId, toolName, syscall, args: record?.args ?? {}, createdAt: asNumber(record?.createdAt) || Date.now() };
+  return { requestId, runId, conversationId, callId, toolName, syscall, args: record?.args ?? {}, createdAt: asNumber(record?.createdAt) || Date.now() };
 }
 
 function normalizeContextState(value: unknown): ContextState | null {
@@ -925,6 +929,7 @@ export {
   renderMarkdownHtml,
   safeText,
   setStoredThreadContext,
+  signalMatchesActiveThread,
   shortId,
   sortConversations,
   suggestKeepLast,

@@ -67,6 +67,7 @@ import {
   readAttachmentFile,
   safeText,
   setStoredThreadContext,
+  signalMatchesActiveThread,
   sortConversations,
   systemRow,
   systemRows,
@@ -930,6 +931,9 @@ export function App({ backend }: { backend: ChatBackend }) {
         return;
       }
       if (signal === "process.message") {
+        if (!signalMatchesActiveThread(payload, target)) {
+          return;
+        }
         prepareForLiveTranscriptActivity();
         applyProcessMessageSignal(payload, target, setRows, setPendingAssistant);
       } else if (signal === "process.context") {
@@ -976,19 +980,31 @@ export function App({ backend }: { backend: ChatBackend }) {
           }
         }
       } else if (signal === "chat.tool_call") {
+        if (!signalMatchesActiveThread(payload, target)) {
+          return;
+        }
         prepareForLiveTranscriptActivity();
         setPendingHil(null);
         setPendingAssistant("tool");
         applyToolCallSignal(payload, target, setRows);
       } else if (signal === "chat.tool_result") {
+        if (!signalMatchesActiveThread(payload, target)) {
+          return;
+        }
         prepareForLiveTranscriptActivity();
         applyToolResultSignal(payload, target, setRows);
         setPendingAssistant("thinking");
       } else if (signal === "chat.text") {
+        if (!signalMatchesActiveThread(payload, target)) {
+          return;
+        }
         prepareForLiveTranscriptActivity();
         applyAssistantSignal(payload, target, setRows);
         setPendingAssistant(null);
       } else if (signal === "chat.complete") {
+        if (!signalMatchesActiveThread(payload, target)) {
+          return;
+        }
         const record = asRecord(payload);
         setPendingHil(null);
         setPendingAssistant((current) => {
@@ -1005,6 +1021,9 @@ export function App({ backend }: { backend: ChatBackend }) {
         }
         void loadThreads();
       } else if (signal === "chat.hil") {
+        if (!signalMatchesActiveThread(payload, target)) {
+          return;
+        }
         prepareForLiveTranscriptActivity();
         setPendingAssistant(null);
         setPendingHil(normalizeHilRequest(payload));
