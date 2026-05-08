@@ -239,6 +239,57 @@ describe("ProcessStore", () => {
       });
     });
 
+    it("getMessages uses a bounded default and requires explicit unbounded reads", async () => {
+      const stub = await getProcessByPid("msg-no-implicit-limit");
+      await runInDurableObject(stub, (instance: Process) => {
+        const store = (instance as any).store;
+        for (let i = 0; i < 205; i++) {
+          store.appendMessage("user", `msg-${i}`);
+        }
+        const defaultMessages = store.getMessages();
+        expect(defaultMessages).toHaveLength(200);
+        expect(defaultMessages[199].content).toBe("msg-199");
+
+        const allMessages = store.getMessages({ limit: null });
+        expect(allMessages).toHaveLength(205);
+        expect(allMessages[204].content).toBe("msg-204");
+      });
+    });
+
+    it("messageStats returns count and last message id without reading rows", async () => {
+      const stub = await getProcessByPid("msg-stats");
+      await runInDurableObject(stub, (instance: Process) => {
+        const store = (instance as any).store;
+        expect(store.messageStats()).toEqual({ count: 0, lastMessageId: null });
+
+        const firstId = store.appendMessage("user", "one");
+        const secondId = store.appendMessage("assistant", "two");
+        expect(store.messageStats()).toEqual({ count: 2, lastMessageId: secondId });
+        expect(firstId).toBeLessThan(secondId);
+      });
+    });
+
+    it("getMessages supports tail and cursor pagination", async () => {
+      const stub = await getProcessByPid("msg-tail-pagination");
+      await runInDurableObject(stub, (instance: Process) => {
+        const store = (instance as any).store;
+        for (let i = 0; i < 10; i++) {
+          store.appendMessage("user", `msg-${i}`);
+        }
+
+        const tail = store.getMessages({ tail: true, limit: 3 });
+        expect(tail.map((message: any) => message.content)).toEqual(["msg-7", "msg-8", "msg-9"]);
+
+        const older = store.getMessages({ beforeMessageId: tail[0].id, limit: 3 });
+        expect(older.map((message: any) => message.content)).toEqual(["msg-4", "msg-5", "msg-6"]);
+        expect(store.hasMessageBefore(older[0].conversationId, older[0].id)).toBe(true);
+        expect(store.hasMessageAfter(older[2].conversationId, older[2].id)).toBe(true);
+
+        const newer = store.getMessages({ afterMessageId: older[2].id, limit: 2 });
+        expect(newer.map((message: any) => message.content)).toEqual(["msg-7", "msg-8"]);
+      });
+    });
+
     it("clearMessages removes all and returns count", async () => {
       const stub = await getProcessByPid("msg-clear");
       await runInDurableObject(stub, (instance: Process) => {

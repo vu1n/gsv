@@ -929,6 +929,7 @@ export class Process extends Host<Env> {
       reason: "user",
       pid,
       runId,
+      conversationId: run.conversationId,
     });
 
     let continuedQueuedRunId: string | undefined;
@@ -995,6 +996,7 @@ export class Process extends Host<Env> {
         callId: pendingHil.toolCallId,
         pid,
         runId: pendingHil.runId,
+        conversationId: pendingHil.conversationId,
       });
       if (this.handleRunStopped(pendingHil.runId)) {
         return {
@@ -1078,13 +1080,52 @@ export class Process extends Host<Env> {
   private async handleProcHistory(args: ProcHistoryArgs): Promise<ProcHistoryResult> {
     const pid = this.pid;
     const conversationId = normalizeConversationId(args.conversationId);
+    const limit = args.limit ?? 200;
+    const offset = args.offset ?? 0;
+    const beforeMessageId = args.beforeMessageId;
+    const afterMessageId = args.afterMessageId;
+    const tail = args.tail === true;
+
+    if (!isPositiveInteger(limit)) {
+      return { ok: false, error: "proc.history limit must be a positive integer" };
+    }
+    if (!isNonNegativeInteger(offset)) {
+      return { ok: false, error: "proc.history offset must be a non-negative integer" };
+    }
+    if (beforeMessageId !== undefined && !isPositiveInteger(beforeMessageId)) {
+      return { ok: false, error: "proc.history beforeMessageId must be a positive integer" };
+    }
+    if (afterMessageId !== undefined && !isPositiveInteger(afterMessageId)) {
+      return { ok: false, error: "proc.history afterMessageId must be a positive integer" };
+    }
+    const cursorCount = (tail ? 1 : 0)
+      + (beforeMessageId !== undefined ? 1 : 0)
+      + (afterMessageId !== undefined ? 1 : 0);
+    if (cursorCount > 1) {
+      return { ok: false, error: "proc.history accepts only one cursor: tail, beforeMessageId, or afterMessageId" };
+    }
+    if (cursorCount > 0 && args.offset !== undefined) {
+      return { ok: false, error: "proc.history offset cannot be combined with cursor pagination" };
+    }
+
     this.store.ensureConversation(conversationId);
     const total = this.store.messageCount(conversationId);
     const records = this.store.getMessages({
       conversationId,
-      limit: args.limit,
-      offset: args.offset,
+      limit,
+      offset,
+      beforeMessageId,
+      afterMessageId,
+      tail,
     });
+    const firstMessageId = records[0]?.id ?? null;
+    const lastMessageId = records[records.length - 1]?.id ?? null;
+    const hasMoreBefore = firstMessageId === null
+      ? false
+      : this.store.hasMessageBefore(conversationId, firstMessageId);
+    const hasMoreAfter = lastMessageId === null
+      ? false
+      : this.store.hasMessageAfter(conversationId, lastMessageId);
 
     const messages: ProcHistoryMessage[] = records.map((r) => {
       if (r.role === "toolResult") {
@@ -1151,7 +1192,9 @@ export class Process extends Host<Env> {
       conversationId,
       messages,
       messageCount: total,
-      truncated: (args.offset ?? 0) + messages.length < total,
+      truncated: cursorCount > 0 ? hasMoreBefore || hasMoreAfter : offset + messages.length < total,
+      hasMoreBefore,
+      hasMoreAfter,
       pendingHil: this.toProcHilRequest(this.store.getPendingHil()),
       context: await this.getContextStateForHistory(conversationId),
     };
@@ -1191,9 +1234,7 @@ export class Process extends Host<Env> {
 
   private async getContextStateForHistory(conversationId: string): Promise<ProcContextState | null> {
     const stored = this.store.getContextState(conversationId);
-    const records = this.store.getMessages({ conversationId });
-    const messageCount = records.length;
-    const lastMessageId = records[messageCount - 1]?.id ?? null;
+    const { count: messageCount, lastMessageId } = this.store.messageStats(conversationId);
     if (
       stored
       && stored.messageCount === messageCount
@@ -1201,30 +1242,7 @@ export class Process extends Host<Env> {
     ) {
       return stored;
     }
-
-    const config = stored ? null : await this.resolveCheckpointConfig();
-    const provider = stored?.provider ?? config?.provider;
-    const model = stored?.model ?? config?.model;
-    if (!provider || !model) {
-      return stored;
-    }
-
-    const context: Context = {
-      systemPrompt: "",
-      messages: this.store.toMessages({ conversationId }),
-    };
-    const state = buildProcContextState({
-      conversationId,
-      messageCount,
-      lastMessageId,
-      provider,
-      model,
-      contextWindowTokens: stored?.contextWindowTokens ?? config?.contextWindowTokens ?? null,
-      maxOutputTokens: stored?.maxOutputTokens ?? config?.maxTokens ?? 0,
-      estimatedInputTokens: estimateContextInputTokens(context),
-    });
-    this.store.setContextState(state);
-    return state;
+    return stored ? { ...stored, messageCount, lastMessageId } : null;
   }
 
   private handleConversationOpen(args: ProcConversationOpenArgs): ProcConversationOpenResult {
@@ -2183,6 +2201,7 @@ export class Process extends Host<Env> {
         error: displayError,
         pid: this.pid,
         runId,
+        conversationId,
       });
       if (this.handleRunStopped(runId)) {
         return;
@@ -2201,6 +2220,7 @@ export class Process extends Host<Env> {
         error: displayError,
         pid: this.pid,
         runId,
+        conversationId,
       });
       if (this.handleRunStopped(runId)) {
         return;
@@ -2221,8 +2241,14 @@ export class Process extends Host<Env> {
       (b): b is ToolCall => b.type === "toolCall",
     );
 
-    if (text.trim()) {
-      await this.sendSignal("chat.text", { text, pid: this.pid, runId });
+    if (text.trim() || thinkingBlocks.length > 0) {
+      await this.sendSignal("chat.text", {
+        text,
+        thinking: thinkingBlocks,
+        pid: this.pid,
+        runId,
+        conversationId,
+      });
       if (this.handleRunStopped(runId)) {
         return;
       }
@@ -2260,6 +2286,7 @@ export class Process extends Host<Env> {
         text,
         pid: this.pid,
         runId,
+        conversationId,
         usage: response.usage,
       });
       if (this.handleRunStopped(runId)) {
@@ -2311,6 +2338,7 @@ export class Process extends Host<Env> {
         error: message,
         pid: this.pid,
         runId,
+        conversationId,
       });
       await this.finishRun("context.policy.fail");
       return "stopped";
@@ -2335,6 +2363,7 @@ export class Process extends Host<Env> {
         error: message,
         pid: this.pid,
         runId,
+        conversationId,
       });
       await this.finishRun("context.auto_compact.empty");
       return "stopped";
@@ -2359,6 +2388,7 @@ export class Process extends Host<Env> {
         error: message,
         pid: this.pid,
         runId,
+        conversationId,
       });
       await this.finishRun("context.auto_compact.failed");
       return "stopped";
@@ -2385,9 +2415,7 @@ export class Process extends Host<Env> {
     context: Context,
     usage?: AssistantMessage["usage"],
   ): Promise<ProcContextState> {
-    const messages = this.store.getMessages({ conversationId });
-    const messageCount = messages.length;
-    const lastMessageId = messages[messageCount - 1]?.id ?? null;
+    const { count: messageCount, lastMessageId } = this.store.messageStats(conversationId);
     const state = buildProcContextState({
       conversationId,
       runId,
@@ -2714,8 +2742,8 @@ export class Process extends Host<Env> {
   }
 
   private async buildContextMessages(conversationId: string): Promise<Context["messages"]> {
-    const records = this.store.getMessages({ conversationId });
-    const messages = this.store.toMessages({ conversationId });
+    const records = this.store.getMessages({ conversationId, limit: null });
+    const messages = this.store.toMessages({ conversationId, limit: null });
 
     for (let index = 0; index < records.length; index += 1) {
       const record = records[index];
@@ -2861,6 +2889,7 @@ export class Process extends Host<Env> {
         error,
         pid: this.pid,
         runId,
+        conversationId,
       });
     }
 
@@ -2953,6 +2982,7 @@ export class Process extends Host<Env> {
           callId: tc.id,
           pid: this.pid,
           runId,
+          conversationId: run.conversationId,
         });
         if (this.handleRunStopped(runId)) {
           return null;
@@ -3054,6 +3084,7 @@ export class Process extends Host<Env> {
           call,
           toolArgs,
           approvalPolicy,
+          conversationId,
         ),
         {
           mcpToolBindings: await this.getCodeModeMcpToolBindings(),
@@ -3082,6 +3113,7 @@ export class Process extends Host<Env> {
     call: SyscallName,
     args: Record<string, unknown>,
     approvalPolicy: ToolApprovalPolicy,
+    conversationId: string,
   ): Promise<unknown> {
     if (this.handleRunStopped(runId)) {
       throw new Error("Run stopped before CodeMode tool execution completed");
@@ -3126,6 +3158,7 @@ export class Process extends Host<Env> {
       callId: toolCallId,
       pid: this.pid,
       runId,
+      conversationId,
     });
     if (this.handleRunStopped(runId)) {
       throw new Error("Run stopped before CodeMode tool execution completed");
@@ -3149,6 +3182,7 @@ export class Process extends Host<Env> {
         error: message,
         pid: this.pid,
         runId,
+        conversationId,
       });
       throw error;
     }
@@ -3163,6 +3197,7 @@ export class Process extends Host<Env> {
         output,
         pid: this.pid,
         runId,
+        conversationId,
       });
       return output;
     }
@@ -3176,6 +3211,7 @@ export class Process extends Host<Env> {
       error,
       pid: this.pid,
       runId,
+      conversationId,
     });
     throw new Error(error);
   }
@@ -3412,6 +3448,7 @@ export class Process extends Host<Env> {
       error: errorMessage,
       pid: this.pid,
       runId,
+      conversationId,
     });
   }
 

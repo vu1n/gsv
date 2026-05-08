@@ -67,6 +67,7 @@ import {
   readAttachmentFile,
   safeText,
   setStoredThreadContext,
+  signalMatchesActiveThread,
   sortConversations,
   systemRow,
   systemRows,
@@ -77,10 +78,27 @@ import {
 const TARGET_CHAT_PROCESS_EVENT = "gsv:target-chat-process";
 const PENDING_TARGETS_KEY = "__gsvPendingChatProcessTargets";
 const WINDOW_ID = new URL(window.location.href).searchParams.get("windowId")?.trim() || "";
+const HISTORY_PAGE_SIZE = 50;
 
 function historyTargetKey(target: Pick<ThreadContext, "pid" | "conversationId">): string {
   return `${target.pid}\n${target.conversationId || "default"}`;
 }
+
+type HistoryWindow = {
+  targetKey: string;
+  oldestMessageId: number | null;
+  newestMessageId: number | null;
+  hasMoreBefore: boolean;
+  loadingOlder: boolean;
+};
+
+const EMPTY_HISTORY_WINDOW: HistoryWindow = {
+  targetKey: "",
+  oldestMessageId: null,
+  newestMessageId: null,
+  hasMoreBefore: false,
+  loadingOlder: false,
+};
 
 const EMPTY_ARCHIVE: ArchiveState = {
   loading: false,
@@ -186,6 +204,16 @@ function removeRecordKey(record: Record<string, string>, key: string): Record<st
   return next;
 }
 
+function historyMessageIds(messages: unknown[]): { first: number | null; last: number | null } {
+  const ids = messages
+    .map((message) => asNumber(asRecord(message)?.id))
+    .filter((id): id is number => typeof id === "number");
+  return {
+    first: ids[0] ?? null,
+    last: ids[ids.length - 1] ?? null,
+  };
+}
+
 export function App({ backend }: { backend: ChatBackend }) {
   const [active, setActiveState] = useState<ThreadContext | null>(() => getStoredThreadContext());
   const [profiles, setProfiles] = useState<Profile[]>(() => fallbackProfiles());
@@ -200,6 +228,8 @@ export function App({ backend }: { backend: ChatBackend }) {
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("chat");
   const [rows, setRows] = useState<LogRow[]>(() => systemRows("Connecting chat backend."));
   const [messageCount, setMessageCount] = useState(0);
+  const [historyWindow, setHistoryWindow] = useState<HistoryWindow>(EMPTY_HISTORY_WINDOW);
+  const [hasNewMessages, setHasNewMessages] = useState(false);
   const [contextState, setContextState] = useState<ContextState | null>(null);
   const [contextStatesByConversation, setContextStatesByConversation] = useState<Record<string, ContextState>>({});
   const [pendingAssistant, setPendingAssistant] = useState<PendingAssistantState>(null);
@@ -235,6 +265,9 @@ export function App({ backend }: { backend: ChatBackend }) {
   const recorderTimerRef = useRef<number | null>(null);
   const recorderCancelRef = useRef(false);
   const skipNextHistoryLoadRef = useRef<string | null>(null);
+  const historyWindowRef = useRef<HistoryWindow>(EMPTY_HISTORY_WINDOW);
+  const hasNewMessagesRef = useRef(false);
+  const stickToBottomRef = useRef(true);
 
   useEffect(() => {
     activeRef.current = active;
@@ -287,6 +320,38 @@ export function App({ backend }: { backend: ChatBackend }) {
   const canStop = interactive && Boolean(active?.pid) && !abortBusy && runActive && !hasDraft && !voiceActive;
   const canActOnConversation = interactive && Boolean(active?.pid) && !messageBusy && pendingAssistant === null;
 
+  const updateHistoryWindow = useCallback((next: HistoryWindow) => {
+    historyWindowRef.current = next;
+    setHistoryWindow(next);
+  }, []);
+
+  const clearNewMessages = useCallback(() => {
+    if (!hasNewMessagesRef.current) {
+      return;
+    }
+    hasNewMessagesRef.current = false;
+    setHasNewMessages(false);
+  }, []);
+
+  const prepareForLiveTranscriptActivity = useCallback(() => {
+    const node = transcriptRef.current;
+    const atBottom = !node || isNearBottom(node);
+    stickToBottomRef.current = atBottom;
+    if (atBottom || hasNewMessagesRef.current) {
+      return;
+    }
+    hasNewMessagesRef.current = true;
+    setHasNewMessages(true);
+  }, []);
+
+  const handleTranscriptScroll = useCallback((node: HTMLElement) => {
+    const atBottom = isNearBottom(node);
+    stickToBottomRef.current = atBottom;
+    if (atBottom) {
+      clearNewMessages();
+    }
+  }, [clearNewMessages]);
+
   const setActive = useCallback((next: ThreadContext | null) => {
     const previous = activeRef.current;
     const normalized = setStoredThreadContext(next);
@@ -298,6 +363,8 @@ export function App({ backend }: { backend: ChatBackend }) {
       setPendingHil(null);
       setPendingAssistant(null);
       setMessageCount(0);
+      updateHistoryWindow(EMPTY_HISTORY_WINDOW);
+      clearNewMessages();
       setArchive(EMPTY_ARCHIVE);
     } else if (processChanged) {
       setContextState(null);
@@ -305,6 +372,8 @@ export function App({ backend }: { backend: ChatBackend }) {
       setPendingHil(null);
       setPendingAssistant(null);
       setMessageCount(0);
+      updateHistoryWindow(EMPTY_HISTORY_WINDOW);
+      clearNewMessages();
       setArchive(EMPTY_ARCHIVE);
     } else {
       setContextState((current) => {
@@ -314,7 +383,7 @@ export function App({ backend }: { backend: ChatBackend }) {
     }
     setWorkspaceView("chat");
     setNotice("");
-  }, [contextStatesByConversation]);
+  }, [clearNewMessages, contextStatesByConversation, updateHistoryWindow]);
 
   const appendSystem = useCallback((text: string) => {
     setRows((current) => dropEmptyPlaceholder(current).concat(systemRow(text)));
@@ -567,47 +636,43 @@ export function App({ backend }: { backend: ChatBackend }) {
       setContextState(null);
       setContextStatesByConversation({});
       setMessageCount(0);
+      updateHistoryWindow(EMPTY_HISTORY_WINDOW);
+      clearNewMessages();
       setRows(systemRows("No thread selected. Send a message to start a new thread."));
       return;
     }
 
     try {
-      const merged: unknown[] = [];
-      let offset = 0;
-      let total = 0;
-      let truncated = false;
-      let nextHil: HilRequest | null = null;
-      let nextContext: ContextState | null = null;
-      for (let page = 0; page < 20; page += 1) {
-        const result = await backend.getHistory({
-          pid: target.pid,
-          conversationId: target.conversationId || "default",
-          limit: 200,
-          offset,
-        });
-        const record = asRecord(result);
-        if (!record?.ok) {
-          setRows(systemRows("history error: " + safeText(record?.error || "unknown error")));
-          return;
-        }
-        const messages = Array.isArray(record.messages) ? record.messages : [];
-        if (page === 0) {
-          nextHil = normalizeHilRequest(record.pendingHil);
-          nextContext = normalizeContextState(record.context);
-        }
-        merged.push(...messages);
-        total = asNumber(record.messageCount) ?? messages.length;
-        offset += messages.length;
-        truncated = record.truncated === true;
-        if (!truncated || messages.length === 0 || offset >= total) {
-          break;
-        }
+      const targetKey = historyTargetKey(target);
+      updateHistoryWindow({ ...EMPTY_HISTORY_WINDOW, targetKey });
+      const result = await backend.getHistory({
+        pid: target.pid,
+        conversationId: target.conversationId || "default",
+        limit: HISTORY_PAGE_SIZE,
+        tail: true,
+      });
+      const activeTarget = activeRef.current;
+      if (!activeTarget || historyTargetKey(activeTarget) !== targetKey) {
+        return;
       }
-      const flattened = flattenHistory(merged);
-      if (truncated && offset < total) {
-        flattened.push(systemRow(`history truncated at ${offset}/${total} messages`));
+      const record = asRecord(result);
+      if (!record?.ok) {
+        setRows(systemRows("history error: " + safeText(record?.error || "unknown error")));
+        return;
       }
+      const messages = Array.isArray(record.messages) ? record.messages : [];
+      const flattened = flattenHistory(messages);
+      const ids = historyMessageIds(messages);
+      const total = asNumber(record.messageCount) ?? messages.length;
+      updateHistoryWindow({
+        targetKey,
+        oldestMessageId: ids.first,
+        newestMessageId: ids.last,
+        hasMoreBefore: record.hasMoreBefore === true,
+        loadingOlder: false,
+      });
       setMessageCount(total);
+      const nextContext = normalizeContextState(record.context);
       setContextState(nextContext);
       setContextStatesByConversation((current) => {
         const conversationId = target.conversationId || "default";
@@ -621,14 +686,81 @@ export function App({ backend }: { backend: ChatBackend }) {
         }
         return { ...current, [conversationId]: nextContext };
       });
-      setPendingHil(nextHil);
+      setPendingHil(normalizeHilRequest(record.pendingHil));
       setPendingAssistant(null);
       setRows(flattened);
+      clearNewMessages();
       requestAnimationFrame(() => scrollTranscript("bottom"));
     } catch (error) {
       setRows(systemRows("history error: " + formatError(error)));
     }
-  }, [backend]);
+  }, [backend, clearNewMessages, updateHistoryWindow]);
+
+  const loadOlderHistory = useCallback(async () => {
+    const target = activeRef.current;
+    if (!target?.pid) {
+      return;
+    }
+    const currentWindow = historyWindowRef.current;
+    if (!currentWindow.hasMoreBefore || currentWindow.loadingOlder || currentWindow.oldestMessageId === null) {
+      return;
+    }
+    const targetKey = historyTargetKey(target);
+    if (currentWindow.targetKey !== targetKey) {
+      return;
+    }
+
+    const node = transcriptRef.current;
+    const previousScrollHeight = node?.scrollHeight ?? 0;
+    const previousScrollTop = node?.scrollTop ?? 0;
+    stickToBottomRef.current = false;
+    updateHistoryWindow({ ...currentWindow, loadingOlder: true });
+
+    try {
+      const result = await backend.getHistory({
+        pid: target.pid,
+        conversationId: target.conversationId || "default",
+        limit: HISTORY_PAGE_SIZE,
+        beforeMessageId: currentWindow.oldestMessageId,
+      });
+      const activeTarget = activeRef.current;
+      if (!activeTarget || historyTargetKey(activeTarget) !== targetKey) {
+        return;
+      }
+      const record = asRecord(result);
+      if (!record?.ok) {
+        appendSystem("history error: " + safeText(record?.error || "unknown error"));
+        updateHistoryWindow({ ...historyWindowRef.current, loadingOlder: false });
+        return;
+      }
+      const messages = Array.isArray(record.messages) ? record.messages : [];
+      const ids = historyMessageIds(messages);
+      const olderRows = messages.length > 0 ? flattenHistory(messages) : [];
+      setRows((current) => olderRows.concat(dropEmptyPlaceholder(current)));
+      updateHistoryWindow({
+        targetKey,
+        oldestMessageId: ids.first ?? currentWindow.oldestMessageId,
+        newestMessageId: currentWindow.newestMessageId,
+        hasMoreBefore: record.hasMoreBefore === true,
+        loadingOlder: false,
+      });
+      setMessageCount((current) => asNumber(record.messageCount) ?? current);
+      requestAnimationFrame(() => {
+        const nextNode = transcriptRef.current;
+        if (!nextNode) {
+          return;
+        }
+        nextNode.scrollTop = nextNode.scrollHeight - previousScrollHeight + previousScrollTop;
+      });
+    } catch (error) {
+      const activeTarget = activeRef.current;
+      if (!activeTarget || historyTargetKey(activeTarget) !== targetKey) {
+        return;
+      }
+      appendSystem("history error: " + formatError(error));
+      updateHistoryWindow({ ...historyWindowRef.current, loadingOlder: false });
+    }
+  }, [appendSystem, backend, updateHistoryWindow]);
 
   const loadArchiveSegments = useCallback(async (preserveSelection = true) => {
     const target = activeRef.current;
@@ -799,12 +931,39 @@ export function App({ backend }: { backend: ChatBackend }) {
         return;
       }
       if (signal === "process.message") {
+        if (!signalMatchesActiveThread(payload, target)) {
+          return;
+        }
+        prepareForLiveTranscriptActivity();
         applyProcessMessageSignal(payload, target, setRows, setPendingAssistant);
       } else if (signal === "process.context") {
         const next = normalizeContextSignal(payload, target);
         if (next) {
           setContextStatesByConversation((current) => ({ ...current, [next.conversationId]: next }));
           setContextState(next);
+          setMessageCount((current) => next.messageCount ?? current);
+          setHistoryWindow((current) => {
+            if (current.targetKey !== historyTargetKey(target)) {
+              return current;
+            }
+            const newestMessageId = typeof next.lastMessageId === "number" ? next.lastMessageId : current.newestMessageId;
+            const updated = { ...current, newestMessageId };
+            historyWindowRef.current = updated;
+            return updated;
+          });
+          if (next.runId && typeof next.lastMessageId === "number") {
+            setRows((current) => {
+              for (let index = current.length - 1; index >= 0; index -= 1) {
+                const row = current[index];
+                if (row.kind === "message" && row.role === "assistant" && row.runId === next.runId && !row.messageId) {
+                  const updated = current.slice();
+                  updated[index] = { ...row, messageId: next.lastMessageId };
+                  return updated;
+                }
+              }
+              return current;
+            });
+          }
         }
       } else if (signal === "process.lifecycle") {
         const record = asRecord(payload);
@@ -821,16 +980,31 @@ export function App({ backend }: { backend: ChatBackend }) {
           }
         }
       } else if (signal === "chat.tool_call") {
+        if (!signalMatchesActiveThread(payload, target)) {
+          return;
+        }
+        prepareForLiveTranscriptActivity();
         setPendingHil(null);
         setPendingAssistant("tool");
         applyToolCallSignal(payload, target, setRows);
       } else if (signal === "chat.tool_result") {
+        if (!signalMatchesActiveThread(payload, target)) {
+          return;
+        }
+        prepareForLiveTranscriptActivity();
         applyToolResultSignal(payload, target, setRows);
         setPendingAssistant("thinking");
       } else if (signal === "chat.text") {
+        if (!signalMatchesActiveThread(payload, target)) {
+          return;
+        }
+        prepareForLiveTranscriptActivity();
         applyAssistantSignal(payload, target, setRows);
         setPendingAssistant(null);
       } else if (signal === "chat.complete") {
+        if (!signalMatchesActiveThread(payload, target)) {
+          return;
+        }
         const record = asRecord(payload);
         setPendingHil(null);
         setPendingAssistant((current) => {
@@ -842,11 +1016,15 @@ export function App({ backend }: { backend: ChatBackend }) {
         setSuppressNextAbortedComplete(false);
         const errorText = asString(record?.error);
         if (errorText) {
+          prepareForLiveTranscriptActivity();
           appendSystem(errorText);
         }
         void loadThreads();
-        void loadHistory(target);
       } else if (signal === "chat.hil") {
+        if (!signalMatchesActiveThread(payload, target)) {
+          return;
+        }
+        prepareForLiveTranscriptActivity();
         setPendingAssistant(null);
         setPendingHil(normalizeHilRequest(payload));
       } else if (signal === "chat.error" || signal === "process.exit") {
@@ -856,7 +1034,7 @@ export function App({ backend }: { backend: ChatBackend }) {
         void loadThreads();
       }
     });
-  }, [appendSystem, loadArchiveSegments, loadConversations, loadHistory, loadThreads, suppressNextAbortedComplete, workspaceView]);
+  }, [appendSystem, loadArchiveSegments, loadConversations, loadHistory, loadThreads, prepareForLiveTranscriptActivity, suppressNextAbortedComplete, workspaceView]);
 
   useEffect(() => {
     scrollTranscript("near-bottom");
@@ -1269,10 +1447,16 @@ export function App({ backend }: { backend: ChatBackend }) {
     if (!node) {
       return;
     }
-    if (mode === "near-bottom" && !isNearBottom(node)) {
+    if (mode === "near-bottom" && !stickToBottomRef.current && !isNearBottom(node)) {
       return;
     }
     node.scrollTop = node.scrollHeight;
+    stickToBottomRef.current = true;
+    clearNewMessages();
+  }
+
+  function jumpToLatest(): void {
+    scrollTranscript("bottom");
   }
 
   return (
@@ -1386,6 +1570,9 @@ export function App({ backend }: { backend: ChatBackend }) {
               userLabel={viewerUsername}
               pendingAssistant={pendingAssistant}
               pendingHil={pendingHil}
+              hasOlderHistory={historyWindow.hasMoreBefore}
+              loadingOlderHistory={historyWindow.loadingOlder}
+              hasNewMessages={hasNewMessages}
               hilBusy={hilBusy}
               branchBusy={branchBusy}
               refNode={transcriptRef}
@@ -1394,6 +1581,9 @@ export function App({ backend }: { backend: ChatBackend }) {
               onCopy={(text) => void copyText("message", text)}
               onBranch={(messageId) => void branchFromMessage(messageId)}
               onHilDecision={(requestId, decision, remember) => void decidePendingHil(requestId, decision, remember)}
+              onLoadOlderHistory={() => void loadOlderHistory()}
+              onJumpToLatest={jumpToLatest}
+              onViewedLatest={handleTranscriptScroll}
               onLoadMediaSource={loadMediaSource}
               onRetryMediaSource={retryMediaSource}
             />

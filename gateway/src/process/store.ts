@@ -34,6 +34,8 @@ import {
   type ProcessConversationSegmentRecord,
 } from "./conversations";
 
+const DEFAULT_MESSAGE_READ_LIMIT = 200;
+
 export type ToolCallStatus = "pending" | "completed" | "error";
 
 export type ToolCallRecord = {
@@ -116,6 +118,11 @@ export class ProcessStore {
         media_json TEXT,
         created_at INTEGER NOT NULL
       )
+    `);
+
+    this.sql.exec(`
+      CREATE INDEX IF NOT EXISTS messages_conversation_id_id_idx
+      ON messages (conversation_id, id)
     `);
 
     this.sql.exec(`
@@ -829,14 +836,37 @@ export class ProcessStore {
 
   getMessages(opts?: {
     conversationId?: string;
-    limit?: number;
+    limit?: number | null;
     offset?: number;
+    beforeMessageId?: number;
+    afterMessageId?: number;
+    tail?: boolean;
   }): MessageRecord[] {
     const conversationId = normalizeConversationId(opts?.conversationId);
-    const limit = opts?.limit ?? 200;
+    const limit = opts?.limit === null ? null : opts?.limit ?? DEFAULT_MESSAGE_READ_LIMIT;
     const offset = opts?.offset ?? 0;
+    const beforeMessageId = opts?.beforeMessageId;
+    const afterMessageId = opts?.afterMessageId;
+    const tail = opts?.tail === true;
+    const hasLimit = limit !== null;
+    const where = ["conversation_id = ?"];
+    const args: Array<string | number> = [conversationId];
+    if (beforeMessageId !== undefined) {
+      where.push("id < ?");
+      args.push(beforeMessageId);
+    }
+    if (afterMessageId !== undefined) {
+      where.push("id > ?");
+      args.push(afterMessageId);
+    }
+    const pagination = hasLimit
+      ? { clause: "LIMIT ? OFFSET ?", args: [limit, offset] as const }
+      : offset > 0
+        ? { clause: "LIMIT -1 OFFSET ?", args: [offset] as const }
+        : { clause: "", args: [] as const };
+    const order = tail || beforeMessageId !== undefined ? "DESC" : "ASC";
 
-    return [...this.sql.exec<{
+    const rows = [...this.sql.exec<{
       id: number;
       conversation_id: string;
       generation: number;
@@ -847,11 +877,15 @@ export class ProcessStore {
       media_json: string | null;
       created_at: number;
       }>(
-        "SELECT * FROM messages WHERE conversation_id = ? ORDER BY id ASC LIMIT ? OFFSET ?",
-      conversationId,
-      limit,
-      offset,
-    )].map((row) => ({
+        `SELECT * FROM messages WHERE ${where.join(" AND ")} ORDER BY id ${order} ${pagination.clause}`,
+      ...args,
+      ...pagination.args,
+    )];
+    if (tail || beforeMessageId !== undefined) {
+      rows.reverse();
+    }
+
+    return rows.map((row) => ({
       id: row.id,
       conversationId: row.conversation_id,
       generation: row.generation,
@@ -862,6 +896,24 @@ export class ProcessStore {
       media: row.media_json,
       createdAt: row.created_at,
     }));
+  }
+
+  hasMessageBefore(conversationId: string, messageId: number): boolean {
+    const rows = [...this.sql.exec<{ found: number }>(
+      "SELECT 1 as found FROM messages WHERE conversation_id = ? AND id < ? LIMIT 1",
+      normalizeConversationId(conversationId),
+      messageId,
+    )];
+    return rows.length > 0;
+  }
+
+  hasMessageAfter(conversationId: string, messageId: number): boolean {
+    const rows = [...this.sql.exec<{ found: number }>(
+      "SELECT 1 as found FROM messages WHERE conversation_id = ? AND id > ? LIMIT 1",
+      normalizeConversationId(conversationId),
+      messageId,
+    )];
+    return rows.length > 0;
   }
 
   getMessagesForGeneration(
@@ -956,6 +1008,20 @@ export class ProcessStore {
       normalizeConversationId(conversationId),
     )];
     return rows[0]?.cnt ?? 0;
+  }
+
+  messageStats(conversationId: string = DEFAULT_CONVERSATION_ID): {
+    count: number;
+    lastMessageId: number | null;
+  } {
+    const rows = [...this.sql.exec<{ cnt: number; last_id: number | null }>(
+      "SELECT COUNT(*) as cnt, MAX(id) as last_id FROM messages WHERE conversation_id = ?",
+      normalizeConversationId(conversationId),
+    )];
+    return {
+      count: rows[0]?.cnt ?? 0,
+      lastMessageId: rows[0]?.last_id ?? null,
+    };
   }
 
   allMessagesForArchive(conversationId: string = DEFAULT_CONVERSATION_ID): MessageRecord[] {
@@ -1083,7 +1149,7 @@ export class ProcessStore {
 
   toMessages(opts?: {
     conversationId?: string;
-    limit?: number;
+    limit?: number | null;
     offset?: number;
   }): Message[] {
     const records = this.getMessages(opts);

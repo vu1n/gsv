@@ -834,13 +834,82 @@ textarea {
   background: #7e8893;
 }
 
+.transcript-shell {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+}
+
 .transcript {
+  height: 100%;
   min-height: 0;
   overflow: auto;
   padding: 14px 14px 284px;
   display: grid;
   align-content: start;
   gap: 10px;
+}
+
+.history-loader {
+  justify-self: center;
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 7px 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.76);
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.history-loader:disabled {
+  cursor: default;
+}
+
+.history-loader .spinner {
+  width: 14px;
+  height: 14px;
+}
+
+.new-messages-button {
+  position: absolute;
+  z-index: 14;
+  right: 50%;
+  bottom: 168px;
+  transform: translateX(50%);
+  min-height: 36px;
+  border: 1px solid rgba(31, 92, 153, 0.26);
+  border-radius: 999px;
+  padding: 8px 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #fff;
+  background: var(--blue);
+  box-shadow: 0 12px 28px rgba(24, 32, 40, 0.18);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.new-messages-button:hover {
+  background: #184b80;
+}
+
+.new-messages-button svg {
+  width: 15px;
+  height: 15px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .message,
@@ -1931,6 +2000,10 @@ textarea {
 
   .transcript {
     padding: 12px 10px 318px;
+  }
+
+  .new-messages-button {
+    bottom: 196px;
   }
 
   .composer {

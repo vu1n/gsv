@@ -60,6 +60,7 @@ export type ConversationRecord = {
 
 export type ContextState = {
   conversationId: string;
+  runId?: string;
   messageCount?: number;
   lastMessageId?: number | null;
   provider: string | null;
@@ -122,6 +123,7 @@ export type LogRow = MessageRow | ToolRow;
 export type HilRequest = {
   requestId: string;
   runId: string;
+  conversationId?: string;
   callId: string;
   toolName: string;
   syscall: string;

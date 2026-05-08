@@ -84,11 +84,20 @@ export async function getHistory(kernel: KernelClient, input: unknown) {
     ? args.conversationId.trim()
     : undefined;
   const offset = typeof args.offset === "number" && Number.isFinite(args.offset) ? Math.floor(args.offset) : undefined;
+  const beforeMessageId = typeof args.beforeMessageId === "number" && Number.isFinite(args.beforeMessageId)
+    ? Math.floor(args.beforeMessageId)
+    : undefined;
+  const afterMessageId = typeof args.afterMessageId === "number" && Number.isFinite(args.afterMessageId)
+    ? Math.floor(args.afterMessageId)
+    : undefined;
   return kernel.request("proc.history", {
     limit: normalizeLimit(args.limit, 50),
     ...(pid ? { pid } : {}),
     ...(conversationId ? { conversationId } : {}),
     ...(typeof offset === "number" ? { offset } : {}),
+    ...(typeof beforeMessageId === "number" ? { beforeMessageId } : {}),
+    ...(typeof afterMessageId === "number" ? { afterMessageId } : {}),
+    ...(args.tail === true ? { tail: true } : {}),
   });
 }
 
