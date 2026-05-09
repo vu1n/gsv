@@ -7,7 +7,15 @@ import type {
   ProcSpawnResult,
 } from "./gateway-client";
 
-type HostRpcMethod = "call" | "spawnProcess" | "sendMessage" | "getHistory";
+type HostRpcMethod =
+  | "call"
+  | "spawnProcess"
+  | "sendMessage"
+  | "getHistory"
+  | "setTitle"
+  | "setBadge"
+  | "setDirty"
+  | "requestNewWindow";
 
 type HostRpcMessage = {
   type: "rpc";
@@ -51,6 +59,13 @@ export type HostBridgeController = {
   destroy: () => void;
 };
 
+type HostChromeController = {
+  setTitle: (title: string | null) => void;
+  setBadge: (badge: string | null) => void;
+  setDirty: (dirty: boolean) => void;
+  requestNewWindow: (route?: string) => string;
+};
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object") {
     return null;
@@ -60,6 +75,10 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function asString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
+}
+
+function asBoolean(value: unknown): boolean {
+  return value === true;
 }
 
 function toErrorMessage(error: unknown): string {
@@ -72,6 +91,7 @@ function postMessage(port: MessagePort, message: HostPortMessage): void {
 
 async function handleRpc(
   gatewayClient: GatewayClientLike,
+  chrome: HostChromeController | null,
   message: HostRpcMessage,
 ): Promise<unknown> {
   switch (message.method) {
@@ -99,12 +119,33 @@ async function handleRpc(
       const offset = typeof payload?.offset === "number" ? payload.offset : undefined;
       return gatewayClient.getHistory(limit, pid, offset);
     }
+    case "setTitle": {
+      const payload = asRecord(message.payload);
+      chrome?.setTitle(asString(payload?.title));
+      return { ok: true };
+    }
+    case "setBadge": {
+      const payload = asRecord(message.payload);
+      chrome?.setBadge(asString(payload?.badge));
+      return { ok: true };
+    }
+    case "setDirty": {
+      const payload = asRecord(message.payload);
+      chrome?.setDirty(asBoolean(payload?.dirty));
+      return { ok: true };
+    }
+    case "requestNewWindow": {
+      const payload = asRecord(message.payload);
+      const route = asString(payload?.route) ?? undefined;
+      return { windowId: chrome?.requestNewWindow(route) ?? null };
+    }
   }
 }
 
 export function attachHostBridge(
   iframe: HTMLIFrameElement,
   gatewayClient: GatewayClientLike,
+  chrome: HostChromeController | null = null,
 ): HostBridgeController {
   let port: MessagePort | null = null;
   let unsubscribeStatus: (() => void) | null = null;
@@ -136,7 +177,7 @@ export function attachHostBridge(
         return;
       }
 
-      void handleRpc(gatewayClient, message as HostRpcMessage)
+      void handleRpc(gatewayClient, chrome, message as HostRpcMessage)
         .then((data) => {
           postMessage(channel.port1, {
             type: "rpc-result",

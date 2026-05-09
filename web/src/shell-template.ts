@@ -369,32 +369,9 @@ export function renderDesktopShell(): string {
       <div class="desktop-root" data-desktop-root hidden>
         <header class="topbar">
           <div class="topbar-section">
-            <span class="pill">GSV</span>
+            <button type="button" class="pill topbar-launcher" data-command-launcher aria-label="Open command palette">GSV</button>
           </div>
-          <div class="topbar-section topbar-windows">
-            <button
-              type="button"
-              class="windows-toggle"
-              data-windows-toggle
-              aria-label="Windows"
-              aria-haspopup="menu"
-              aria-expanded="false"
-              aria-controls="windows-panel"
-            >
-              <span class="topbar-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-                  <rect x="4" y="5" width="6.5" height="6.5" rx="1.4"></rect>
-                  <rect x="13.5" y="5" width="6.5" height="6.5" rx="1.4"></rect>
-                  <rect x="4" y="14.5" width="6.5" height="6.5" rx="1.4"></rect>
-                  <rect x="13.5" y="14.5" width="6.5" height="6.5" rx="1.4"></rect>
-                </svg>
-              </span>
-            </button>
-            <div class="windows-panel" id="windows-panel" data-windows-panel hidden>
-              <p class="windows-empty muted" data-windows-empty>No minimized windows</p>
-              <ul class="windows-list" data-windows-list hidden></ul>
-            </div>
-          </div>
+          <nav class="taskbar-windows" data-taskbar-windows aria-label="Open windows"></nav>
           <div class="topbar-section topbar-notifications">
             <button
               type="button"
@@ -435,7 +412,14 @@ export function renderDesktopShell(): string {
           <nav class="desktop-icons" data-desktop-icons aria-label="Desktop applications"></nav>
           <section class="windows-layer" data-windows-layer></section>
         </main>
+        <div class="dock-reveal-zone" data-dock-reveal-zone aria-hidden="true"></div>
         <div class="notification-toasts" data-notification-toasts aria-live="polite" aria-atomic="false"></div>
+        <section class="command-palette" data-command-palette role="dialog" aria-label="Command palette" hidden>
+          <div class="command-palette-panel">
+            <input data-command-palette-input type="text" autocomplete="off" placeholder="Search apps and windows" />
+            <ul class="command-palette-list" data-command-palette-list></ul>
+          </div>
+        </section>
       </div>
     </div>
   `;

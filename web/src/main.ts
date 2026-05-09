@@ -8,7 +8,6 @@ import { createSessionService } from "./session-service";
 import { createSessionUi } from "./session-ui";
 import { renderDesktopShell } from "./shell-template";
 import { createWindowManager } from "./window-manager";
-import { createWindowsPanel } from "./windows-panel";
 import type { PkgListResult } from "@gsv/protocol/syscalls/packages";
 
 const app = document.querySelector<HTMLElement>("#app");
@@ -35,11 +34,6 @@ const windowManager = createWindowManager({
   appRuntime,
 });
 
-createWindowsPanel({
-  rootNode: shellEl,
-  windowManager,
-});
-
 createNotificationsPanel({
   rootNode: shellEl,
   gatewayClient,
@@ -59,8 +53,11 @@ async function refreshDesktopApps(): Promise<void> {
   try {
     const payload = await gatewayClient.call<PkgListResult>("pkg.list", {});
     const packages = Array.isArray(payload.packages) ? payload.packages : [];
-    launcher.setApps(packages.flatMap(packageToAppManifests));
+    const apps = packages.flatMap(packageToAppManifests);
+    windowManager.setAppRegistry(apps);
+    launcher.setApps(apps);
   } catch {
+    windowManager.setAppRegistry([]);
     launcher.setApps([]);
   }
 }
@@ -72,6 +69,7 @@ gatewayClient.onStatus((status) => {
   }
 
   launcher.setApps([]);
+  windowManager.setAppRegistry([]);
 });
 
 gatewayClient.onSignal((signal) => {
