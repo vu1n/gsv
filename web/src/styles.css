@@ -859,6 +859,10 @@ button:disabled {
   inset: 0;
 }
 
+.mobile-shell {
+  display: none;
+}
+
 .desktop-root {
   position: absolute;
   inset: 0;
@@ -5025,32 +5029,327 @@ button:disabled {
 }
 
 @media (max-width: 720px) {
+  .desktop-shell {
+    --mobile-wallpaper: url("https://cdn.midjourney.com/304194dc-5aae-45a0-ab41-285d5355ea6a/0_1.png");
+    min-height: 100dvh;
+    background-color: #091322;
+    background-image:
+      linear-gradient(180deg, rgba(3, 8, 18, 0.12), rgba(3, 8, 18, 0.42)),
+      var(--mobile-wallpaper);
+    background-position: center;
+    background-size: cover;
+    overscroll-behavior: none;
+  }
+
+  .topbar,
+  .dock-reveal-zone,
   .desktop-icons {
     display: none;
   }
 
+  .workspace,
+  .desktop-shell.dock-auto-hide .workspace {
+    inset: 0;
+    z-index: 30;
+  }
+
+  .desktop-shell.mobile-home-active .workspace {
+    pointer-events: none;
+  }
+
+  .mobile-shell {
+    position: absolute;
+    inset: 0;
+    z-index: 120;
+    display: block;
+    height: 100dvh;
+    overflow: hidden;
+    color: #f7f9fc;
+    font-family: var(--font-ui);
+    pointer-events: none;
+    touch-action: manipulation;
+  }
+
+  .mobile-shell button {
+    font-family: inherit;
+  }
+
+  .mobile-home {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    overflow: hidden;
+    min-height: 100dvh;
+    padding: 0;
+    pointer-events: auto;
+    background:
+      linear-gradient(180deg, rgba(3, 8, 18, 0.18), rgba(3, 8, 18, 0.46)),
+      var(--mobile-wallpaper) center / cover no-repeat,
+      linear-gradient(36deg, #091322, #254155 52%, #523b55);
+    overscroll-behavior: contain;
+    perspective: 900px;
+    transition:
+      opacity 160ms ease,
+      transform 160ms ease;
+  }
+
+  .desktop-shell.mobile-app-active .mobile-home {
+    opacity: 0;
+    pointer-events: none;
+    transform: scale(0.985);
+  }
+
+  .desktop-shell.mobile-launching .mobile-home {
+    opacity: 0;
+    transform: scale(1.04);
+  }
+
+  .mobile-app-grid {
+    --home-app-height: 110px;
+    width: min(100%, 520px);
+    height: 100%;
+    min-height: 0;
+    margin: 0 auto;
+    display: block;
+    overflow: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    padding: max(14px, calc(34dvh - var(--home-app-height))) 24px max(28px, calc(34dvh - var(--home-app-height)));
+    scroll-snap-type: y proximity;
+    scrollbar-width: none;
+    transform-style: preserve-3d;
+  }
+
+  .mobile-app-grid::-webkit-scrollbar {
+    display: none;
+  }
+
+  .mobile-app-icon {
+    --home-app-depth: -90px;
+    --home-app-rotate: 0deg;
+    --home-app-scale: 0.82;
+    --home-app-opacity: 0.46;
+    --home-app-y: 0px;
+    width: 100%;
+    min-width: 0;
+    min-height: var(--home-app-height);
+    border: 1px solid rgba(255, 255, 255, 0.38);
+    border-radius: 24px;
+    background: rgba(247, 249, 252, 0.14);
+    color: rgba(255, 255, 255, 0.94);
+    display: grid;
+    grid-template-columns: 62px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 16px;
+    margin: 0 0 16px;
+    opacity: var(--home-app-opacity);
+    padding: 14px 16px;
+    scroll-snap-align: center;
+    text-align: left;
+    transform:
+      translate3d(0, var(--home-app-y), var(--home-app-depth))
+      rotateX(var(--home-app-rotate))
+      scale(var(--home-app-scale));
+    transform-origin: center;
+    transform-style: preserve-3d;
+    transition:
+      background-color 100ms ease,
+      border-color 100ms ease,
+      box-shadow 100ms ease,
+      opacity 100ms ease;
+    will-change: transform, opacity;
+    -webkit-backdrop-filter: blur(14px) saturate(1.08);
+    backdrop-filter: blur(14px) saturate(1.08);
+  }
+
+  .mobile-app-icon:hover,
+  .mobile-app-icon:focus-visible,
+  .mobile-app-icon.is-centered {
+    outline: none;
+    border-color: rgba(255, 255, 255, 0.58);
+    background: rgba(247, 249, 252, 0.22);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.32),
+      0 22px 44px rgba(3, 8, 18, 0.28);
+  }
+
+  .mobile-app-icon.is-active-app {
+    border-color: rgba(139, 214, 255, 0.7);
+    background: rgba(226, 246, 255, 0.24);
+  }
+
+  .mobile-app-icon .desktop-glyph {
+    width: 62px;
+    height: 62px;
+    padding: 12px;
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.16);
+    color: rgba(255, 255, 255, 0.96);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.22),
+      0 12px 26px rgba(3, 8, 18, 0.22);
+    filter: none;
+  }
+
+  .mobile-app-copy {
+    min-width: 0;
+    display: grid;
+    gap: 4px;
+  }
+
+  .mobile-app-copy strong,
+  .mobile-app-copy small {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .mobile-app-copy strong {
+    color: rgba(255, 255, 255, 0.94);
+    font-size: 1rem;
+    font-weight: 720;
+    line-height: 1.2;
+    letter-spacing: 0;
+    text-shadow: 0 1px 2px rgba(3, 8, 18, 0.5);
+    white-space: nowrap;
+  }
+
+  .mobile-app-copy small {
+    color: rgba(255, 255, 255, 0.68);
+    font-size: 0.74rem;
+    font-weight: 550;
+    line-height: 1.25;
+    max-height: 2.5em;
+  }
+
+  .mobile-app-icon.is-centered .mobile-app-copy small {
+    color: rgba(255, 255, 255, 0.84);
+  }
+
+  .mobile-app-state {
+    min-width: 72px;
+    height: 30px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    border-radius: 999px;
+    background: rgba(3, 8, 18, 0.2);
+    color: rgba(255, 255, 255, 0.74);
+    font-size: 0.68rem;
+    font-weight: 700;
+    line-height: 1;
+    padding: 0 10px;
+    white-space: nowrap;
+  }
+
+  .mobile-app-state-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.38);
+    flex: 0 0 auto;
+  }
+
+  .mobile-app-icon.is-paused .mobile-app-state-dot {
+    background: rgba(240, 202, 111, 0.92);
+  }
+
+  .mobile-app-icon.is-running .mobile-app-state-dot,
+  .mobile-app-icon.is-active-app .mobile-app-state-dot {
+    background: rgba(92, 210, 168, 0.96);
+    box-shadow: 0 0 14px rgba(92, 210, 168, 0.52);
+  }
+
+  .mobile-app-icon.is-active-app .mobile-app-state {
+    background: rgba(14, 87, 68, 0.34);
+    color: rgba(230, 255, 248, 0.92);
+  }
+
   .windows-layer .mock-window {
+    top: 0 !important;
+    left: 0 !important;
     width: 100% !important;
-    height: 100% !important;
+    height: 100dvh !important;
     transform: none !important;
+    border: 0;
     border-radius: 0;
+    box-shadow: none;
+    background: #f7f9fc;
   }
 
   .windows-layer .mock-window:not(.is-active) {
+    display: none !important;
     pointer-events: none;
   }
 
   .window-titlebar {
-    cursor: default;
+    display: none;
+  }
+
+  .window-content {
+    height: 100%;
+    min-height: 100dvh;
   }
 
   .window-resize-handle {
     display: none;
   }
 
-  .taskbar-window {
-    min-width: 68px;
-    max-width: 104px;
+  .mobile-home-handle {
+    position: absolute;
+    left: 50%;
+    bottom: max(8px, env(safe-area-inset-bottom));
+    z-index: 7;
+    width: 96px;
+    height: 28px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    opacity: 0;
+    padding: 0;
+    pointer-events: none;
+    transform: translateX(-50%);
+    transition: opacity 140ms ease;
+  }
+
+  .mobile-home-handle::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    bottom: 8px;
+    width: 54px;
+    height: 5px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.58);
+    box-shadow: 0 1px 8px rgba(3, 8, 18, 0.32);
+    transform: translateX(-50%);
+  }
+
+  .desktop-shell[data-mobile-state="app"] .mobile-home-handle {
+    opacity: 0.8;
+    pointer-events: auto;
+  }
+
+  .mobile-home-handle:hover,
+  .mobile-home-handle:focus-visible {
+    outline: none;
+    opacity: 1;
+  }
+
+  .command-palette {
+    z-index: 340;
+    place-items: start center;
+    padding: max(16px, env(safe-area-inset-top)) 10px 0;
+  }
+
+  .command-palette-panel {
+    width: min(100%, 430px);
+    border-radius: 16px;
+  }
+
+  .command-palette-list {
+    max-height: min(56vh, 440px);
   }
 
   .notifications-panel {

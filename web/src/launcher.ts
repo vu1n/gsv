@@ -32,6 +32,8 @@ type PaletteItem = {
   run: () => void;
 };
 
+type MobileShellState = "home" | "app" | "search";
+
 function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
@@ -47,6 +49,9 @@ export function createLauncher(options: LauncherOptions): LauncherController {
   const taskbarWindowsNode = rootNode.querySelector<HTMLElement>("[data-taskbar-windows]");
   const topbarNode = rootNode.querySelector<HTMLElement>(".topbar");
   const commandLauncherNode = rootNode.querySelector<HTMLButtonElement>("[data-command-launcher]");
+  const mobileAppsNode = rootNode.querySelector<HTMLElement>("[data-mobile-apps]");
+  const mobileHomeNode = rootNode.querySelector<HTMLElement>("[data-mobile-home]");
+  const mobileHomeButtonNode = rootNode.querySelector<HTMLButtonElement>("[data-mobile-home-button]");
   const dockRevealZoneNode = rootNode.querySelector<HTMLElement>("[data-dock-reveal-zone]");
   const commandPaletteNode = rootNode.querySelector<HTMLElement>("[data-command-palette]");
   const commandPaletteInputNode = rootNode.querySelector<HTMLInputElement>("[data-command-palette-input]");
@@ -65,6 +70,9 @@ export function createLauncher(options: LauncherOptions): LauncherController {
   let paletteItems: PaletteItem[] = [];
   let openedInitialApp = false;
   let dockRevealTimer: number | null = null;
+  let mobileLaunchTimer: number | null = null;
+  let mobileShellState: MobileShellState = "home";
+  let mobileHomeDepthRaf: number | null = null;
 
   const getIconNodes = (): HTMLButtonElement[] => {
     return Array.from(iconsNode.querySelectorAll<HTMLButtonElement>(".desktop-icon[data-app-id]"));
@@ -136,12 +144,155 @@ export function createLauncher(options: LauncherOptions): LauncherController {
       .join("");
   };
 
+  const renderMobileApps = (): void => {
+    if (!mobileAppsNode) {
+      return;
+    }
+
+    mobileAppsNode.innerHTML = apps
+      .map((appItem) => {
+        return `
+          <button type="button" class="mobile-app-icon" data-app-id="${escapeHtml(appItem.id)}">
+            ${renderDesktopIcon(appItem.icon)}
+            <span class="mobile-app-copy">
+              <strong>${escapeHtml(appItem.name)}</strong>
+              <small>${escapeHtml(appItem.description)}</small>
+            </span>
+            <span class="mobile-app-state">
+              <span class="mobile-app-state-dot" aria-hidden="true"></span>
+              <span data-mobile-app-status>Ready</span>
+            </span>
+          </button>
+        `;
+      })
+      .join("");
+    syncMobileAppState();
+    scheduleMobileHomeDepth();
+  };
+
+  const syncMobileAppState = (summaries: WindowSummary[] = latestSummaries): void => {
+    if (!mobileAppsNode) {
+      return;
+    }
+
+    const activeSummary = summaries.find((summary) => summary.active && summary.mode !== "minimized") ?? null;
+    const summariesByApp = new Map<string, WindowSummary[]>();
+    for (const summary of summaries) {
+      const appSummaries = summariesByApp.get(summary.appId) ?? [];
+      appSummaries.push(summary);
+      summariesByApp.set(summary.appId, appSummaries);
+    }
+
+    for (const appNode of mobileAppsNode.querySelectorAll<HTMLButtonElement>(".mobile-app-icon[data-app-id]")) {
+      const appId = appNode.dataset.appId;
+      if (!appId) {
+        continue;
+      }
+
+      const appSummaries = summariesByApp.get(appId) ?? [];
+      const visibleCount = appSummaries.filter((summary) => summary.mode !== "minimized").length;
+      const isActive = activeSummary?.appId === appId;
+      const isOpen = appSummaries.length > 0;
+      const isPaused = isOpen && visibleCount === 0;
+      const stateNode = appNode.querySelector<HTMLElement>("[data-mobile-app-status]");
+      let stateLabel = "Ready";
+
+      if (isActive) {
+        stateLabel = "Active";
+      } else if (visibleCount > 0) {
+        stateLabel = visibleCount > 1 ? `${visibleCount} open` : "Running";
+      } else if (isPaused) {
+        stateLabel = appSummaries.length > 1 ? `${appSummaries.length} paused` : "Paused";
+      }
+
+      appNode.classList.toggle("is-active-app", isActive);
+      appNode.classList.toggle("is-open", isOpen);
+      appNode.classList.toggle("is-paused", isPaused);
+      appNode.classList.toggle("is-running", visibleCount > 0);
+      if (stateNode) {
+        stateNode.textContent = stateLabel;
+      }
+    }
+  };
+
+  const updateMobileHomeDepth = (): void => {
+    if (!mobileAppsNode || mobileShellState !== "home") {
+      return;
+    }
+
+    const listRect = mobileAppsNode.getBoundingClientRect();
+    if (listRect.height <= 0) {
+      return;
+    }
+
+    const center = listRect.top + listRect.height / 2;
+    const items = Array.from(mobileAppsNode.querySelectorAll<HTMLElement>(".mobile-app-icon"));
+    let closestItem: HTMLElement | null = null;
+    let closestDistance = Number.POSITIVE_INFINITY;
+
+    for (const item of items) {
+      const itemRect = item.getBoundingClientRect();
+      const itemCenter = itemRect.top + itemRect.height / 2;
+      const rawDistance = (itemCenter - center) / Math.max(listRect.height * 0.36, 1);
+      const distance = Math.max(-1.6, Math.min(1.6, rawDistance));
+      const absoluteDistance = Math.abs(distance);
+      const scale = Math.max(0.68, 1 - absoluteDistance * 0.2);
+      const opacity = Math.max(0.26, 1 - absoluteDistance * 0.5);
+      const depth = 70 - absoluteDistance * 150;
+      const rotate = distance * -34;
+      const offsetY = distance * -14;
+
+      item.style.setProperty("--home-app-depth", `${depth.toFixed(1)}px`);
+      item.style.setProperty("--home-app-rotate", `${rotate.toFixed(2)}deg`);
+      item.style.setProperty("--home-app-scale", scale.toFixed(3));
+      item.style.setProperty("--home-app-opacity", opacity.toFixed(3));
+      item.style.setProperty("--home-app-y", `${offsetY.toFixed(1)}px`);
+
+      if (absoluteDistance < closestDistance) {
+        closestDistance = absoluteDistance;
+        closestItem = item;
+      }
+    }
+
+    for (const item of items) {
+      item.classList.toggle("is-centered", item === closestItem);
+    }
+  };
+
+  const scheduleMobileHomeDepth = (): void => {
+    if (mobileHomeDepthRaf !== null) {
+      return;
+    }
+
+    mobileHomeDepthRaf = window.requestAnimationFrame(() => {
+      mobileHomeDepthRaf = null;
+      updateMobileHomeDepth();
+    });
+  };
+
   const clearDockRevealTimer = (): void => {
     if (dockRevealTimer === null) {
       return;
     }
     window.clearTimeout(dockRevealTimer);
     dockRevealTimer = null;
+  };
+
+  const clearMobileLaunchTimer = (): void => {
+    if (mobileLaunchTimer === null) {
+      return;
+    }
+    window.clearTimeout(mobileLaunchTimer);
+    mobileLaunchTimer = null;
+  };
+
+  const startMobileLaunchTransition = (): void => {
+    clearMobileLaunchTimer();
+    rootNode.classList.add("mobile-launching");
+    mobileLaunchTimer = window.setTimeout(() => {
+      rootNode.classList.remove("mobile-launching");
+      mobileLaunchTimer = null;
+    }, 260);
   };
 
   const setDockRevealed = (revealed: boolean, options?: { temporary?: boolean }): void => {
@@ -173,6 +324,42 @@ export function createLauncher(options: LauncherOptions): LauncherController {
     }
   };
 
+  const getBaseMobileShellState = (summaries: WindowSummary[] = latestSummaries): MobileShellState => {
+    const hasVisibleWindow = summaries.some((summary) => summary.mode !== "minimized");
+    return hasVisibleWindow ? "app" : "home";
+  };
+
+  const setMobileShellState = (state: MobileShellState): void => {
+    mobileShellState = state;
+    rootNode.dataset.mobileState = state;
+    rootNode.classList.toggle("mobile-home-active", state === "home");
+    rootNode.classList.toggle("mobile-app-active", state !== "home");
+    rootNode.classList.toggle("mobile-search-open", state === "search");
+    if (state === "home") {
+      scheduleMobileHomeDepth();
+    }
+  };
+
+  const showMobileHome = (): void => {
+    setMobileShellState("home");
+    for (const summary of latestSummaries) {
+      if (summary.mode !== "minimized") {
+        windowManager.minimizeWindow(summary.windowId);
+      }
+    }
+  };
+
+  const syncMobileState = (summaries: WindowSummary[] = latestSummaries): void => {
+    if (mobileShellState === "home" || mobileShellState === "app") {
+      setMobileShellState(getBaseMobileShellState(summaries));
+    }
+    syncMobileAppState(summaries);
+    if (mobileHomeNode) {
+      mobileHomeNode.hidden = false;
+    }
+    scheduleMobileHomeDepth();
+  };
+
   const syncIconState = (summaries: WindowSummary[] = latestSummaries): void => {
     const activeSummary = summaries.find((summary) => summary.active && summary.mode !== "minimized");
     const activeAppId = activeSummary?.appId ?? null;
@@ -187,6 +374,7 @@ export function createLauncher(options: LauncherOptions): LauncherController {
 
     renderTaskbarWindows(summaries);
     syncDockAutoHide(summaries);
+    syncMobileState(summaries);
   };
 
   const setSelectedIcon = (appId: string | null): void => {
@@ -302,6 +490,26 @@ export function createLauncher(options: LauncherOptions): LauncherController {
     windowManager.closeWindow(windowId);
   };
 
+  const onMobileAppsClick = (event: MouseEvent): void => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) {
+      return;
+    }
+
+    const button = target.closest<HTMLButtonElement>(".mobile-app-icon[data-app-id]");
+    if (!button || !mobileAppsNode?.contains(button)) {
+      return;
+    }
+
+    const appId = button.dataset.appId;
+    if (!appId) {
+      return;
+    }
+
+    startMobileLaunchTransition();
+    activateApp(appId);
+  };
+
   const openChatProcessContext = (normalized: { pid: string; workspaceId: string | null; cwd: string }): void => {
     const chatWindowId = openWindowForApp("chat");
     if (!chatWindowId) {
@@ -394,6 +602,9 @@ export function createLauncher(options: LauncherOptions): LauncherController {
     paletteOpen = false;
     commandPaletteNode.hidden = true;
     commandPaletteInputNode?.blur();
+    if (mobileShellState === "search") {
+      setMobileShellState(getBaseMobileShellState());
+    }
   };
 
   const buildPaletteItems = (): PaletteItem[] => {
@@ -473,6 +684,7 @@ export function createLauncher(options: LauncherOptions): LauncherController {
     if (!commandPaletteNode || !commandPaletteInputNode) {
       return;
     }
+    setMobileShellState("search");
     setDockRevealed(true, { temporary: true });
     paletteOpen = true;
     paletteSelection = 0;
@@ -609,6 +821,9 @@ export function createLauncher(options: LauncherOptions): LauncherController {
   iconsNode.addEventListener("focusin", onIconFocus as EventListener);
   taskbarWindowsNode?.addEventListener("click", onTaskbarClick);
   taskbarWindowsNode?.addEventListener("auxclick", onTaskbarAuxClick);
+  mobileAppsNode?.addEventListener("click", onMobileAppsClick);
+  mobileAppsNode?.addEventListener("scroll", scheduleMobileHomeDepth, { passive: true });
+  mobileHomeButtonNode?.addEventListener("click", showMobileHome);
   commandLauncherNode?.addEventListener("click", onCommandLauncherClick);
   document.addEventListener("keydown", onDocumentKeyDown);
   commandPaletteInputNode?.addEventListener("input", onPaletteInput);
@@ -620,6 +835,7 @@ export function createLauncher(options: LauncherOptions): LauncherController {
   topbarNode?.addEventListener("pointerleave", onTopbarPointerLeave);
   topbarNode?.addEventListener("focusin", onTopbarFocusIn);
   topbarNode?.addEventListener("focusout", onTopbarFocusOut);
+  window.addEventListener("resize", scheduleMobileHomeDepth);
 
   window.addEventListener(OPEN_CHAT_PROCESS_EVENT, onOpenChatProcess as EventListener);
   window.addEventListener(OPEN_APP_EVENT, onOpenApp as EventListener);
@@ -640,6 +856,7 @@ export function createLauncher(options: LauncherOptions): LauncherController {
       selectedAppId = null;
     }
     renderIcons();
+    renderMobileApps();
     syncIconState();
     if (initialAppId && !openedInitialApp && appById.has(initialAppId)) {
       openedInitialApp = true;
@@ -658,6 +875,9 @@ export function createLauncher(options: LauncherOptions): LauncherController {
       iconsNode.removeEventListener("focusin", onIconFocus as EventListener);
       taskbarWindowsNode?.removeEventListener("click", onTaskbarClick);
       taskbarWindowsNode?.removeEventListener("auxclick", onTaskbarAuxClick);
+      mobileAppsNode?.removeEventListener("click", onMobileAppsClick);
+      mobileAppsNode?.removeEventListener("scroll", scheduleMobileHomeDepth);
+      mobileHomeButtonNode?.removeEventListener("click", showMobileHome);
       commandLauncherNode?.removeEventListener("click", onCommandLauncherClick);
       document.removeEventListener("keydown", onDocumentKeyDown);
       commandPaletteInputNode?.removeEventListener("input", onPaletteInput);
@@ -670,6 +890,12 @@ export function createLauncher(options: LauncherOptions): LauncherController {
       topbarNode?.removeEventListener("focusin", onTopbarFocusIn);
       topbarNode?.removeEventListener("focusout", onTopbarFocusOut);
       clearDockRevealTimer();
+      clearMobileLaunchTimer();
+      if (mobileHomeDepthRaf !== null) {
+        window.cancelAnimationFrame(mobileHomeDepthRaf);
+        mobileHomeDepthRaf = null;
+      }
+      window.removeEventListener("resize", scheduleMobileHomeDepth);
       window.removeEventListener(OPEN_CHAT_PROCESS_EVENT, onOpenChatProcess as EventListener);
       window.removeEventListener(OPEN_APP_EVENT, onOpenApp as EventListener);
       window.removeEventListener("message", onWindowMessage);

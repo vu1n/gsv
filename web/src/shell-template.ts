@@ -412,6 +412,12 @@ export function renderDesktopShell(): string {
           <nav class="desktop-icons" data-desktop-icons aria-label="Desktop applications"></nav>
           <section class="windows-layer" data-windows-layer></section>
         </main>
+        <section class="mobile-shell" data-mobile-shell aria-label="Mobile shell">
+          <section class="mobile-home" data-mobile-home>
+            <nav class="mobile-app-grid" data-mobile-apps aria-label="Applications"></nav>
+          </section>
+          <button type="button" class="mobile-home-handle" data-mobile-home-button aria-label="Home"></button>
+        </section>
         <div class="dock-reveal-zone" data-dock-reveal-zone aria-hidden="true"></div>
         <div class="notification-toasts" data-notification-toasts aria-live="polite" aria-atomic="false"></div>
         <section class="command-palette" data-command-palette role="dialog" aria-label="Command palette" hidden>
