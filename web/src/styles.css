@@ -5086,11 +5086,23 @@ button:disabled {
       linear-gradient(180deg, rgba(3, 8, 18, 0.18), rgba(3, 8, 18, 0.46)),
       var(--mobile-wallpaper) center / cover no-repeat,
       linear-gradient(36deg, #091322, #254155 52%, #523b55);
+    isolation: isolate;
     overscroll-behavior: contain;
     perspective: 900px;
     transition:
       opacity 160ms ease,
       transform 160ms ease;
+  }
+
+  .mobile-home::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    background:
+      radial-gradient(ellipse at 50% 50%, rgba(3, 8, 18, 0.04), rgba(3, 8, 18, 0.34) 74%),
+      linear-gradient(90deg, rgba(3, 8, 18, 0.18), transparent 28%, transparent 72%, rgba(3, 8, 18, 0.2));
+    pointer-events: none;
   }
 
   .desktop-shell.mobile-app-active .mobile-home {
@@ -5105,7 +5117,10 @@ button:disabled {
   }
 
   .mobile-app-grid {
-    --home-app-height: 110px;
+    --home-app-height: 142px;
+    --home-app-half-height: 71px;
+    position: relative;
+    z-index: 1;
     width: min(100%, 520px);
     height: 100%;
     min-height: 0;
@@ -5114,7 +5129,8 @@ button:disabled {
     overflow: auto;
     overscroll-behavior: contain;
     -webkit-overflow-scrolling: touch;
-    padding: max(14px, calc(34dvh - var(--home-app-height))) 24px max(28px, calc(34dvh - var(--home-app-height)));
+    padding: max(24px, calc(50dvh - var(--home-app-half-height))) 24px;
+    scroll-padding-block: max(24px, calc(50dvh - var(--home-app-half-height)));
     scroll-snap-type: y proximity;
     scrollbar-width: none;
     transform-style: preserve-3d;
@@ -5132,18 +5148,22 @@ button:disabled {
     --home-app-y: 0px;
     width: 100%;
     min-width: 0;
-    min-height: var(--home-app-height);
-    border: 1px solid rgba(255, 255, 255, 0.38);
-    border-radius: 24px;
-    background: rgba(247, 249, 252, 0.14);
+    min-height: 96px;
+    position: relative;
+    border: 0;
+    border-radius: 32px;
+    background:
+      radial-gradient(ellipse at 24% 50%, rgba(255, 255, 255, 0.13), transparent 36%),
+      radial-gradient(ellipse at 46% 50%, rgba(3, 8, 18, 0.22), transparent 60%);
     color: rgba(255, 255, 255, 0.94);
     display: grid;
-    grid-template-columns: 62px minmax(0, 1fr) auto;
+    grid-template-columns: 86px minmax(0, 1fr);
     align-items: center;
-    gap: 16px;
-    margin: 0 0 16px;
+    gap: 18px;
+    margin: 0 0 18px;
     opacity: var(--home-app-opacity);
-    padding: 14px 16px;
+    overflow: visible;
+    padding: 15px 96px 15px 18px;
     scroll-snap-align: center;
     text-align: left;
     transform:
@@ -5156,6 +5176,7 @@ button:disabled {
       background-color 100ms ease,
       border-color 100ms ease,
       box-shadow 100ms ease,
+      min-height 100ms ease,
       opacity 100ms ease;
     will-change: transform, opacity;
     -webkit-backdrop-filter: blur(14px) saturate(1.08);
@@ -5166,35 +5187,128 @@ button:disabled {
   .mobile-app-icon:focus-visible,
   .mobile-app-icon.is-centered {
     outline: none;
-    border-color: rgba(255, 255, 255, 0.58);
-    background: rgba(247, 249, 252, 0.22);
+    min-height: var(--home-app-height);
+    background:
+      radial-gradient(ellipse at 25% 50%, rgba(255, 255, 255, 0.22), transparent 40%),
+      radial-gradient(ellipse at 46% 50%, rgba(3, 8, 18, 0.36), transparent 62%);
     box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.32),
-      0 22px 44px rgba(3, 8, 18, 0.28);
+      0 28px 58px rgba(3, 8, 18, 0.28),
+      0 0 0 1px rgba(255, 255, 255, 0.1) inset;
   }
 
   .mobile-app-icon.is-active-app {
-    border-color: rgba(139, 214, 255, 0.7);
-    background: rgba(226, 246, 255, 0.24);
+    background:
+      radial-gradient(ellipse at 25% 50%, rgba(139, 214, 255, 0.22), transparent 40%),
+      radial-gradient(ellipse at 46% 50%, rgba(3, 8, 18, 0.36), transparent 62%);
   }
 
-  .mobile-app-icon .desktop-glyph {
-    width: 62px;
-    height: 62px;
-    padding: 12px;
-    border-radius: 16px;
-    background: rgba(255, 255, 255, 0.16);
+  .mobile-app-icon::before {
+    content: "";
+    position: absolute;
+    inset: 1px;
+    border-radius: inherit;
+    background:
+      radial-gradient(ellipse at 36% 50%, rgba(255, 255, 255, 0.2), transparent 52%),
+      linear-gradient(110deg, transparent 0 32%, rgba(255, 255, 255, 0.13) 44%, transparent 58%);
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .mobile-app-icon.is-centered::before {
+    opacity: 1;
+  }
+
+  .mobile-app-icon > .desktop-glyph {
+    width: 66px;
+    height: 66px;
     color: rgba(255, 255, 255, 0.96);
+    filter:
+      drop-shadow(0 16px 26px rgba(3, 8, 18, 0.34))
+      drop-shadow(0 2px 4px rgba(3, 8, 18, 0.52));
+    justify-self: center;
+    z-index: 2;
+    transform: translateZ(34px);
+    transition:
+      color 120ms ease,
+      filter 120ms ease,
+      height 120ms ease,
+      transform 120ms ease,
+      width 120ms ease;
+  }
+
+  .mobile-app-icon.is-centered > .desktop-glyph {
+    width: 76px;
+    height: 76px;
+    color: rgba(255, 255, 255, 0.96);
+    filter:
+      drop-shadow(0 20px 34px rgba(3, 8, 18, 0.42))
+      drop-shadow(0 0 16px rgba(255, 255, 255, 0.18));
+    transform: translateZ(54px);
+  }
+
+  .mobile-app-orbit {
+    position: absolute;
+    top: 50%;
+    left: 23px;
+    width: 76px;
+    height: 76px;
+    border-radius: 30px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-50%) translateZ(22px);
+    z-index: 1;
+  }
+
+  .mobile-app-icon.is-paused .mobile-app-orbit,
+  .mobile-app-icon.is-running .mobile-app-orbit,
+  .mobile-app-icon.is-active-app .mobile-app-orbit {
+    opacity: 1;
+  }
+
+  .mobile-app-icon.is-paused .mobile-app-orbit {
+    border-color: rgba(240, 202, 111, 0.54);
+    border-style: dashed;
+  }
+
+  .mobile-app-icon.is-running .mobile-app-orbit,
+  .mobile-app-icon.is-active-app .mobile-app-orbit {
+    border-color: rgba(92, 210, 168, 0.72);
     box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.22),
-      0 12px 26px rgba(3, 8, 18, 0.22);
-    filter: none;
+      0 0 18px rgba(92, 210, 168, 0.28),
+      inset 0 0 16px rgba(92, 210, 168, 0.12);
+  }
+
+  .mobile-app-icon.is-active-app .mobile-app-orbit {
+    border-color: rgba(139, 214, 255, 0.86);
+    box-shadow:
+      0 0 24px rgba(139, 214, 255, 0.36),
+      inset 0 0 20px rgba(139, 214, 255, 0.16);
+  }
+
+  .mobile-app-badge {
+    position: absolute;
+    top: calc(50% - 42px);
+    left: 88px;
+    min-width: 20px;
+    height: 20px;
+    border-radius: 999px;
+    background: rgba(246, 249, 252, 0.92);
+    color: #10253d;
+    font-size: 0.68rem;
+    font-weight: 800;
+    line-height: 20px;
+    text-align: center;
+    box-shadow: 0 5px 12px rgba(3, 8, 18, 0.22);
+    z-index: 4;
   }
 
   .mobile-app-copy {
     min-width: 0;
     display: grid;
     gap: 4px;
+    position: relative;
+    z-index: 2;
   }
 
   .mobile-app-copy strong,
@@ -5206,7 +5320,7 @@ button:disabled {
 
   .mobile-app-copy strong {
     color: rgba(255, 255, 255, 0.94);
-    font-size: 1rem;
+    font-size: 0.98rem;
     font-weight: 720;
     line-height: 1.2;
     letter-spacing: 0;
@@ -5219,51 +5333,134 @@ button:disabled {
     font-size: 0.74rem;
     font-weight: 550;
     line-height: 1.25;
-    max-height: 2.5em;
+    max-height: 0;
+    opacity: 0;
+    transform: translateY(-2px);
+    transition:
+      max-height 120ms ease,
+      opacity 120ms ease,
+      transform 120ms ease;
   }
 
   .mobile-app-icon.is-centered .mobile-app-copy small {
     color: rgba(255, 255, 255, 0.84);
+    max-height: 3.8em;
+    opacity: 1;
+    transform: translateY(0);
   }
 
-  .mobile-app-state {
-    min-width: 72px;
-    height: 30px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
+  .mobile-app-activity {
+    position: absolute;
+    left: 122px;
+    right: 104px;
+    bottom: 18px;
+    height: 3px;
+    overflow: hidden;
     border-radius: 999px;
-    background: rgba(3, 8, 18, 0.2);
-    color: rgba(255, 255, 255, 0.74);
-    font-size: 0.68rem;
+    background: rgba(255, 255, 255, 0.1);
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .mobile-app-activity::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 -30%;
+    width: 30%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, transparent, rgba(92, 210, 168, 0.95), transparent);
+    animation: mobile-activity-rail 1.6s ease-in-out infinite;
+  }
+
+  .mobile-app-icon.is-running.is-centered .mobile-app-activity,
+  .mobile-app-icon.is-active-app.is-centered .mobile-app-activity {
+    opacity: 1;
+  }
+
+  .mobile-app-icon.is-active-app.is-centered .mobile-app-activity::before {
+    background: linear-gradient(90deg, transparent, rgba(139, 214, 255, 0.95), transparent);
+  }
+
+  .mobile-window-stack {
+    position: absolute;
+    top: 50%;
+    right: 18px;
+    width: 118px;
+    height: 104px;
+    perspective: 420px;
+    transform-style: preserve-3d;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 120ms ease;
+    transform: translateY(-50%);
+    z-index: 0;
+  }
+
+  .mobile-app-icon.is-open .mobile-window-stack {
+    opacity: 0.58;
+  }
+
+  .mobile-app-icon.is-centered .mobile-window-stack {
+    opacity: 1;
+  }
+
+  .mobile-window-stack[hidden] {
+    display: none;
+  }
+
+  .mobile-window-layer {
+    position: absolute;
+    top: calc(20px + var(--window-depth-offset));
+    right: calc(20px + var(--window-depth-offset));
+    width: 76px;
+    height: 50px;
+    border-radius: 15px;
+    background:
+      linear-gradient(145deg, rgba(246, 249, 252, 0.28), rgba(246, 249, 252, 0.08)),
+      rgba(6, 15, 31, 0.24);
+    box-shadow:
+      0 12px 22px rgba(3, 8, 18, 0.22),
+      0 0 0 1px rgba(255, 255, 255, 0.14) inset;
+    color: rgba(255, 255, 255, 0.72);
+    display: grid;
+    align-items: end;
+    overflow: hidden;
+    padding: 6px;
+    transform:
+      translateZ(var(--window-depth-z))
+      rotateY(-24deg)
+      rotateX(8deg);
+    transform-origin: right center;
+  }
+
+  .mobile-window-layer span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.48rem;
     font-weight: 700;
     line-height: 1;
-    padding: 0 10px;
-    white-space: nowrap;
+    opacity: 0;
   }
 
-  .mobile-app-state-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.38);
-    flex: 0 0 auto;
+  .mobile-app-icon.is-centered .mobile-window-layer:first-child span {
+    opacity: 0.88;
   }
 
-  .mobile-app-icon.is-paused .mobile-app-state-dot {
-    background: rgba(240, 202, 111, 0.92);
+  .mobile-window-layer.is-active-window {
+    background:
+      linear-gradient(145deg, rgba(139, 214, 255, 0.34), rgba(139, 214, 255, 0.08)),
+      rgba(6, 15, 31, 0.26);
+    box-shadow:
+      0 12px 26px rgba(3, 8, 18, 0.26),
+      0 0 18px rgba(139, 214, 255, 0.18),
+      0 0 0 1px rgba(139, 214, 255, 0.28) inset;
   }
 
-  .mobile-app-icon.is-running .mobile-app-state-dot,
-  .mobile-app-icon.is-active-app .mobile-app-state-dot {
-    background: rgba(92, 210, 168, 0.96);
-    box-shadow: 0 0 14px rgba(92, 210, 168, 0.52);
-  }
-
-  .mobile-app-icon.is-active-app .mobile-app-state {
-    background: rgba(14, 87, 68, 0.34);
-    color: rgba(230, 255, 248, 0.92);
+  .mobile-window-layer.is-paused-window {
+    opacity: 0.58;
+    filter: saturate(0.72);
   }
 
   .windows-layer .mock-window {
@@ -5354,6 +5551,76 @@ button:disabled {
 
   .notifications-panel {
     width: min(340px, calc(100vw - 16px));
+  }
+}
+
+@media (max-width: 380px) {
+  .mobile-app-grid {
+    --home-app-height: 132px;
+    --home-app-half-height: 66px;
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .mobile-app-icon {
+    grid-template-columns: 66px minmax(0, 1fr);
+    gap: 14px;
+    padding: 14px 72px 14px 14px;
+  }
+
+  .mobile-app-icon > .desktop-glyph {
+    width: 54px;
+    height: 54px;
+  }
+
+  .mobile-app-icon.is-centered > .desktop-glyph {
+    width: 62px;
+    height: 62px;
+  }
+
+  .mobile-app-orbit {
+    left: 14px;
+    width: 66px;
+    height: 66px;
+    border-radius: 22px;
+  }
+
+  .mobile-app-badge {
+    top: calc(50% - 36px);
+    left: 68px;
+  }
+
+  .mobile-app-copy strong {
+    font-size: 0.94rem;
+  }
+
+  .mobile-app-activity {
+    left: 96px;
+    right: 74px;
+  }
+
+  .mobile-window-stack {
+    width: 82px;
+    height: 80px;
+    right: 8px;
+  }
+
+  .mobile-window-layer {
+    top: calc(18px + var(--window-depth-compact-y));
+    right: calc(14px + var(--window-depth-compact-x));
+    width: 54px;
+    height: 34px;
+    border-radius: 10px;
+  }
+}
+
+@keyframes mobile-activity-rail {
+  0% {
+    transform: translateX(0);
+  }
+
+  100% {
+    transform: translateX(430%);
   }
 }
 

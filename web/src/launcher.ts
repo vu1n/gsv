@@ -154,14 +154,14 @@ export function createLauncher(options: LauncherOptions): LauncherController {
         return `
           <button type="button" class="mobile-app-icon" data-app-id="${escapeHtml(appItem.id)}">
             ${renderDesktopIcon(appItem.icon)}
+            <span class="mobile-app-orbit" aria-hidden="true"></span>
+            <span class="mobile-app-badge" data-mobile-app-badge hidden></span>
             <span class="mobile-app-copy">
               <strong>${escapeHtml(appItem.name)}</strong>
               <small>${escapeHtml(appItem.description)}</small>
             </span>
-            <span class="mobile-app-state">
-              <span class="mobile-app-state-dot" aria-hidden="true"></span>
-              <span data-mobile-app-status>Ready</span>
-            </span>
+            <span class="mobile-window-stack" data-mobile-window-stack aria-hidden="true"></span>
+            <span class="mobile-app-activity" aria-hidden="true"></span>
           </button>
         `;
       })
@@ -194,23 +194,49 @@ export function createLauncher(options: LauncherOptions): LauncherController {
       const isActive = activeSummary?.appId === appId;
       const isOpen = appSummaries.length > 0;
       const isPaused = isOpen && visibleCount === 0;
-      const stateNode = appNode.querySelector<HTMLElement>("[data-mobile-app-status]");
-      let stateLabel = "Ready";
+      const badgeNode = appNode.querySelector<HTMLElement>("[data-mobile-app-badge]");
+      const stackNode = appNode.querySelector<HTMLElement>("[data-mobile-window-stack]");
+      let stateLabel = "ready";
 
       if (isActive) {
-        stateLabel = "Active";
+        stateLabel = "active";
       } else if (visibleCount > 0) {
-        stateLabel = visibleCount > 1 ? `${visibleCount} open` : "Running";
+        stateLabel = visibleCount > 1 ? `${visibleCount} open` : "running";
       } else if (isPaused) {
-        stateLabel = appSummaries.length > 1 ? `${appSummaries.length} paused` : "Paused";
+        stateLabel = appSummaries.length > 1 ? `${appSummaries.length} paused` : "paused";
       }
 
       appNode.classList.toggle("is-active-app", isActive);
       appNode.classList.toggle("is-open", isOpen);
       appNode.classList.toggle("is-paused", isPaused);
       appNode.classList.toggle("is-running", visibleCount > 0);
-      if (stateNode) {
-        stateNode.textContent = stateLabel;
+      appNode.setAttribute("aria-label", `${appById.get(appId)?.name ?? appId}, ${stateLabel}`);
+      if (badgeNode) {
+        const badgeCount = appSummaries.length > 1 ? String(appSummaries.length) : "";
+        badgeNode.hidden = badgeCount.length === 0;
+        badgeNode.textContent = badgeCount;
+      }
+
+      if (stackNode) {
+        stackNode.hidden = appSummaries.length === 0;
+        stackNode.innerHTML = appSummaries
+          .slice()
+          .sort((left, right) => right.zIndex - left.zIndex)
+          .slice(0, 4)
+          .map((summary, index) => {
+            const activeClass = summary.active && summary.mode !== "minimized" ? " is-active-window" : "";
+            const pausedClass = summary.mode === "minimized" ? " is-paused-window" : "";
+            const depthOffset = `${index * 8}px`;
+            const depthZ = `${index * -34}px`;
+            const compactDepthX = `${index * 5}px`;
+            const compactDepthY = `${index * 7}px`;
+            return `
+              <span class="mobile-window-layer${activeClass}${pausedClass}" style="--window-depth-index: ${index}; --window-depth-offset: ${depthOffset}; --window-depth-z: ${depthZ}; --window-depth-compact-x: ${compactDepthX}; --window-depth-compact-y: ${compactDepthY};">
+                <span>${escapeHtml(summary.title)}</span>
+              </span>
+            `;
+          })
+          .join("");
       }
     }
   };
