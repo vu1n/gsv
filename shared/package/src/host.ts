@@ -41,8 +41,12 @@ type HostPortMessage =
   | { type: "signal"; signal: string; payload?: unknown };
 
 const PENDING_APP_OPEN_KEY = "__gsvPendingAppOpenRequests";
+const HOST_CONNECT_REQUEST = "gsv-host-connect-request";
+const HOST_CONNECT_RESPONSE = "gsv-host-connect";
 
 type PendingAppOpenStore = Map<string, OpenAppRequest>;
+
+let hostClientPromise: Promise<HostClient> | null = null;
 
 declare global {
   interface Window {
@@ -91,16 +95,24 @@ function toHostStatus(value: { state?: string } | undefined): HostStatus {
   return { connected: value?.state === "connected" };
 }
 
-export async function connectHost(): Promise<HostClient> {
+function createHostConnectRequestId(): string {
+  return `host-connect-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+async function createHostClient(): Promise<HostClient> {
   const port = await new Promise<MessagePort>((resolve, reject) => {
     let timeoutId = 0;
+    const requestId = createHostConnectRequestId();
 
     const onMessage = (event: MessageEvent): void => {
       if (event.origin !== window.location.origin) {
         return;
       }
-      const record = event.data as { type?: unknown } | null;
-      if (!record || record.type !== "gsv-host-connect" || !event.ports[0]) {
+      const record = event.data as { requestId?: unknown; type?: unknown } | null;
+      if (!record || record.type !== HOST_CONNECT_RESPONSE || !event.ports[0]) {
+        return;
+      }
+      if (record.requestId !== requestId) {
         return;
       }
       window.clearTimeout(timeoutId);
@@ -114,6 +126,17 @@ export async function connectHost(): Promise<HostClient> {
     }, 5000);
 
     window.addEventListener("message", onMessage);
+    try {
+      window.parent?.postMessage(
+        {
+          type: HOST_CONNECT_REQUEST,
+          requestId,
+        },
+        window.location.origin,
+      );
+    } catch {
+      // The timeout above reports hosts that cannot accept bridge requests.
+    }
   });
 
   let sequence = 0;
@@ -202,4 +225,12 @@ export async function connectHost(): Promise<HostClient> {
       return typeof result.windowId === "string" ? result.windowId : null;
     },
   };
+}
+
+export async function connectHost(): Promise<HostClient> {
+  hostClientPromise ??= createHostClient().catch((error) => {
+    hostClientPromise = null;
+    throw error;
+  });
+  return hostClientPromise;
 }

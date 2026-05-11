@@ -5713,10 +5713,10 @@ button:disabled {
   }
 
   .windows-layer .mock-window {
-    top: 0 !important;
+    top: env(safe-area-inset-top, 0px) !important;
     left: 0 !important;
     width: 100% !important;
-    height: 100dvh !important;
+    height: calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)) !important;
     transform: none !important;
     border: 0;
     border-radius: 0;
@@ -5735,7 +5735,7 @@ button:disabled {
 
   .window-content {
     height: 100%;
-    min-height: 100dvh;
+    min-height: 0;
   }
 
   .window-resize-handle {

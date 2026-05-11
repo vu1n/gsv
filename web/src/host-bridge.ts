@@ -51,6 +51,7 @@ type HostSignalMessage = {
 
 type HostConnectMessage = {
   type: "gsv-host-connect";
+  requestId?: string;
 };
 
 type HostPortMessage = HostRpcMessage | HostRpcResultMessage | HostStatusMessage | HostSignalMessage;
@@ -150,6 +151,8 @@ export function attachHostBridge(
   let port: MessagePort | null = null;
   let unsubscribeStatus: (() => void) | null = null;
   let unsubscribeSignal: (() => void) | null = null;
+  let iframeLoaded = false;
+  let pendingConnectRequestId: string | undefined;
   let destroyed = false;
 
   const cleanup = (): void => {
@@ -161,7 +164,7 @@ export function attachHostBridge(
     port = null;
   };
 
-  const onLoad = (): void => {
+  const connect = (requestId?: string): void => {
     if (destroyed || !iframe.contentWindow) {
       return;
     }
@@ -200,6 +203,7 @@ export function attachHostBridge(
     iframe.contentWindow.postMessage(
       {
         type: "gsv-host-connect",
+        requestId,
       } satisfies HostConnectMessage,
       window.location.origin,
       [channel.port2],
@@ -220,12 +224,36 @@ export function attachHostBridge(
     });
   };
 
+  const onLoad = (): void => {
+    iframeLoaded = true;
+    connect(pendingConnectRequestId);
+    pendingConnectRequestId = undefined;
+  };
+
+  const onConnectRequest = (event: MessageEvent<unknown>): void => {
+    if (destroyed || event.origin !== window.location.origin || event.source !== iframe.contentWindow) {
+      return;
+    }
+    const record = asRecord(event.data);
+    if (!record || record.type !== "gsv-host-connect-request") {
+      return;
+    }
+    const requestId = asString(record.requestId) ?? undefined;
+    if (!iframeLoaded) {
+      pendingConnectRequestId = requestId;
+      return;
+    }
+    connect(requestId);
+  };
+
   iframe.addEventListener("load", onLoad, { once: true });
+  window.addEventListener("message", onConnectRequest);
 
   return {
     destroy: () => {
       destroyed = true;
       iframe.removeEventListener("load", onLoad);
+      window.removeEventListener("message", onConnectRequest);
       cleanup();
     },
   };
