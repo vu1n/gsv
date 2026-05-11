@@ -73,6 +73,12 @@ export function createLauncher(options: LauncherOptions): LauncherController {
   let mobileLaunchTimer: number | null = null;
   let mobileShellState: MobileShellState = "home";
   let mobileHomeDepthRaf: number | null = null;
+  let mobileRotorPosition = 0;
+  let mobileRotorSnapTimer: number | null = null;
+  let mobileRotorPointerId: number | null = null;
+  let mobileRotorDragStartY = 0;
+  let mobileRotorDragStartPosition = 0;
+  let mobileRotorDidDrag = false;
 
   const getIconNodes = (): HTMLButtonElement[] => {
     return Array.from(iconsNode.querySelectorAll<HTMLButtonElement>(".desktop-icon[data-app-id]"));
@@ -170,6 +176,83 @@ export function createLauncher(options: LauncherOptions): LauncherController {
     scheduleMobileHomeDepth();
   };
 
+  const getMobileAppNodes = (): HTMLButtonElement[] => {
+    if (!mobileAppsNode) {
+      return [];
+    }
+    return Array.from(mobileAppsNode.querySelectorAll<HTMLButtonElement>(".mobile-app-icon[data-app-id]"));
+  };
+
+  const normalizeMobileRotorPosition = (position: number): number => {
+    if (apps.length === 0) {
+      return 0;
+    }
+    return ((position % apps.length) + apps.length) % apps.length;
+  };
+
+  const shortestMobileRotorDelta = (index: number, position: number): number => {
+    if (apps.length === 0) {
+      return 0;
+    }
+    const halfCount = apps.length / 2;
+    return ((index - position + halfCount + apps.length) % apps.length) - halfCount;
+  };
+
+  const setMobileRotorPosition = (position: number): void => {
+    mobileRotorPosition = normalizeMobileRotorPosition(position);
+    scheduleMobileHomeDepth();
+  };
+
+  const setMobileRotorIndex = (index: number): void => {
+    if (apps.length === 0) {
+      return;
+    }
+    setMobileRotorPosition(mobileRotorPosition + shortestMobileRotorDelta(index, mobileRotorPosition));
+  };
+
+  const getCenteredMobileRotorIndex = (): number => {
+    if (apps.length === 0) {
+      return -1;
+    }
+    return ((Math.round(mobileRotorPosition) % apps.length) + apps.length) % apps.length;
+  };
+
+  const getMobileRotorIndexForButton = (button: HTMLButtonElement): number => {
+    const appId = button.dataset.appId;
+    if (!appId) {
+      return -1;
+    }
+    return apps.findIndex((app) => app.id === appId);
+  };
+
+  const focusMobileRotorIndex = (index: number): void => {
+    getMobileAppNodes()[index]?.focus();
+  };
+
+  const clearMobileRotorSnapTimer = (): void => {
+    if (mobileRotorSnapTimer === null) {
+      return;
+    }
+    window.clearTimeout(mobileRotorSnapTimer);
+    mobileRotorSnapTimer = null;
+  };
+
+  const snapMobileRotor = (): void => {
+    clearMobileRotorSnapTimer();
+    const centeredIndex = getCenteredMobileRotorIndex();
+    if (centeredIndex >= 0) {
+      setMobileRotorIndex(centeredIndex);
+    }
+  };
+
+  const scheduleMobileRotorSnap = (): void => {
+    clearMobileRotorSnapTimer();
+    mobileRotorSnapTimer = window.setTimeout(() => {
+      mobileRotorSnapTimer = null;
+      snapMobileRotor();
+    }, 140);
+  };
+
   const syncMobileAppState = (summaries: WindowSummary[] = latestSummaries): void => {
     if (!mobileAppsNode) {
       return;
@@ -251,37 +334,46 @@ export function createLauncher(options: LauncherOptions): LauncherController {
       return;
     }
 
-    const center = listRect.top + listRect.height / 2;
-    const items = Array.from(mobileAppsNode.querySelectorAll<HTMLElement>(".mobile-app-icon"));
-    let closestItem: HTMLElement | null = null;
-    let closestDistance = Number.POSITIVE_INFINITY;
+    const items = getMobileAppNodes();
+    if (items.length === 0) {
+      return;
+    }
+
+    const radius = Math.min(Math.max(listRect.height * 0.36, 190), 285);
+    const depthRadius = Math.min(Math.max(listRect.height * 0.34, 180), 300);
+    const angleStep = (Math.PI * 2) / items.length;
+    const centeredIndex = getCenteredMobileRotorIndex();
 
     for (const item of items) {
-      const itemRect = item.getBoundingClientRect();
-      const itemCenter = itemRect.top + itemRect.height / 2;
-      const rawDistance = (itemCenter - center) / Math.max(listRect.height * 0.36, 1);
-      const distance = Math.max(-1.6, Math.min(1.6, rawDistance));
-      const absoluteDistance = Math.abs(distance);
-      const scale = Math.max(0.68, 1 - absoluteDistance * 0.2);
-      const opacity = Math.max(0.26, 1 - absoluteDistance * 0.5);
-      const depth = 70 - absoluteDistance * 150;
-      const rotate = distance * -34;
-      const offsetY = distance * -14;
+      const index = getMobileRotorIndexForButton(item);
+      if (index < 0) {
+        continue;
+      }
+      const distance = shortestMobileRotorDelta(index, mobileRotorPosition);
+      const angle = distance * angleStep;
+      const sin = Math.sin(angle);
+      const cos = Math.cos(angle);
+      const frontness = (cos + 1) / 2;
+      const sideFalloff = 1 - Math.min(Math.abs(sin) * 0.22, 0.22);
+      const isBehind = cos < -0.18;
+      const opacity = isBehind ? 0 : Math.max(0.12, frontness * sideFalloff);
+      const scale = 0.56 + frontness * 0.44;
+      const depth = (cos - 1) * depthRadius;
+      const offsetY = sin * radius;
+      const rotate = Math.max(-64, Math.min(64, angle * -32));
+      const blur = isBehind ? 7 : Math.max(0, (1 - frontness) * 2.4);
+      const zIndex = Math.round(frontness * 1000);
 
       item.style.setProperty("--home-app-depth", `${depth.toFixed(1)}px`);
       item.style.setProperty("--home-app-rotate", `${rotate.toFixed(2)}deg`);
       item.style.setProperty("--home-app-scale", scale.toFixed(3));
       item.style.setProperty("--home-app-opacity", opacity.toFixed(3));
       item.style.setProperty("--home-app-y", `${offsetY.toFixed(1)}px`);
-
-      if (absoluteDistance < closestDistance) {
-        closestDistance = absoluteDistance;
-        closestItem = item;
-      }
-    }
-
-    for (const item of items) {
-      item.classList.toggle("is-centered", item === closestItem);
+      item.style.setProperty("--home-app-blur", `${blur.toFixed(2)}px`);
+      item.style.zIndex = String(zIndex);
+      item.tabIndex = isBehind ? -1 : 0;
+      item.classList.toggle("is-behind", isBehind);
+      item.classList.toggle("is-centered", index === centeredIndex);
     }
   };
 
@@ -517,6 +609,12 @@ export function createLauncher(options: LauncherOptions): LauncherController {
   };
 
   const onMobileAppsClick = (event: MouseEvent): void => {
+    if (mobileRotorDidDrag) {
+      event.preventDefault();
+      mobileRotorDidDrag = false;
+      return;
+    }
+
     const target = event.target;
     if (!(target instanceof HTMLElement)) {
       return;
@@ -532,8 +630,89 @@ export function createLauncher(options: LauncherOptions): LauncherController {
       return;
     }
 
+    const index = getMobileRotorIndexForButton(button);
+    if (index >= 0 && index !== getCenteredMobileRotorIndex()) {
+      event.preventDefault();
+      setMobileRotorIndex(index);
+      button.focus();
+      return;
+    }
+
     startMobileLaunchTransition();
     activateApp(appId);
+  };
+
+  const onMobileAppsWheel = (event: WheelEvent): void => {
+    if (mobileShellState !== "home" || apps.length <= 1) {
+      return;
+    }
+
+    event.preventDefault();
+    const delta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
+    setMobileRotorPosition(mobileRotorPosition + delta / 190);
+    scheduleMobileRotorSnap();
+  };
+
+  const onMobileAppsPointerDown = (event: PointerEvent): void => {
+    if (mobileShellState !== "home" || apps.length <= 1 || event.button !== 0) {
+      return;
+    }
+
+    clearMobileRotorSnapTimer();
+    mobileRotorPointerId = event.pointerId;
+    mobileRotorDragStartY = event.clientY;
+    mobileRotorDragStartPosition = mobileRotorPosition;
+    mobileRotorDidDrag = false;
+    mobileAppsNode?.classList.add("is-dragging");
+    mobileAppsNode?.setPointerCapture(event.pointerId);
+  };
+
+  const onMobileAppsPointerMove = (event: PointerEvent): void => {
+    if (mobileRotorPointerId !== event.pointerId || apps.length <= 1) {
+      return;
+    }
+
+    event.preventDefault();
+    const dragDelta = event.clientY - mobileRotorDragStartY;
+    mobileRotorDidDrag = mobileRotorDidDrag || Math.abs(dragDelta) > 8;
+    setMobileRotorPosition(mobileRotorDragStartPosition - dragDelta / 135);
+  };
+
+  const finishMobileRotorDrag = (event: PointerEvent): void => {
+    if (mobileRotorPointerId !== event.pointerId) {
+      return;
+    }
+
+    mobileAppsNode?.classList.remove("is-dragging");
+    if (mobileAppsNode?.hasPointerCapture(event.pointerId)) {
+      mobileAppsNode.releasePointerCapture(event.pointerId);
+    }
+    mobileRotorPointerId = null;
+    snapMobileRotor();
+    if (mobileRotorDidDrag) {
+      window.setTimeout(() => {
+        mobileRotorDidDrag = false;
+      }, 0);
+    }
+  };
+
+  const onMobileAppsKeyDown = (event: KeyboardEvent): void => {
+    if (mobileShellState !== "home" || apps.length <= 1) {
+      return;
+    }
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setMobileRotorIndex((getCenteredMobileRotorIndex() + 1) % apps.length);
+      focusMobileRotorIndex(getCenteredMobileRotorIndex());
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setMobileRotorIndex((getCenteredMobileRotorIndex() - 1 + apps.length) % apps.length);
+      focusMobileRotorIndex(getCenteredMobileRotorIndex());
+    }
   };
 
   const openChatProcessContext = (normalized: { pid: string; workspaceId: string | null; cwd: string }): void => {
@@ -848,7 +1027,12 @@ export function createLauncher(options: LauncherOptions): LauncherController {
   taskbarWindowsNode?.addEventListener("click", onTaskbarClick);
   taskbarWindowsNode?.addEventListener("auxclick", onTaskbarAuxClick);
   mobileAppsNode?.addEventListener("click", onMobileAppsClick);
-  mobileAppsNode?.addEventListener("scroll", scheduleMobileHomeDepth, { passive: true });
+  mobileAppsNode?.addEventListener("wheel", onMobileAppsWheel, { passive: false });
+  mobileAppsNode?.addEventListener("pointerdown", onMobileAppsPointerDown);
+  mobileAppsNode?.addEventListener("pointermove", onMobileAppsPointerMove);
+  mobileAppsNode?.addEventListener("pointerup", finishMobileRotorDrag);
+  mobileAppsNode?.addEventListener("pointercancel", finishMobileRotorDrag);
+  mobileAppsNode?.addEventListener("keydown", onMobileAppsKeyDown);
   mobileHomeButtonNode?.addEventListener("click", showMobileHome);
   commandLauncherNode?.addEventListener("click", onCommandLauncherClick);
   document.addEventListener("keydown", onDocumentKeyDown);
@@ -878,6 +1062,7 @@ export function createLauncher(options: LauncherOptions): LauncherController {
   const setApps = (nextApps: readonly AppManifest[]): void => {
     apps = [...nextApps];
     appById = new Map(apps.map((app) => [app.id, app]));
+    mobileRotorPosition = normalizeMobileRotorPosition(mobileRotorPosition);
     if (selectedAppId && !appById.has(selectedAppId)) {
       selectedAppId = null;
     }
@@ -902,7 +1087,12 @@ export function createLauncher(options: LauncherOptions): LauncherController {
       taskbarWindowsNode?.removeEventListener("click", onTaskbarClick);
       taskbarWindowsNode?.removeEventListener("auxclick", onTaskbarAuxClick);
       mobileAppsNode?.removeEventListener("click", onMobileAppsClick);
-      mobileAppsNode?.removeEventListener("scroll", scheduleMobileHomeDepth);
+      mobileAppsNode?.removeEventListener("wheel", onMobileAppsWheel);
+      mobileAppsNode?.removeEventListener("pointerdown", onMobileAppsPointerDown);
+      mobileAppsNode?.removeEventListener("pointermove", onMobileAppsPointerMove);
+      mobileAppsNode?.removeEventListener("pointerup", finishMobileRotorDrag);
+      mobileAppsNode?.removeEventListener("pointercancel", finishMobileRotorDrag);
+      mobileAppsNode?.removeEventListener("keydown", onMobileAppsKeyDown);
       mobileHomeButtonNode?.removeEventListener("click", showMobileHome);
       commandLauncherNode?.removeEventListener("click", onCommandLauncherClick);
       document.removeEventListener("keydown", onDocumentKeyDown);
@@ -917,6 +1107,7 @@ export function createLauncher(options: LauncherOptions): LauncherController {
       topbarNode?.removeEventListener("focusout", onTopbarFocusOut);
       clearDockRevealTimer();
       clearMobileLaunchTimer();
+      clearMobileRotorSnapTimer();
       if (mobileHomeDepthRaf !== null) {
         window.cancelAnimationFrame(mobileHomeDepthRaf);
         mobileHomeDepthRaf = null;

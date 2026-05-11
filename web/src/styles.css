@@ -5126,13 +5126,12 @@ button:disabled {
     min-height: 0;
     margin: 0 auto;
     display: block;
-    overflow: auto;
+    overflow: hidden;
     overscroll-behavior: contain;
     -webkit-overflow-scrolling: touch;
-    padding: max(24px, calc(50dvh - var(--home-app-half-height))) 24px;
-    scroll-padding-block: max(24px, calc(50dvh - var(--home-app-half-height)));
-    scroll-snap-type: y proximity;
+    padding: 0 24px;
     scrollbar-width: none;
+    touch-action: none;
     transform-style: preserve-3d;
   }
 
@@ -5146,10 +5145,13 @@ button:disabled {
     --home-app-scale: 0.82;
     --home-app-opacity: 0.46;
     --home-app-y: 0px;
-    width: 100%;
+    --home-app-blur: 0px;
+    position: absolute;
+    top: 50%;
+    left: 24px;
+    right: 24px;
     min-width: 0;
     min-height: 96px;
-    position: relative;
     border: 0;
     border-radius: 32px;
     background:
@@ -5160,30 +5162,31 @@ button:disabled {
     grid-template-columns: 86px minmax(0, 1fr);
     align-items: center;
     gap: 18px;
-    margin: 0 0 18px;
+    margin: 0;
     opacity: var(--home-app-opacity);
     overflow: visible;
     padding: 15px 96px 15px 18px;
-    scroll-snap-align: center;
     text-align: left;
     transform:
-      translate3d(0, var(--home-app-y), var(--home-app-depth))
+      translate3d(0, calc(-50% + var(--home-app-y)), var(--home-app-depth))
       rotateX(var(--home-app-rotate))
       scale(var(--home-app-scale));
     transform-origin: center;
     transform-style: preserve-3d;
+    filter: blur(var(--home-app-blur));
     transition:
       background-color 100ms ease,
       border-color 100ms ease,
+      filter 120ms ease,
       box-shadow 100ms ease,
       min-height 100ms ease,
-      opacity 100ms ease;
+      opacity 120ms ease,
+      transform 150ms ease;
     will-change: transform, opacity;
     -webkit-backdrop-filter: blur(14px) saturate(1.08);
     backdrop-filter: blur(14px) saturate(1.08);
   }
 
-  .mobile-app-icon:hover,
   .mobile-app-icon:focus-visible,
   .mobile-app-icon.is-centered {
     outline: none;
@@ -5194,6 +5197,14 @@ button:disabled {
     box-shadow:
       0 28px 58px rgba(3, 8, 18, 0.28),
       0 0 0 1px rgba(255, 255, 255, 0.1) inset;
+  }
+
+  .mobile-app-grid.is-dragging .mobile-app-icon {
+    transition: none;
+  }
+
+  .mobile-app-icon.is-behind {
+    pointer-events: none;
   }
 
   .mobile-app-icon.is-active-app {
@@ -5563,6 +5574,8 @@ button:disabled {
   }
 
   .mobile-app-icon {
+    left: 16px;
+    right: 16px;
     grid-template-columns: 66px minmax(0, 1fr);
     gap: 14px;
     padding: 14px 72px 14px 14px;
