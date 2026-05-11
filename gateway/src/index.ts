@@ -178,7 +178,7 @@ const RUNTIME_THEME_CSS = [
   "a { color: var(--accent); }",
 ].join("\n");
 
-const PACKAGE_APP_VIEWPORT_META = `<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">`;
+const PACKAGE_APP_VIEWPORT_META = `<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">`;
 
 const PACKAGE_APP_RUNTIME_STYLE = [
   "<style data-gsv-package-runtime>",
@@ -223,7 +223,7 @@ const PACKAGE_APP_RUNTIME_STYLE = [
   "}",
   "@media (max-width: 720px) {",
   "  html, body { overscroll-behavior: none; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }",
-  "  input, select, textarea { font-size: 16px; }",
+  "  input, select, textarea { font-size: 16px !important; }",
   "}",
   "</style>",
 ].join("");
