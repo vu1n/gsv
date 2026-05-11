@@ -391,6 +391,13 @@ export function renderDesktopShell(): string {
               <span class="notification-badge" data-notifications-badge hidden>0</span>
             </button>
             <div class="notifications-panel" id="notifications-panel" data-notifications-panel hidden>
+              <header class="notifications-panel-head">
+                <div>
+                  <strong>Notifications</strong>
+                  <span data-notifications-delivery-state>In-shell alerts</span>
+                </div>
+                <button type="button" class="notifications-system-enable" data-notifications-system-enable hidden>Enable system</button>
+              </header>
               <p class="windows-empty muted" data-notifications-empty>No notifications</p>
               <ul class="notifications-list" data-notifications-list hidden></ul>
             </div>
@@ -417,14 +424,25 @@ export function renderDesktopShell(): string {
             <header class="mobile-home-header" aria-label="Home">
               <p class="mobile-home-date" data-mobile-home-date></p>
               <h1>Hello, <span data-mobile-home-username>operator</span></h1>
-              <button type="button" class="mobile-home-search" data-mobile-command-launcher aria-label="Search apps and windows">
-                <span aria-hidden="true">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="11" cy="11" r="7"></circle>
-                    <path d="m20 20-3.8-3.8"></path>
-                  </svg>
-                </span>
-              </button>
+              <div class="mobile-home-actions">
+                <button type="button" class="mobile-home-action" data-notifications-toggle aria-label="Notifications" aria-haspopup="menu" aria-expanded="false" aria-controls="notifications-panel">
+                  <span aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M6 9a6 6 0 0 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9"></path>
+                      <path d="M10 20a2 2 0 0 0 4 0"></path>
+                    </svg>
+                  </span>
+                  <span class="notification-badge" data-notifications-badge hidden>0</span>
+                </button>
+                <button type="button" class="mobile-home-action" data-mobile-command-launcher aria-label="Search apps and windows">
+                  <span aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                      <circle cx="11" cy="11" r="7"></circle>
+                      <path d="m20 20-3.8-3.8"></path>
+                    </svg>
+                  </span>
+                </button>
+              </div>
             </header>
             <nav class="mobile-app-grid" data-mobile-apps aria-label="Applications"></nav>
           </section>
