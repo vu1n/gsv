@@ -5153,10 +5153,8 @@ button:disabled {
     min-width: 0;
     min-height: 96px;
     border: 0;
-    border-radius: 32px;
-    background:
-      radial-gradient(ellipse at 24% 50%, rgba(255, 255, 255, 0.13), transparent 36%),
-      radial-gradient(ellipse at 46% 50%, rgba(3, 8, 18, 0.22), transparent 60%);
+    border-radius: 42px;
+    background: transparent;
     color: rgba(255, 255, 255, 0.94);
     display: grid;
     grid-template-columns: 86px minmax(0, 1fr);
@@ -5174,6 +5172,7 @@ button:disabled {
     transform-origin: center;
     transform-style: preserve-3d;
     filter: blur(var(--home-app-blur));
+    isolation: isolate;
     transition:
       background-color 100ms ease,
       border-color 100ms ease,
@@ -5183,23 +5182,21 @@ button:disabled {
       opacity 120ms ease,
       transform 150ms ease;
     will-change: transform, opacity;
-    -webkit-backdrop-filter: blur(14px) saturate(1.08);
-    backdrop-filter: blur(14px) saturate(1.08);
   }
 
-  .mobile-app-icon:focus-visible,
   .mobile-app-icon.is-centered {
     outline: none;
     min-height: var(--home-app-height);
-    background:
-      radial-gradient(ellipse at 25% 50%, rgba(255, 255, 255, 0.22), transparent 40%),
-      radial-gradient(ellipse at 46% 50%, rgba(3, 8, 18, 0.36), transparent 62%);
-    box-shadow:
-      0 28px 58px rgba(3, 8, 18, 0.28),
-      0 0 0 1px rgba(255, 255, 255, 0.1) inset;
+    box-shadow: none;
   }
 
-  .mobile-app-grid.is-dragging .mobile-app-icon {
+  .mobile-app-icon:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(246, 249, 252, 0.2) inset;
+  }
+
+  .mobile-app-grid.is-dragging .mobile-app-icon,
+  .mobile-app-grid.is-gliding .mobile-app-icon {
     transition: none;
   }
 
@@ -5207,26 +5204,33 @@ button:disabled {
     pointer-events: none;
   }
 
-  .mobile-app-icon.is-active-app {
+  .mobile-app-icon.is-active-app:not(.is-centered) {
     background:
-      radial-gradient(ellipse at 25% 50%, rgba(139, 214, 255, 0.22), transparent 40%),
-      radial-gradient(ellipse at 46% 50%, rgba(3, 8, 18, 0.36), transparent 62%);
+      radial-gradient(ellipse at 25% 50%, rgba(139, 214, 255, 0.13), transparent 42%),
+      radial-gradient(ellipse at 46% 50%, rgba(3, 8, 18, 0.18), transparent 64%);
   }
 
   .mobile-app-icon::before {
     content: "";
     position: absolute;
-    inset: 1px;
-    border-radius: inherit;
+    inset: -92px -72px;
+    border-radius: 0;
     background:
-      radial-gradient(ellipse at 36% 50%, rgba(255, 255, 255, 0.2), transparent 52%),
-      linear-gradient(110deg, transparent 0 32%, rgba(255, 255, 255, 0.13) 44%, transparent 58%);
+      radial-gradient(ellipse at 23% 50%, rgba(255, 255, 255, 0.22), transparent 42%),
+      radial-gradient(ellipse at 48% 50%, rgba(3, 8, 18, 0.3), transparent 72%),
+      radial-gradient(ellipse at 70% 52%, rgba(139, 214, 255, 0.1), transparent 58%);
     opacity: 0;
     pointer-events: none;
+    transform: scale(0.86);
+    transition:
+      opacity 150ms ease,
+      transform 150ms ease;
+    z-index: -1;
   }
 
   .mobile-app-icon.is-centered::before {
     opacity: 1;
+    transform: scale(1);
   }
 
   .mobile-app-icon > .desktop-glyph {
@@ -5248,53 +5252,13 @@ button:disabled {
   }
 
   .mobile-app-icon.is-centered > .desktop-glyph {
-    width: 76px;
-    height: 76px;
+    width: 84px;
+    height: 84px;
     color: rgba(255, 255, 255, 0.96);
     filter:
-      drop-shadow(0 20px 34px rgba(3, 8, 18, 0.42))
-      drop-shadow(0 0 16px rgba(255, 255, 255, 0.18));
-    transform: translateZ(54px);
-  }
-
-  .mobile-app-orbit {
-    position: absolute;
-    top: 50%;
-    left: 23px;
-    width: 76px;
-    height: 76px;
-    border-radius: 30px;
-    border: 1px solid rgba(255, 255, 255, 0.16);
-    opacity: 0;
-    pointer-events: none;
-    transform: translateY(-50%) translateZ(22px);
-    z-index: 1;
-  }
-
-  .mobile-app-icon.is-paused .mobile-app-orbit,
-  .mobile-app-icon.is-running .mobile-app-orbit,
-  .mobile-app-icon.is-active-app .mobile-app-orbit {
-    opacity: 1;
-  }
-
-  .mobile-app-icon.is-paused .mobile-app-orbit {
-    border-color: rgba(240, 202, 111, 0.54);
-    border-style: dashed;
-  }
-
-  .mobile-app-icon.is-running .mobile-app-orbit,
-  .mobile-app-icon.is-active-app .mobile-app-orbit {
-    border-color: rgba(92, 210, 168, 0.72);
-    box-shadow:
-      0 0 18px rgba(92, 210, 168, 0.28),
-      inset 0 0 16px rgba(92, 210, 168, 0.12);
-  }
-
-  .mobile-app-icon.is-active-app .mobile-app-orbit {
-    border-color: rgba(139, 214, 255, 0.86);
-    box-shadow:
-      0 0 24px rgba(139, 214, 255, 0.36),
-      inset 0 0 20px rgba(139, 214, 255, 0.16);
+      drop-shadow(0 24px 38px rgba(3, 8, 18, 0.5))
+      drop-shadow(0 0 18px rgba(255, 255, 255, 0.22));
+    transform: translateX(-4px) translateZ(72px);
   }
 
   .mobile-app-badge {
@@ -5337,6 +5301,19 @@ button:disabled {
     letter-spacing: 0;
     text-shadow: 0 1px 2px rgba(3, 8, 18, 0.5);
     white-space: nowrap;
+    transition:
+      color 140ms ease,
+      font-size 140ms ease,
+      transform 140ms ease;
+  }
+
+  .mobile-app-icon.is-centered .mobile-app-copy strong {
+    color: #ffffff;
+    font-size: 1.12rem;
+    text-shadow:
+      0 2px 8px rgba(3, 8, 18, 0.56),
+      0 0 18px rgba(255, 255, 255, 0.14);
+    transform: translateY(-2px);
   }
 
   .mobile-app-copy small {
@@ -5357,7 +5334,7 @@ button:disabled {
     color: rgba(255, 255, 255, 0.84);
     max-height: 3.8em;
     opacity: 1;
-    transform: translateY(0);
+    transform: translateY(-1px);
   }
 
   .mobile-app-activity {
@@ -5587,15 +5564,8 @@ button:disabled {
   }
 
   .mobile-app-icon.is-centered > .desktop-glyph {
-    width: 62px;
-    height: 62px;
-  }
-
-  .mobile-app-orbit {
-    left: 14px;
-    width: 66px;
-    height: 66px;
-    border-radius: 22px;
+    width: 70px;
+    height: 70px;
   }
 
   .mobile-app-badge {
@@ -5624,6 +5594,22 @@ button:disabled {
     width: 54px;
     height: 34px;
     border-radius: 10px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mobile-home,
+  .mobile-app-icon,
+  .mobile-app-icon::before,
+  .mobile-app-icon > .desktop-glyph,
+  .mobile-app-copy strong,
+  .mobile-app-copy small,
+  .mobile-window-stack {
+    transition: none !important;
+  }
+
+  .mobile-app-activity::before {
+    animation: none !important;
   }
 }
 

@@ -78,7 +78,12 @@ export function createLauncher(options: LauncherOptions): LauncherController {
   let mobileRotorPointerId: number | null = null;
   let mobileRotorDragStartY = 0;
   let mobileRotorDragStartPosition = 0;
+  let mobileRotorLastDragY = 0;
+  let mobileRotorLastDragTime = 0;
   let mobileRotorDidDrag = false;
+  let mobileRotorVelocity = 0;
+  let mobileRotorMomentumRaf: number | null = null;
+  let mobileRotorMomentumTime = 0;
 
   const getIconNodes = (): HTMLButtonElement[] => {
     return Array.from(iconsNode.querySelectorAll<HTMLButtonElement>(".desktop-icon[data-app-id]"));
@@ -160,7 +165,6 @@ export function createLauncher(options: LauncherOptions): LauncherController {
         return `
           <button type="button" class="mobile-app-icon" data-app-id="${escapeHtml(appItem.id)}">
             ${renderDesktopIcon(appItem.icon)}
-            <span class="mobile-app-orbit" aria-hidden="true"></span>
             <span class="mobile-app-badge" data-mobile-app-badge hidden></span>
             <span class="mobile-app-copy">
               <strong>${escapeHtml(appItem.name)}</strong>
@@ -237,8 +241,22 @@ export function createLauncher(options: LauncherOptions): LauncherController {
     mobileRotorSnapTimer = null;
   };
 
+  const clearMobileRotorMomentum = (): void => {
+    if (mobileRotorMomentumRaf !== null) {
+      window.cancelAnimationFrame(mobileRotorMomentumRaf);
+      mobileRotorMomentumRaf = null;
+    }
+    mobileRotorVelocity = 0;
+    mobileAppsNode?.classList.remove("is-gliding");
+  };
+
+  const prefersReducedMotion = (): boolean => {
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  };
+
   const snapMobileRotor = (): void => {
     clearMobileRotorSnapTimer();
+    clearMobileRotorMomentum();
     const centeredIndex = getCenteredMobileRotorIndex();
     if (centeredIndex >= 0) {
       setMobileRotorIndex(centeredIndex);
@@ -251,6 +269,40 @@ export function createLauncher(options: LauncherOptions): LauncherController {
       mobileRotorSnapTimer = null;
       snapMobileRotor();
     }, 140);
+  };
+
+  const stepMobileRotorMomentum = (timestamp: number): void => {
+    if (mobileRotorMomentumRaf === null) {
+      return;
+    }
+
+    const elapsed = Math.min(Math.max(timestamp - mobileRotorMomentumTime, 0), 48);
+    mobileRotorMomentumTime = timestamp;
+    setMobileRotorPosition(mobileRotorPosition + mobileRotorVelocity * (elapsed / 1000));
+    mobileRotorVelocity *= Math.pow(0.045, elapsed / 1000);
+
+    if (Math.abs(mobileRotorVelocity) < 0.18) {
+      mobileRotorMomentumRaf = null;
+      mobileAppsNode?.classList.remove("is-gliding");
+      snapMobileRotor();
+      return;
+    }
+
+    mobileRotorMomentumRaf = window.requestAnimationFrame(stepMobileRotorMomentum);
+  };
+
+  const startMobileRotorMomentum = (velocity: number): void => {
+    clearMobileRotorSnapTimer();
+    clearMobileRotorMomentum();
+    if (apps.length <= 1 || prefersReducedMotion() || Math.abs(velocity) < 0.16) {
+      snapMobileRotor();
+      return;
+    }
+
+    mobileRotorVelocity = Math.max(-8.5, Math.min(8.5, velocity));
+    mobileRotorMomentumTime = performance.now();
+    mobileAppsNode?.classList.add("is-gliding");
+    mobileRotorMomentumRaf = window.requestAnimationFrame(stepMobileRotorMomentum);
   };
 
   const syncMobileAppState = (summaries: WindowSummary[] = latestSummaries): void => {
@@ -633,11 +685,15 @@ export function createLauncher(options: LauncherOptions): LauncherController {
     const index = getMobileRotorIndexForButton(button);
     if (index >= 0 && index !== getCenteredMobileRotorIndex()) {
       event.preventDefault();
+      clearMobileRotorMomentum();
+      clearMobileRotorSnapTimer();
       setMobileRotorIndex(index);
       button.focus();
       return;
     }
 
+    clearMobileRotorMomentum();
+    clearMobileRotorSnapTimer();
     startMobileLaunchTransition();
     activateApp(appId);
   };
@@ -648,8 +704,9 @@ export function createLauncher(options: LauncherOptions): LauncherController {
     }
 
     event.preventDefault();
+    clearMobileRotorMomentum();
     const delta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
-    setMobileRotorPosition(mobileRotorPosition + delta / 190);
+    setMobileRotorPosition(mobileRotorPosition + delta / 220);
     scheduleMobileRotorSnap();
   };
 
@@ -659,9 +716,12 @@ export function createLauncher(options: LauncherOptions): LauncherController {
     }
 
     clearMobileRotorSnapTimer();
+    clearMobileRotorMomentum();
     mobileRotorPointerId = event.pointerId;
     mobileRotorDragStartY = event.clientY;
     mobileRotorDragStartPosition = mobileRotorPosition;
+    mobileRotorLastDragY = event.clientY;
+    mobileRotorLastDragTime = performance.now();
     mobileRotorDidDrag = false;
     mobileAppsNode?.classList.add("is-dragging");
     mobileAppsNode?.setPointerCapture(event.pointerId);
@@ -674,8 +734,15 @@ export function createLauncher(options: LauncherOptions): LauncherController {
 
     event.preventDefault();
     const dragDelta = event.clientY - mobileRotorDragStartY;
+    const dragUnits = dragDelta / 132;
+    const easedDragUnits = Math.sign(dragUnits) * Math.pow(Math.abs(dragUnits), 0.96);
+    const timestamp = performance.now();
+    const elapsed = Math.max(timestamp - mobileRotorLastDragTime, 12);
+    mobileRotorVelocity = -((event.clientY - mobileRotorLastDragY) / 132) / (elapsed / 1000);
+    mobileRotorLastDragY = event.clientY;
+    mobileRotorLastDragTime = timestamp;
     mobileRotorDidDrag = mobileRotorDidDrag || Math.abs(dragDelta) > 8;
-    setMobileRotorPosition(mobileRotorDragStartPosition - dragDelta / 135);
+    setMobileRotorPosition(mobileRotorDragStartPosition - easedDragUnits);
   };
 
   const finishMobileRotorDrag = (event: PointerEvent): void => {
@@ -688,7 +755,7 @@ export function createLauncher(options: LauncherOptions): LauncherController {
       mobileAppsNode.releasePointerCapture(event.pointerId);
     }
     mobileRotorPointerId = null;
-    snapMobileRotor();
+    startMobileRotorMomentum(mobileRotorVelocity);
     if (mobileRotorDidDrag) {
       window.setTimeout(() => {
         mobileRotorDidDrag = false;
@@ -703,6 +770,8 @@ export function createLauncher(options: LauncherOptions): LauncherController {
 
     if (event.key === "ArrowDown") {
       event.preventDefault();
+      clearMobileRotorMomentum();
+      clearMobileRotorSnapTimer();
       setMobileRotorIndex((getCenteredMobileRotorIndex() + 1) % apps.length);
       focusMobileRotorIndex(getCenteredMobileRotorIndex());
       return;
@@ -710,6 +779,8 @@ export function createLauncher(options: LauncherOptions): LauncherController {
 
     if (event.key === "ArrowUp") {
       event.preventDefault();
+      clearMobileRotorMomentum();
+      clearMobileRotorSnapTimer();
       setMobileRotorIndex((getCenteredMobileRotorIndex() - 1 + apps.length) % apps.length);
       focusMobileRotorIndex(getCenteredMobileRotorIndex());
     }
@@ -1108,6 +1179,7 @@ export function createLauncher(options: LauncherOptions): LauncherController {
       clearDockRevealTimer();
       clearMobileLaunchTimer();
       clearMobileRotorSnapTimer();
+      clearMobileRotorMomentum();
       if (mobileHomeDepthRaf !== null) {
         window.cancelAnimationFrame(mobileHomeDepthRaf);
         mobileHomeDepthRaf = null;
