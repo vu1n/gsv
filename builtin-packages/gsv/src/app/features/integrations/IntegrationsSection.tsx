@@ -1,4 +1,3 @@
-import { openApp } from "@gsv/package/host";
 import qrcode from "qrcode-generator";
 import { useMemo, useState } from "preact/hooks";
 import type { GsvBackend } from "../../backend";
@@ -10,12 +9,19 @@ import {
   getAccountTone,
   getAdapterTone,
 } from "./integrations-domain";
+import { McpServersDetail, McpServersSummary } from "./McpServersPane";
+import { readyServerCount } from "./mcp-domain";
 import type { AdapterAccount, AdapterConnectChallenge, AdapterKind, IntegrationKind } from "./types";
+import { useMcpServers } from "./useMcpServers";
 import { useMessageAdapters } from "./useMessageAdapters";
 
 export function IntegrationsSection({ backend }: { backend: GsvBackend }) {
-  const runtime = useMessageAdapters(backend);
+  const adaptersRuntime = useMessageAdapters(backend);
+  const mcpRuntime = useMcpServers(backend);
   const [kind, setKind] = useState<IntegrationKind>(readIntegrationKindFromLocation);
+  const busy = kind === "message-adapters"
+    ? adaptersRuntime.loading || adaptersRuntime.busy
+    : mcpRuntime.loading || mcpRuntime.pendingAction !== null;
 
   function selectKind(nextKind: IntegrationKind): void {
     setKind(nextKind);
@@ -23,6 +29,14 @@ export function IntegrationsSection({ backend }: { backend: GsvBackend }) {
     url.searchParams.set("section", "integrations");
     url.searchParams.set("type", nextKind);
     window.history.replaceState({}, "", url);
+  }
+
+  function refreshActiveKind(): void {
+    if (kind === "message-adapters") {
+      void adaptersRuntime.refresh();
+    } else {
+      void mcpRuntime.refresh();
+    }
   }
 
   return (
@@ -36,8 +50,8 @@ export function IntegrationsSection({ backend }: { backend: GsvBackend }) {
           <button
             type="button"
             class="gsv-mini-button"
-            onClick={() => void runtime.refresh()}
-            disabled={runtime.loading || runtime.busy}
+            onClick={refreshActiveKind}
+            disabled={busy}
           >
             Refresh
           </button>
@@ -53,7 +67,7 @@ export function IntegrationsSection({ backend }: { backend: GsvBackend }) {
               <strong>Message adapters</strong>
               <small>WhatsApp and Discord accounts</small>
             </span>
-            <span class="gsv-row-meta">{countConnectedAccounts(runtime.state.statusByAdapter)} connected</span>
+            <span class="gsv-row-meta">{countConnectedAccounts(adaptersRuntime.state.statusByAdapter)} connected</span>
           </button>
           <button
             type="button"
@@ -64,20 +78,20 @@ export function IntegrationsSection({ backend }: { backend: GsvBackend }) {
               <strong>MCP servers</strong>
               <small>Tool server configuration</small>
             </span>
-            <span class="gsv-row-meta">Control</span>
+            <span class="gsv-row-meta">{readyServerCount(mcpRuntime.state.servers)} ready</span>
           </button>
         </div>
 
         {kind === "message-adapters" ? (
           <div class="gsv-adapter-list" aria-label="Message adapters">
             {ADAPTERS.map((adapter) => {
-              const accounts = runtime.state.statusByAdapter[adapter.id] ?? [];
+              const accounts = adaptersRuntime.state.statusByAdapter[adapter.id] ?? [];
               return (
                 <button
                   key={adapter.id}
                   type="button"
-                  class={`gsv-adapter-row${runtime.selectedAdapter === adapter.id ? " is-selected" : ""}`}
-                  onClick={() => runtime.selectAdapter(adapter.id)}
+                  class={`gsv-adapter-row${adaptersRuntime.selectedAdapter === adapter.id ? " is-selected" : ""}`}
+                  onClick={() => adaptersRuntime.selectAdapter(adapter.id)}
                 >
                   <span class="gsv-adapter-icon">{adapter.shortName}</span>
                   <span class="gsv-row-copy">
@@ -90,14 +104,14 @@ export function IntegrationsSection({ backend }: { backend: GsvBackend }) {
             })}
           </div>
         ) : (
-          <McpSummary onOpenControl={openControlMcp} />
+          <McpServersSummary runtime={mcpRuntime} />
         )}
       </aside>
 
       {kind === "message-adapters" ? (
-        <MessageAdapterDetail runtime={runtime} />
+        <MessageAdapterDetail runtime={adaptersRuntime} />
       ) : (
-        <McpDetail onOpenControl={openControlMcp} />
+        <McpServersDetail runtime={mcpRuntime} />
       )}
     </section>
   );
@@ -333,53 +347,6 @@ function QrChallengeGraphic(props: { value: string }) {
   return <pre class="gsv-challenge-code">{props.value}</pre>;
 }
 
-function McpSummary({ onOpenControl }: { onOpenControl(): void }) {
-  return (
-    <section class="gsv-mcp-summary">
-      <h4>MCP server management</h4>
-      <p>Server definitions still live in Control while this section gets the shared MCP state contract.</p>
-      <button type="button" class="gsv-mini-button" onClick={onOpenControl}>
-        Open Control
-      </button>
-    </section>
-  );
-}
-
-function McpDetail({ onOpenControl }: { onOpenControl(): void }) {
-  return (
-    <section class="gsv-integration-detail">
-      <header class="gsv-integration-detail-head">
-        <div>
-          <span class="gsv-kicker">MCP</span>
-          <h3>Tool servers</h3>
-          <p>Curated MCP health, tools, and transport controls belong here once the shared config surface is ready.</p>
-        </div>
-        <button type="button" class="gsv-mini-button" onClick={onOpenControl}>
-          Open Control
-        </button>
-      </header>
-      <div class="gsv-integration-body">
-        <section class="gsv-integration-panel">
-          <header>
-            <h4>Migration boundary</h4>
-            <p>The old Control MCP tab remains the source of truth for add, refresh, and remove actions in this batch.</p>
-          </header>
-          <dl class="gsv-detail-list">
-            <div>
-              <dt>Next live surface</dt>
-              <dd>Server inventory, transport state, available tools, and add/remove workflows.</dd>
-            </div>
-            <div>
-              <dt>Current fallback</dt>
-              <dd>Control opens directly to the MCP tab for existing management actions.</dd>
-            </div>
-          </dl>
-        </section>
-      </div>
-    </section>
-  );
-}
-
 function countConnectedAccounts(statusByAdapter: Record<AdapterKind, AdapterAccount[]>): number {
   return Object.values(statusByAdapter).reduce(
     (count, accounts) => count + accounts.filter((account) => account.connected).length,
@@ -391,13 +358,6 @@ function readIntegrationKindFromLocation(): IntegrationKind {
   return new URL(window.location.href).searchParams.get("type") === "mcp-servers"
     ? "mcp-servers"
     : "message-adapters";
-}
-
-function openControlMcp(): void {
-  openApp({
-    target: "control",
-    payload: { route: "/apps/control?tab=mcp" },
-  });
 }
 
 function createQrChallengeGraphic(value: string):

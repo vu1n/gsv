@@ -6,6 +6,7 @@ import {
   revokeDeviceToken,
   updateDeviceDescription,
 } from "./backend/devices";
+import { addMcpServer, loadMcpState, refreshMcpServer, removeMcpServer } from "./backend/mcp";
 import { killRuntimeProcess, loadRuntimeState } from "./backend/runtime";
 
 export default class GsvBackend extends PackageBackendEntrypoint {
@@ -43,5 +44,21 @@ export default class GsvBackend extends PackageBackendEntrypoint {
 
   async disconnectAdapter(args: unknown): Promise<unknown> {
     return disconnectAdapter(this.kernel, args as never);
+  }
+
+  async loadMcpState(): Promise<unknown> {
+    return loadMcpState(this.kernel);
+  }
+
+  async addMcpServer(args: unknown): Promise<unknown> {
+    return addMcpServer(this.kernel, args as never);
+  }
+
+  async refreshMcpServer(args: unknown): Promise<unknown> {
+    return refreshMcpServer(this.kernel, args as never);
+  }
+
+  async removeMcpServer(args: unknown): Promise<unknown> {
+    return removeMcpServer(this.kernel, args as never);
   }
 }

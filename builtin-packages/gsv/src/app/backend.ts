@@ -9,8 +9,13 @@ import type {
 import type {
   AdapterMutationResult,
   AdaptersState,
+  AddMcpServerArgs,
   ConnectAdapterArgs,
   DisconnectAdapterArgs,
+  McpServerMutationResult,
+  McpState,
+  RefreshMcpServerArgs,
+  RemoveMcpServerArgs,
 } from "./features/integrations/types";
 import type {
   KillRuntimeProcessArgs,
@@ -28,4 +33,8 @@ export interface GsvBackend {
   loadAdaptersState(): Promise<AdaptersState>;
   connectAdapter(args: ConnectAdapterArgs): Promise<AdapterMutationResult>;
   disconnectAdapter(args: DisconnectAdapterArgs): Promise<AdapterMutationResult>;
+  loadMcpState(): Promise<McpState>;
+  addMcpServer(args: AddMcpServerArgs): Promise<McpServerMutationResult>;
+  refreshMcpServer(args: RefreshMcpServerArgs): Promise<McpServerMutationResult>;
+  removeMcpServer(args: RemoveMcpServerArgs): Promise<McpState>;
 }

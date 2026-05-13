@@ -249,7 +249,9 @@
 }
 
 .gsv-integration-form input[type="text"],
-.gsv-integration-form input[type="password"] {
+.gsv-integration-form input[type="password"],
+.gsv-integration-form input[type="url"],
+.gsv-integration-form select {
   width: 100%;
   min-width: 0;
   height: 2.35rem;
@@ -258,6 +260,164 @@
   border-radius: 6px;
   background: #ffffff;
   color: #15191f;
+}
+
+.gsv-mcp-add {
+  max-width: none;
+}
+
+.gsv-mcp-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.gsv-mcp-counts span,
+.gsv-state-pill,
+.gsv-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.5rem;
+  padding: 0 0.45rem;
+  border: 1px solid #dce2ea;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #566273;
+  font-size: 0.72rem;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.gsv-state-pill.is-good {
+  border-color: #b8ddcf;
+  background: #f0fbf6;
+  color: #21694a;
+}
+
+.gsv-state-pill.is-warn {
+  border-color: #ecd39c;
+  background: #fff8e9;
+  color: #7a5412;
+}
+
+.gsv-state-pill.is-danger {
+  border-color: #e6c5c5;
+  background: #fff4f4;
+  color: #9f2f2f;
+}
+
+.gsv-mcp-list {
+  display: grid;
+  min-width: 0;
+  border: 1px solid #dce2ea;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.gsv-mcp-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.7rem;
+  width: 100%;
+  min-width: 0;
+  min-height: 4rem;
+  padding: 0.78rem 0.85rem;
+  border: 0;
+  border-bottom: 1px solid #edf0f4;
+  background: #ffffff;
+  text-align: left;
+}
+
+.gsv-mcp-row:last-child {
+  border-bottom: 0;
+}
+
+.gsv-mcp-row:hover,
+.gsv-mcp-row.is-selected {
+  background: #f4f7fb;
+}
+
+.gsv-mcp-status-panel {
+  background: #ffffff;
+}
+
+.gsv-mcp-auth-flow,
+.gsv-mcp-actions {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.gsv-mcp-auth-flow {
+  max-width: 28rem;
+}
+
+.gsv-mcp-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.gsv-mcp-actions > div {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.gsv-tool-list {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.gsv-tool-row {
+  display: grid;
+  gap: 0.7rem;
+  min-width: 0;
+  padding: 0.75rem;
+  border: 1px solid #dce2ea;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.gsv-tool-title {
+  display: grid;
+  min-width: 0;
+  gap: 0.25rem;
+}
+
+.gsv-tool-title strong,
+.gsv-tool-title span,
+.gsv-tool-field > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.gsv-tool-title span,
+.gsv-tool-field > span,
+.gsv-tool-fallback {
+  color: #687384;
+  font-size: 0.78rem;
+}
+
+.gsv-tool-field {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.gsv-tool-field > span {
+  font-weight: 750;
+}
+
+.gsv-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.gsv-chip.is-required {
+  border-color: #bac7e5;
+  background: #e8eefb;
+  color: #172033;
 }
 
 .gsv-check-row {
@@ -332,13 +492,16 @@
 
 @media (max-width: 520px) {
   .gsv-integration-kind-list button,
-  .gsv-adapter-row {
+  .gsv-adapter-row,
+  .gsv-mcp-row,
+  .gsv-mcp-facts {
     grid-template-columns: minmax(0, 1fr);
   }
 
   .gsv-adapter-icon,
   .gsv-adapter-dot,
-  .gsv-integration-kind-list .gsv-row-meta {
+  .gsv-integration-kind-list .gsv-row-meta,
+  .gsv-mcp-row .gsv-state-pill {
     display: none;
   }
 }
