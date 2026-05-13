@@ -2,6 +2,7 @@ import { openApp } from "@gsv/package/host";
 import { useEffect, useMemo, useState } from "preact/hooks";
 import type { GsvBackend } from "./backend";
 import { DevicesSection } from "./features/devices/DevicesSection";
+import { IntegrationsSection } from "./features/integrations/IntegrationsSection";
 import { RuntimeSection } from "./features/runtime/RuntimeSection";
 import { ATTENTION_ITEMS, GROUPS, SECTIONS, findSection, sectionExists } from "./navigation";
 import type { GsvGroup, GsvSection, GsvSectionId, Tone } from "./types";
@@ -54,6 +55,8 @@ export function App({ backend }: { backend: GsvBackend }) {
             <RuntimeSection backend={backend} />
           ) : activeSection.id === "devices" ? (
             <DevicesSection backend={backend} />
+          ) : activeSection.id === "integrations" ? (
+            <IntegrationsSection backend={backend} />
           ) : (
             <SectionWorkspace section={activeSection} onOpenHandoff={openHandoff} />
           )}

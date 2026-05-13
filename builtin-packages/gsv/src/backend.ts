@@ -1,4 +1,5 @@
 import { PackageBackendEntrypoint } from "@gsv/package/backend";
+import { connectAdapter, disconnectAdapter, loadAdaptersState } from "./backend/adapters";
 import {
   createDeviceNodeToken,
   loadDevicesState,
@@ -30,5 +31,17 @@ export default class GsvBackend extends PackageBackendEntrypoint {
 
   async updateDeviceDescription(args: unknown): Promise<unknown> {
     return updateDeviceDescription(this.kernel, this, args as never);
+  }
+
+  async loadAdaptersState(): Promise<unknown> {
+    return loadAdaptersState(this.kernel);
+  }
+
+  async connectAdapter(args: unknown): Promise<unknown> {
+    return connectAdapter(this.kernel, args as never);
+  }
+
+  async disconnectAdapter(args: unknown): Promise<unknown> {
+    return disconnectAdapter(this.kernel, args as never);
   }
 }

@@ -113,6 +113,12 @@
     gap: 1rem;
   }
 
+  .gsv-integrations {
+    grid-template-columns: minmax(24rem, 0.62fr) minmax(22rem, 0.48fr);
+    align-items: start;
+    gap: 1rem;
+  }
+
   .gsv-detail-pane {
     position: sticky;
     top: 5.1rem;
@@ -126,6 +132,11 @@
   }
 
   .gsv-device-detail {
+    position: sticky;
+    top: 5.1rem;
+  }
+
+  .gsv-integration-detail {
     position: sticky;
     top: 5.1rem;
   }
@@ -150,5 +161,9 @@
 
   .gsv-devices {
     grid-template-columns: minmax(30rem, 0.74fr) minmax(24rem, 0.46fr);
+  }
+
+  .gsv-integrations {
+    grid-template-columns: minmax(30rem, 0.7fr) minmax(26rem, 0.52fr);
   }
 }

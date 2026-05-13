@@ -7,6 +7,12 @@ import type {
   UpdateDeviceDescriptionArgs,
 } from "./features/devices/types";
 import type {
+  AdapterMutationResult,
+  AdaptersState,
+  ConnectAdapterArgs,
+  DisconnectAdapterArgs,
+} from "./features/integrations/types";
+import type {
   KillRuntimeProcessArgs,
   KillRuntimeProcessResult,
   RuntimeState,
@@ -19,4 +25,7 @@ export interface GsvBackend {
   createDeviceNodeToken(args: CreateNodeTokenArgs): Promise<CreateNodeTokenResult>;
   revokeDeviceToken(args: RevokeDeviceTokenArgs): Promise<DevicesState>;
   updateDeviceDescription(args: UpdateDeviceDescriptionArgs): Promise<DevicesState>;
+  loadAdaptersState(): Promise<AdaptersState>;
+  connectAdapter(args: ConnectAdapterArgs): Promise<AdapterMutationResult>;
+  disconnectAdapter(args: DisconnectAdapterArgs): Promise<AdapterMutationResult>;
 }

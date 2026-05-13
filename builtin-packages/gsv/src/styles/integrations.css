@@ -1,0 +1,344 @@
+.gsv-integrations {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.gsv-integrations-nav,
+.gsv-integration-detail {
+  min-width: 0;
+}
+
+.gsv-integrations-nav {
+  display: grid;
+  gap: 0.75rem;
+  align-content: start;
+}
+
+.gsv-integrations-nav-head,
+.gsv-integration-detail-head,
+.gsv-integration-panel header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.gsv-integrations-nav-head {
+  padding: 0.75rem;
+  border: 1px solid #dce2ea;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.gsv-integrations-nav-head h3,
+.gsv-integration-detail-head h3,
+.gsv-integration-panel h4,
+.gsv-mcp-summary h4 {
+  margin: 0.25rem 0 0;
+}
+
+.gsv-integration-kind-list,
+.gsv-adapter-list {
+  display: grid;
+  min-width: 0;
+  border: 1px solid #dce2ea;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.gsv-integration-kind-list {
+  gap: 0;
+}
+
+.gsv-integration-kind-list button,
+.gsv-adapter-row {
+  display: grid;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  min-height: 4rem;
+  padding: 0.78rem 0.85rem;
+  border: 0;
+  border-bottom: 1px solid #edf0f4;
+  background: #ffffff;
+  text-align: left;
+}
+
+.gsv-integration-kind-list button {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.7rem;
+}
+
+.gsv-adapter-row {
+  grid-template-columns: 2.35rem minmax(0, 1fr) auto;
+  gap: 0.7rem;
+}
+
+.gsv-integration-kind-list button:last-child,
+.gsv-adapter-row:last-child {
+  border-bottom: 0;
+}
+
+.gsv-integration-kind-list button:hover,
+.gsv-integration-kind-list button.is-active,
+.gsv-adapter-row:hover,
+.gsv-adapter-row.is-selected {
+  background: #f4f7fb;
+}
+
+.gsv-integration-kind-list strong,
+.gsv-integration-kind-list small {
+  display: block;
+  min-width: 0;
+}
+
+.gsv-integration-kind-list strong {
+  color: #1b2028;
+  font-size: 0.9rem;
+}
+
+.gsv-integration-kind-list small {
+  margin-top: 0.18rem;
+  color: #687384;
+  font-size: 0.78rem;
+  line-height: 1.3;
+}
+
+.gsv-adapter-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.35rem;
+  height: 2.35rem;
+  border: 1px solid #dce2ea;
+  border-radius: 7px;
+  background: #fbfcfd;
+  color: #2c3747;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.gsv-adapter-dot {
+  display: inline-block;
+  width: 0.62rem;
+  height: 0.62rem;
+  border-radius: 999px;
+  background: #9aa4b2;
+}
+
+.gsv-adapter-dot.is-good {
+  background: #2e8f67;
+}
+
+.gsv-adapter-dot.is-warn {
+  background: #c08319;
+}
+
+.gsv-adapter-dot.is-idle {
+  background: #9aa4b2;
+}
+
+.gsv-mini-button.is-danger {
+  border-color: #e6c5c5;
+  color: #9f2f2f;
+}
+
+.gsv-integration-detail {
+  border: 1px solid #dce2ea;
+  border-radius: 8px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.gsv-integration-detail-head {
+  padding: 0.95rem;
+  border-bottom: 1px solid #edf0f4;
+}
+
+.gsv-integration-detail-head p,
+.gsv-integration-panel p,
+.gsv-mcp-summary p {
+  margin: 0.35rem 0 0;
+  color: #687384;
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.gsv-inline-status {
+  margin: 0.65rem 0.95rem 0;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid #d5e1f4;
+  border-radius: 8px;
+  background: #f4f7ff;
+  color: #2f4f83;
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.gsv-account-strip {
+  display: flex;
+  gap: 0.4rem;
+  padding: 0.6rem 0.75rem;
+  border-bottom: 1px solid #edf0f4;
+  overflow-x: auto;
+}
+
+.gsv-account-chip {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 0.4rem;
+  min-height: 2rem;
+  max-width: 12rem;
+  padding: 0 0.65rem;
+  border: 1px solid #d6dce5;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #4b5565;
+  font-size: 0.78rem;
+  font-weight: 750;
+}
+
+.gsv-account-chip.is-selected {
+  border-color: #bac7e5;
+  background: #e8eefb;
+  color: #172033;
+}
+
+.gsv-integration-body {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.85rem;
+}
+
+.gsv-integration-panel,
+.gsv-mcp-summary {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+  padding: 0.75rem;
+  border: 1px solid #e1e6ee;
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.gsv-integration-panel h4,
+.gsv-mcp-summary h4 {
+  font-size: 0.95rem;
+}
+
+.gsv-integration-form {
+  display: grid;
+  gap: 0.75rem;
+  max-width: 32rem;
+}
+
+.gsv-integration-form label {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.gsv-integration-form label > span,
+.gsv-check-row span {
+  color: #687384;
+  font-size: 0.72rem;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.gsv-integration-form input[type="text"],
+.gsv-integration-form input[type="password"] {
+  width: 100%;
+  min-width: 0;
+  height: 2.35rem;
+  padding: 0 0.65rem;
+  border: 1px solid #cfd6e1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #15191f;
+}
+
+.gsv-check-row {
+  display: flex !important;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 2.2rem;
+}
+
+.gsv-check-row span {
+  text-transform: none;
+}
+
+.gsv-challenge-layout {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.gsv-challenge-graphic {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: min(100%, 18rem);
+  aspect-ratio: 1;
+  padding: 0.9rem;
+  border: 1px solid #dce2ea;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.gsv-challenge-graphic svg,
+.gsv-challenge-graphic img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.gsv-challenge-copy strong {
+  display: block;
+  margin-bottom: 0.45rem;
+}
+
+.gsv-challenge-copy ol {
+  margin: 0;
+  padding-left: 1.2rem;
+  color: #687384;
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.gsv-challenge-code {
+  min-width: 0;
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px solid #dce2ea;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #202938;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@media (min-width: 620px) {
+  .gsv-challenge-layout {
+    grid-template-columns: minmax(12rem, 18rem) minmax(0, 1fr);
+    align-items: start;
+  }
+}
+
+@media (max-width: 520px) {
+  .gsv-integration-kind-list button,
+  .gsv-adapter-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .gsv-adapter-icon,
+  .gsv-adapter-dot,
+  .gsv-integration-kind-list .gsv-row-meta {
+    display: none;
+  }
+}
