@@ -62,9 +62,9 @@ reaching for CLI commands:
 - **Chat** sends messages to your init process.
 - **Files** browses the GSV filesystem.
 - **Shell** runs commands in the gateway OS context.
-- **GSV** is the system console for processes, devices, integrations, and control.
-- **Packages** reviews and manages installed package apps.
-- **Control** remains available for direct system configuration while those flows settle into GSV.
+- **GSV** is the system console for processes, devices, integrations, packages, sources, access, and settings.
+- **GSV > Packages** reviews and manages installed package apps.
+- **GSV > Administration** manages tokens, configuration, and identity links.
 
 Open **Chat** and ask:
 
