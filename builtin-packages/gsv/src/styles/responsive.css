@@ -78,6 +78,10 @@
     display: none;
   }
 
+  .gsv-mobile-section-nav {
+    display: none;
+  }
+
   .gsv-main {
     padding: 1rem;
   }
@@ -97,11 +101,22 @@
     gap: 1rem;
   }
 
+  .gsv-runtime {
+    grid-template-columns: minmax(24rem, 0.68fr) minmax(20rem, 0.42fr);
+    align-items: start;
+    gap: 1rem;
+  }
+
   .gsv-detail-pane {
     position: sticky;
     top: 5.1rem;
     border-top: 0;
     padding-top: 0;
+  }
+
+  .gsv-runtime-detail {
+    position: sticky;
+    top: 5.1rem;
   }
 }
 
@@ -116,5 +131,9 @@
 
   .gsv-section-workspace {
     grid-template-columns: minmax(28rem, 0.78fr) minmax(22rem, 0.42fr);
+  }
+
+  .gsv-runtime {
+    grid-template-columns: minmax(30rem, 0.74fr) minmax(24rem, 0.46fr);
   }
 }

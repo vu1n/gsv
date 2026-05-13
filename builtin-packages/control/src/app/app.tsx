@@ -2,15 +2,14 @@ import { useCallback, useEffect, useMemo, useState } from "preact/hooks";
 import { AdvancedPanel } from "./advanced-panel";
 import { AccessPanel } from "./access-panel";
 import { ConfigPanel } from "./config-panel";
+import { useControlRoute } from "./hooks/use-control-route";
 import { McpPanel } from "./mcp-panel";
 import { Tabs } from "./tabs";
 import type {
   AddMcpServerArgs,
   ControlBackend,
-  ControlConfigSectionId,
   ControlCreatedToken,
   ControlState,
-  ControlTabId,
   CreateLinkArgs,
   CreateTokenArgs,
 } from "./types";
@@ -21,34 +20,11 @@ type AppProps = {
 
 export function App({ backend }: AppProps) {
   const [state, setState] = useState<ControlState | null>(null);
-  const [activeTab, setActiveTab] = useState<ControlTabId>(readTabFromLocation());
-  const [activeConfigSection, setActiveConfigSection] = useState<ControlConfigSectionId>(readSectionFromLocation());
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [issuedToken, setIssuedToken] = useState<ControlCreatedToken | null>(null);
   const [selectedMcpServerId, setSelectedMcpServerId] = useState<string | null>(null);
-
-  const updateRoute = useCallback((nextTab: ControlTabId, nextSection: ControlConfigSectionId = activeConfigSection) => {
-    const url = new URL(window.location.href);
-    url.searchParams.set("tab", nextTab);
-    url.searchParams.set("section", nextSection);
-    window.history.pushState({}, "", url);
-    setActiveTab(nextTab);
-    setActiveConfigSection(nextSection);
-  }, [activeConfigSection]);
-
-  const updateConfigSection = useCallback((nextSection: ControlConfigSectionId) => {
-    updateRoute("config", nextSection);
-  }, [updateRoute]);
-
-  useEffect(() => {
-    const onPopState = () => {
-      setActiveTab(readTabFromLocation());
-      setActiveConfigSection(readSectionFromLocation());
-    };
-    window.addEventListener("popstate", onPopState);
-    return () => window.removeEventListener("popstate", onPopState);
-  }, []);
+  const { activeTab, activeConfigSection, updateRoute, updateConfigSection } = useControlRoute();
 
   const refresh = useCallback(async () => {
     setPendingAction("load-state");
@@ -239,18 +215,6 @@ export function App({ backend }: AppProps) {
       <main class="control-main">{content}</main>
     </div>
   );
-}
-
-function readTabFromLocation(): ControlTabId {
-  const value = new URL(window.location.href).searchParams.get("tab");
-  return value === "access" || value === "mcp" || value === "advanced" ? value : "config";
-}
-
-function readSectionFromLocation(): ControlConfigSectionId {
-  const value = new URL(window.location.href).searchParams.get("section");
-  return value === "profiles" || value === "shell" || value === "server" || value === "processes" || value === "automation"
-    ? value
-    : "ai";
 }
 
 function formatError(cause: unknown): string {

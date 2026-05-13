@@ -1,9 +1,11 @@
 import { openApp } from "@gsv/package/host";
 import { useEffect, useMemo, useState } from "preact/hooks";
+import type { GsvBackend } from "./backend";
+import { RuntimeSection } from "./features/runtime/RuntimeSection";
 import { ATTENTION_ITEMS, GROUPS, SECTIONS, findSection, sectionExists } from "./navigation";
 import type { GsvGroup, GsvSection, GsvSectionId, Tone } from "./types";
 
-export function App() {
+export function App({ backend }: { backend: GsvBackend }) {
   const [activeSectionId, setActiveSectionId] = useState<GsvSectionId>(readSectionFromLocation);
   const activeSection = useMemo(() => findSection(activeSectionId), [activeSectionId]);
   const activeGroup = GROUPS.find((group) => group.id === activeSection.groupId) ?? GROUPS[0];
@@ -43,9 +45,12 @@ export function App() {
 
       <section class="gsv-workspace">
         <TopBar section={activeSection} group={activeGroup} />
+        <MobileSectionTabs group={activeGroup} activeSectionId={activeSectionId} onNavigate={navigate} />
         <main class="gsv-main">
           {activeSection.id === "overview" ? (
             <Overview onNavigate={navigate} onOpenHandoff={openHandoff} />
+          ) : activeSection.id === "runtime" ? (
+            <RuntimeSection backend={backend} />
           ) : (
             <SectionWorkspace section={activeSection} onOpenHandoff={openHandoff} />
           )}
@@ -103,6 +108,38 @@ function TopBar({ section, group }: { section: GsvSection; group: GsvGroup }) {
         <span>{section.statusLabel}</span>
       </div>
     </header>
+  );
+}
+
+function MobileSectionTabs({
+  group,
+  activeSectionId,
+  onNavigate,
+}: {
+  group: GsvGroup;
+  activeSectionId: GsvSectionId;
+  onNavigate: (sectionId: GsvSectionId) => void;
+}) {
+  if (group.sections.length < 2) {
+    return null;
+  }
+
+  return (
+    <nav class="gsv-mobile-section-nav" aria-label={`${group.label} sections`}>
+      {group.sections.map((sectionId) => {
+        const section = findSection(sectionId);
+        return (
+          <button
+            key={section.id}
+            type="button"
+            class={activeSectionId === section.id ? "is-active" : ""}
+            onClick={() => onNavigate(section.id)}
+          >
+            {section.shortLabel}
+          </button>
+        );
+      })}
+    </nav>
   );
 }
 

@@ -1,5 +1,55 @@
 import { openApp } from "@gsv/package/host";
 import { useCallback, useEffect, useMemo, useState } from "preact/hooks";
+import {
+  Icon,
+  PackageBadges,
+  PackageSurfaceIcons,
+  RepoSlug,
+  RiskBadge,
+  SurfaceIcon,
+  SyntaxCodeBlock,
+  SyntaxLine,
+  TimeAgo,
+} from "./components/package-ui";
+import {
+  buildPermissionSummary,
+  buildRefOptions,
+  catalogImportSource,
+  catalogPackageCount,
+  comparePackagesForView,
+  createRepoName,
+  formatRepoDisplay,
+  formatScope,
+  matchInstalledPackage,
+  packageMatchesQuery,
+  packageMatchesScope,
+  packageMatchesView,
+  packageRiskDescription,
+  packageRiskLabel,
+  sourcePathForPackage,
+  statusClass,
+  surfaceTitle,
+  viewDescription,
+  viewTitle,
+} from "./domain/package-model";
+import {
+  buildBreadcrumbs,
+  diffStatusClass,
+  labelForDiffStatus,
+  parentPath,
+  prefixForDiffLine,
+  sortTreeEntries,
+  sourceMatchesQuery,
+} from "./domain/source-model";
+import {
+  appIdFromRoute,
+  readCatalogFromLocation,
+  readPackageIdFromLocation,
+  readScopeFromLocation,
+  readSourceFromLocation,
+  readTabFromLocation,
+  readViewFromLocation,
+} from "./routing";
 import type {
   CatalogEntry,
   CatalogRecord,
@@ -16,9 +66,9 @@ import type {
   PackagesState,
   PackagesView,
   PackageScopeFilter,
-  RepoTreeEntry,
   SourceRecord,
 } from "./types";
+import { firstLine, formatBytes, formatError, shortHash } from "./utils/format";
 
 type AppProps = {
   backend: PackagesBackend;
@@ -1739,353 +1789,6 @@ function CreatePackagePanel(props: {
   );
 }
 
-function PackageBadges({ pkg, compact = false }: { pkg: PackageRecord; compact?: boolean }) {
-  return (
-    <span class="packages-badge-row">
-      <span class={`packages-badge ${pkg.enabled ? "is-enabled" : "is-disabled"}`}>{pkg.enabled ? "Enabled" : "Disabled"}</span>
-      {pkg.reviewPending ? <span class="packages-badge is-review">{compact ? "Review" : "Review required"}</span> : null}
-      {pkg.updateAvailable ? <span class="packages-badge is-update">{compact ? "Update" : "Update available"}</span> : null}
-      {!compact ? <span class="packages-badge">{formatScope(pkg)}</span> : null}
-    </span>
-  );
-}
-
-function RiskBadge({ pkg }: { pkg: PackageRecord }) {
-  const level = packageRiskLevel(pkg);
-  return <span class={`packages-badge packages-risk-badge is-${level}`}>{packageRiskLabel(pkg)}</span>;
-}
-
-function PackageSurfaceIcons({ pkg }: { pkg: PackageRecord }) {
-  const counts = packageSurfaceCounts(pkg);
-  return (
-    <span class="packages-surface-icons" aria-label="Package surfaces">
-      {counts.ui > 0 ? <SurfaceIcon kind="ui" count={counts.ui} title={surfaceTitle("ui", counts.ui)} /> : null}
-      {counts.command > 0 ? <SurfaceIcon kind="command" count={counts.command} title={surfaceTitle("command", counts.command)} /> : null}
-      {counts.rpc > 0 ? <SurfaceIcon kind="rpc" count={counts.rpc} title={surfaceTitle("rpc", counts.rpc)} /> : null}
-      {counts.http > 0 ? <SurfaceIcon kind="http" count={counts.http} title={surfaceTitle("http", counts.http)} /> : null}
-      {counts.profile > 0 ? <SurfaceIcon kind="profile" count={counts.profile} title={surfaceTitle("profile", counts.profile)} /> : null}
-      {counts.total === 0 ? <span class="packages-empty-inline">None</span> : null}
-    </span>
-  );
-}
-
-function SurfaceIcon(props: { kind: "ui" | "command" | "rpc" | "http" | "profile"; count?: number; title: string }) {
-  return (
-    <span class="packages-surface-icon" title={props.title} aria-label={props.title}>
-      <Icon name={props.kind === "ui" ? "app" : props.kind === "command" ? "terminal" : props.kind === "profile" ? "profile" : "network"} />
-      {props.count && props.count > 1 ? <small>{props.count}</small> : null}
-    </span>
-  );
-}
-
-function Icon({ name }: { name: "app" | "terminal" | "profile" | "network" | "folder" | "file" }) {
-  if (name === "app") {
-    return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2"></rect><path d="M4 9h16"></path><path d="M8 13h3"></path><path d="M14 13h2"></path></svg>;
-  }
-  if (name === "terminal") {
-    return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2"></rect><path d="m8 10 3 2.5L8 15"></path><path d="M13.5 15H17"></path></svg>;
-  }
-  if (name === "profile") {
-    return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3"></circle><path d="M6.5 19a5.5 5.5 0 0 1 11 0"></path><path d="M18 6l2-2"></path><path d="M20 4l1.5 1.5"></path></svg>;
-  }
-  if (name === "network") {
-    return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="12" r="2"></circle><circle cx="18" cy="7" r="2"></circle><circle cx="18" cy="17" r="2"></circle><path d="m8 11 8-3"></path><path d="m8 13 8 3"></path></svg>;
-  }
-  if (name === "folder") {
-    return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5h6l2 2h9v7.5a2 2 0 0 1-2 2h-15z"></path><path d="M3.5 7.5v-1a1.5 1.5 0 0 1 1.5-1.5h4l2 2"></path></svg>;
-  }
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3.5h7l3 3V20a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4.5a1 1 0 0 1 1-1z"></path><path d="M14 3.5V7h3"></path></svg>;
-}
-
-function RepoSlug({ repo, viewerUsername }: { repo: string; viewerUsername: string }) {
-  const { owner, name } = parseRepoSlug(repo);
-  const ownerLabel = owner === viewerUsername ? "you" : owner;
-  return (
-    <span class="packages-repo-slug" title={repo}>
-      <span>{ownerLabel}</span>
-      <strong>{name}</strong>
-    </span>
-  );
-}
-
-function TimeAgo({ timestamp }: { timestamp: number | null | undefined }) {
-  return <time title={formatDate(timestamp)} dateTime={formatDateTimeAttribute(timestamp)}>{formatRelativeTime(timestamp)}</time>;
-}
-
-function SyntaxLine({ path, content }: { path: string; content: string }) {
-  return <>{highlightLine(path, content).map((token, index) => <span key={index} class={token.className}>{token.text}</span>)}</>;
-}
-
-function SyntaxCodeBlock({ path, content }: { path: string; content: string }) {
-  const lines = content.length > 0
-    ? (content.endsWith("\n") ? content.slice(0, -1) : content).split("\n")
-    : [""];
-  return (
-    <div class="packages-code-block" role="region" aria-label={path || "source file"}>
-      {lines.map((line, index) => (
-        <code key={index} class="packages-code-line">
-          <span class="packages-code-line-number">{index + 1}</span>
-          <span class="packages-code-line-content">
-            <SyntaxLine path={path} content={line} />
-          </span>
-        </code>
-      ))}
-    </div>
-  );
-}
-
-function readViewFromLocation(): PackagesView {
-  const value = new URL(window.location.href).searchParams.get("view");
-  if (value === "installed") return "inventory";
-  return value === "updates" || value === "review" || value === "sources" || value === "discover" || value === "remotes" || value === "create"
-    ? value
-    : "inventory";
-}
-
-function readScopeFromLocation(): PackageScopeFilter {
-  const value = new URL(window.location.href).searchParams.get("scope");
-  return value === "mine" || value === "system" ? value : "all";
-}
-
-function readTabFromLocation(): PackageDetailTab {
-  const value = new URL(window.location.href).searchParams.get("tab");
-  if (value === "code" || value === "commits" || value === "changes") return "source";
-  if (value === "overview") return "summary";
-  return value === "source" || value === "permissions" || value === "review" ? value : "summary";
-}
-
-function readPackageIdFromLocation(): string | null {
-  const value = new URL(window.location.href).searchParams.get("package");
-  return value && value.trim() ? value.trim() : null;
-}
-
-function readSourceFromLocation(): string | null {
-  const value = new URL(window.location.href).searchParams.get("source");
-  return value && value.trim() ? value.trim() : null;
-}
-
-function readCatalogFromLocation(): string {
-  const value = new URL(window.location.href).searchParams.get("catalog");
-  return value && value.trim() ? value.trim() : "local";
-}
-
-function formatError(cause: unknown): string {
-  return cause instanceof Error ? cause.message : String(cause);
-}
-
-function shortHash(value: string | null | undefined): string {
-  return value ? value.slice(0, 7) : "unknown";
-}
-
-function formatDate(timestamp: number | null | undefined): string {
-  if (!timestamp || !Number.isFinite(timestamp)) return "unknown";
-  return new Date(timestamp).toLocaleString();
-}
-
-function formatDateTimeAttribute(timestamp: number | null | undefined): string | undefined {
-  if (!timestamp || !Number.isFinite(timestamp)) return undefined;
-  return new Date(timestamp).toISOString();
-}
-
-function formatRelativeTime(timestamp: number | null | undefined): string {
-  if (!timestamp || !Number.isFinite(timestamp)) return "unknown";
-  const deltaMs = timestamp - Date.now();
-  const absMs = Math.abs(deltaMs);
-  const divisions: Array<[Intl.RelativeTimeFormatUnit, number]> = [
-    ["year", 1000 * 60 * 60 * 24 * 365],
-    ["month", 1000 * 60 * 60 * 24 * 30],
-    ["week", 1000 * 60 * 60 * 24 * 7],
-    ["day", 1000 * 60 * 60 * 24],
-    ["hour", 1000 * 60 * 60],
-    ["minute", 1000 * 60],
-  ];
-  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
-  for (const [unit, size] of divisions) {
-    if (absMs >= size) {
-      return formatter.format(Math.round(deltaMs / size), unit);
-    }
-  }
-  return "just now";
-}
-
-function formatBytes(size: number): string {
-  if (!Number.isFinite(size) || size <= 0) return "0 B";
-  if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
-  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function firstLine(text: string): string {
-  return text.split("\n")[0] || "No commit message";
-}
-
-function formatScope(pkg: PackageRecord): string {
-  if (pkg.scope.kind === "user") return "Mine";
-  if (pkg.scope.kind === "workspace") return `Workspace:${pkg.scope.workspaceId ?? "?"}`;
-  return "System";
-}
-
-function sourcePathForPackage(pkg: PackageRecord): string {
-  return `/src/packages/${packageSourcePathName(pkg.name)}`;
-}
-
-function packageSourcePathName(name: string): string {
-  return name.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
-}
-
-function unique<T>(items: T[]): T[] {
-  return [...new Set(items)];
-}
-
-function packageSurfaceCounts(pkg: PackageRecord) {
-  const ui = pkg.entrypoints.filter((entry) => entry.kind === "ui").length;
-  const command = pkg.entrypoints.filter((entry) => entry.kind === "command").length;
-  const rpc = pkg.entrypoints.filter((entry) => entry.kind === "rpc").length;
-  const http = pkg.entrypoints.filter((entry) => entry.kind === "http").length;
-  const profile = pkg.profiles.length;
-  return {
-    ui,
-    command,
-    rpc,
-    http,
-    profile,
-    total: ui + command + rpc + http + profile,
-  };
-}
-
-function surfaceTitle(kind: "ui" | "command" | "rpc" | "http" | "profile", count: number): string {
-  if (kind === "ui") return `${count} app window${count === 1 ? "" : "s"}`;
-  if (kind === "command") return `${count} CLI command${count === 1 ? "" : "s"}`;
-  if (kind === "profile") return `${count} AI profile${count === 1 ? "" : "s"}`;
-  if (kind === "http") return `${count} HTTP surface${count === 1 ? "" : "s"}`;
-  return `${count} RPC surface${count === 1 ? "" : "s"}`;
-}
-
-function parseRepoSlug(repo: string): { owner: string; name: string } {
-  const [owner, ...rest] = repo.split("/").filter(Boolean);
-  return {
-    owner: owner || "unknown",
-    name: rest.join("/") || repo || "unknown",
-  };
-}
-
-function formatRepoDisplay(repo: string, viewerUsername: string): string {
-  const { owner, name } = parseRepoSlug(repo);
-  return `${owner === viewerUsername ? "you" : owner} / ${name}`;
-}
-
-function createRepoName(raw: string): string {
-  const value = raw.trim().replace(/^\/+|\/+$/g, "");
-  const parts = value.split("/").filter(Boolean);
-  return parts[parts.length - 1] ?? value;
-}
-
-function packageMatchesScope(pkg: PackageRecord, scope: PackageScopeFilter): boolean {
-  if (scope === "mine") return pkg.scope.kind === "user";
-  if (scope === "system") return pkg.scope.kind === "global";
-  return true;
-}
-
-function packageMatchesView(pkg: PackageRecord, view: PackagesView): boolean {
-  if (view === "updates") return pkg.updateAvailable;
-  if (view === "review") return pkg.reviewPending;
-  return view === "inventory";
-}
-
-function packageMatchesQuery(pkg: PackageRecord, query: string): boolean {
-  const normalized = query.trim().toLowerCase();
-  if (!normalized) return true;
-  return [
-    pkg.name,
-    pkg.description,
-    pkg.source.repo,
-    pkg.source.ref,
-    ...pkg.bindingNames,
-    ...pkg.declaredSyscalls,
-  ].some((value) => value.toLowerCase().includes(normalized));
-}
-
-function sourceMatchesQuery(source: SourceRecord, query: string): boolean {
-  const normalized = query.trim().toLowerCase();
-  if (!normalized) return true;
-  return [source.repo, ...source.packageNames].some((value) => value.toLowerCase().includes(normalized));
-}
-
-function comparePackagesForView(view: PackagesView) {
-  return (left: PackageRecord, right: PackageRecord) => {
-    if (view === "updates") {
-      return Number(right.updateAvailable) - Number(left.updateAvailable) || right.updatedAt - left.updatedAt || left.name.localeCompare(right.name);
-    }
-    if (view === "review") {
-      return Number(right.reviewPending) - Number(left.reviewPending) || left.name.localeCompare(right.name);
-    }
-    const leftScore = (left.reviewPending ? 3 : 0) + (left.updateAvailable ? 2 : 0) + (!left.enabled ? 1 : 0);
-    const rightScore = (right.reviewPending ? 3 : 0) + (right.updateAvailable ? 2 : 0) + (!right.enabled ? 1 : 0);
-    return rightScore - leftScore || left.name.localeCompare(right.name);
-  };
-}
-
-function statusClass(pkg: PackageRecord): string {
-  if (pkg.reviewPending) return "is-review";
-  if (pkg.updateAvailable) return "is-update";
-  if (pkg.enabled) return "is-enabled";
-  return "is-disabled";
-}
-
-function viewTitle(view: PackagesView): string {
-  if (view === "updates") return "Available updates";
-  if (view === "review") return "Packages needing review";
-  return "Installed packages";
-}
-
-function viewDescription(view: PackagesView): string {
-  if (view === "updates") return "Packages whose source heads moved ahead of the installed commit.";
-  if (view === "review") return "Packages that still need a trust decision before enablement.";
-  return "Operational inventory of software installed in this GSV instance.";
-}
-
-function catalogPackageCount(state: PackagesState | null): number {
-  return (state?.catalogs ?? []).reduce((total, catalog) => total + catalog.packages.length, 0);
-}
-
-function buildPermissionSummary(pkg: PackageRecord): string[] {
-  const notes = new Set<string>();
-  if (pkg.bindingNames.includes("KERNEL")) notes.add("Can call kernel-backed app RPC through the package runtime bridge.");
-  if (pkg.declaredSyscalls.some((syscall) => syscall.startsWith("shell."))) notes.add("Can execute shell commands on a control target or routed device.");
-  if (pkg.declaredSyscalls.some((syscall) => syscall.startsWith("fs."))) notes.add("Can read or modify files exposed through filesystem syscalls.");
-  if (pkg.declaredSyscalls.includes("proc.spawn")) notes.add("Can spawn new processes and route work into more runtime contexts.");
-  if (pkg.declaredSyscalls.some((syscall) => syscall.startsWith("pkg."))) notes.add("Can inspect or change package state, including install or update flows.");
-  if (pkg.declaredSyscalls.some((syscall) => syscall.startsWith("sys.config."))) notes.add("Can modify system configuration.");
-  if (pkg.declaredSyscalls.some((syscall) => syscall.startsWith("sys.token."))) notes.add("Can issue or revoke access tokens.");
-  if (pkg.declaredSyscalls.some((syscall) => syscall.startsWith("sys.link") || syscall.startsWith("sys.unlink"))) notes.add("Can modify identity links and trust relationships.");
-  if (notes.size === 0) notes.add("No elevated bindings or syscall surfaces were declared in the package summary.");
-  return [...notes];
-}
-
-function packageRiskLevel(pkg: PackageRecord): "low" | "medium" | "high" {
-  if (pkg.declaredSyscalls.some((syscall) => syscall.startsWith("shell.") || syscall.startsWith("fs.") || syscall.startsWith("pkg.") || syscall.startsWith("sys.") || syscall === "proc.spawn")) {
-    return "high";
-  }
-  if (pkg.bindingNames.includes("KERNEL") || pkg.declaredSyscalls.length > 0) {
-    return "medium";
-  }
-  return "low";
-}
-
-function packageRiskLabel(pkg: PackageRecord): string {
-  const level = packageRiskLevel(pkg);
-  if (level === "high") return "High risk";
-  if (level === "medium") return "Medium risk";
-  return "Low risk";
-}
-
-function packageRiskDescription(pkg: PackageRecord): string {
-  const level = packageRiskLevel(pkg);
-  if (level === "high") return "This package declares access to privileged runtime surfaces. Review source and diffs before approval.";
-  if (level === "medium") return "This package has runtime bridge or syscall exposure. Confirm the declared surfaces match its job.";
-  return "This package declares no elevated syscall or binding surface in the package summary.";
-}
-
 function renderEntryActions(pkg: PackageRecord) {
   return pkg.uiEntrypoints.flatMap((entrypoint) => {
     const route = entrypoint.route?.trim();
@@ -2097,112 +1800,6 @@ function renderEntryActions(pkg: PackageRecord) {
       </button>,
     ];
   });
-}
-
-function buildRefOptions(state: PackagesState["packageDetail"] | null | undefined, fallback?: string): string[] {
-  const refs = state ? [...Object.keys(state.refs.heads), ...Object.keys(state.refs.tags)] : [];
-  if (fallback) refs.push(fallback);
-  return unique(refs).sort((left, right) => left.localeCompare(right));
-}
-
-function matchInstalledPackage(entry: CatalogEntry, packages: PackageRecord[]): PackageRecord | null {
-  return packages.find((pkg) => pkg.source.repo === entry.source.repo && pkg.source.subdir === entry.source.subdir) ?? null;
-}
-
-function catalogImportSource(catalog: CatalogRecord, entry: CatalogEntry): string {
-  if (catalog.kind === "remote" && catalog.baseUrl) {
-    const [owner, repo] = entry.source.repo.split("/");
-    if (owner && repo) {
-      return `${catalog.baseUrl.replace(/\/+$/g, "")}/git/${owner}/${repo}.git`;
-    }
-  }
-  return entry.source.repo;
-}
-
-function appIdFromRoute(route: string): string {
-  const match = route.match(/\/apps\/([^/?#]+)/);
-  return match?.[1] ?? "";
-}
-
-function parentPath(path: string): string {
-  const parts = path.split("/").filter(Boolean);
-  parts.pop();
-  return parts.join("/");
-}
-
-function buildBreadcrumbs(path: string): Array<{ label: string; path: string }> {
-  const parts = path.split("/").filter(Boolean);
-  const crumbs: Array<{ label: string; path: string }> = [];
-  let current = "";
-  for (const part of parts) {
-    current = current ? `${current}/${part}` : part;
-    crumbs.push({ label: part, path: current });
-  }
-  return crumbs;
-}
-
-function sortTreeEntries(entries: RepoTreeEntry[]): RepoTreeEntry[] {
-  return [...entries].sort((left, right) => {
-    if (left.type !== right.type) return left.type === "tree" ? -1 : 1;
-    return left.name.localeCompare(right.name);
-  });
-}
-
-function diffStatusClass(status: PackageRepoDiffFile["status"]): string {
-  if (status === "added") return "is-enabled";
-  if (status === "deleted") return "is-disabled";
-  return "is-update";
-}
-
-function labelForDiffStatus(status: PackageRepoDiffFile["status"]): string {
-  if (status === "added") return "Added";
-  if (status === "deleted") return "Deleted";
-  return "Modified";
-}
-
-function prefixForDiffLine(tag: string): string {
-  if (tag === "add") return "+";
-  if (tag === "delete") return "-";
-  if (tag === "binary") return "#";
-  return " ";
-}
-
-function highlightLine(path: string, content: string): Array<{ text: string; className: string }> {
-  const language = languageForPath(path);
-  if (language === "plain" || content.trim().length === 0) {
-    return [{ text: content, className: "" }];
-  }
-  const pattern = language === "css"
-    ? /(\/\*.*?\*\/|"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|#[a-fA-F0-9]{3,8}\b|\b(?:@media|@supports|display|grid|flex|color|background|border|padding|margin|font|width|height|min|max|gap|content)\b|-?\b\d+(?:\.\d+)?(?:px|rem|em|%|vh|vw)?\b)/g
-    : /(\/\/.*$|\/\*.*?\*\/|"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|`(?:\\.|[^`])*`|\b(?:import|export|from|type|const|let|var|function|return|if|else|for|while|class|extends|async|await|try|catch|throw|new|true|false|null|undefined)\b|-?\b\d+(?:\.\d+)?\b)/g;
-  const tokens: Array<{ text: string; className: string }> = [];
-  let index = 0;
-  for (const match of content.matchAll(pattern)) {
-    const text = match[0];
-    const start = match.index ?? 0;
-    if (start > index) {
-      tokens.push({ text: content.slice(index, start), className: "" });
-    }
-    tokens.push({ text, className: tokenClass(text) });
-    index = start + text.length;
-  }
-  if (index < content.length) {
-    tokens.push({ text: content.slice(index), className: "" });
-  }
-  return tokens;
-}
-
-function languageForPath(path: string): "js" | "css" | "plain" {
-  if (/\.(ts|tsx|js|jsx|mjs|cjs|json)$/.test(path)) return "js";
-  if (/\.(css|scss|less)$/.test(path)) return "css";
-  return "plain";
-}
-
-function tokenClass(token: string): string {
-  if (/^(\/\/|\/\*)/.test(token)) return "tok-comment";
-  if (/^["'`]/.test(token)) return "tok-string";
-  if (/^-?\d/.test(token) || /^#[a-fA-F0-9]/.test(token)) return "tok-number";
-  return "tok-keyword";
 }
 
 function openCompanion(appId: string, route: string) {

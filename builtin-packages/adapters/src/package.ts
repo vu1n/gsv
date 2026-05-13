@@ -21,7 +21,15 @@ export default definePackage({
   },
   browser: {
     entry: "./src/main.tsx",
-    assets: ["./src/styles.css"],
+    assets: [
+      "./src/styles.css",
+      "./src/styles/base.css",
+      "./src/styles/layout.css",
+      "./src/styles/navigation.css",
+      "./src/styles/detail.css",
+      "./src/styles/challenge.css",
+      "./src/styles/responsive.css",
+    ],
   },
   backend: {
     entry: "./src/backend.ts",

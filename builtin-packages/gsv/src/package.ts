@@ -10,6 +10,12 @@ export default definePackage({
       minWidth: 360,
       minHeight: 520,
     },
+    capabilities: {
+      kernel: [
+        "proc.list",
+        "proc.kill",
+      ],
+    },
   },
   browser: {
     entry: "./src/main.tsx",
@@ -18,7 +24,11 @@ export default definePackage({
       "./src/styles/base.css",
       "./src/styles/shell.css",
       "./src/styles/sections.css",
+      "./src/styles/runtime.css",
       "./src/styles/responsive.css",
     ],
+  },
+  backend: {
+    entry: "./src/backend.ts",
   },
 });
