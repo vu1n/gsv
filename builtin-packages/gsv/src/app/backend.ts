@@ -22,6 +22,10 @@ import type {
   KillRuntimeProcessResult,
   RuntimeState,
 } from "./features/runtime/types";
+import type {
+  LoadPackagesStateArgs,
+  PackagesState,
+} from "./features/packages/types";
 
 export interface GsvBackend {
   loadRuntimeState(): Promise<RuntimeState>;
@@ -37,4 +41,5 @@ export interface GsvBackend {
   addMcpServer(args: AddMcpServerArgs): Promise<McpServerMutationResult>;
   refreshMcpServer(args: RefreshMcpServerArgs): Promise<McpServerMutationResult>;
   removeMcpServer(args: RemoveMcpServerArgs): Promise<McpState>;
+  loadPackagesState(args: LoadPackagesStateArgs): Promise<PackagesState>;
 }

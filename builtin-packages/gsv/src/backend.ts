@@ -7,6 +7,7 @@ import {
   updateDeviceDescription,
 } from "./backend/devices";
 import { addMcpServer, loadMcpState, refreshMcpServer, removeMcpServer } from "./backend/mcp";
+import { loadPackagesState } from "./backend/packages";
 import { killRuntimeProcess, loadRuntimeState } from "./backend/runtime";
 
 export default class GsvBackend extends PackageBackendEntrypoint {
@@ -60,5 +61,9 @@ export default class GsvBackend extends PackageBackendEntrypoint {
 
   async removeMcpServer(args: unknown): Promise<unknown> {
     return removeMcpServer(this.kernel, args as never);
+  }
+
+  async loadPackagesState(args: unknown): Promise<unknown> {
+    return loadPackagesState(args as never, this.kernel, this);
   }
 }

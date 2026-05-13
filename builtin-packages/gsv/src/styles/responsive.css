@@ -119,6 +119,12 @@
     gap: 1rem;
   }
 
+  .gsv-packages {
+    grid-template-columns: minmax(24rem, 0.66fr) minmax(21rem, 0.44fr);
+    align-items: start;
+    gap: 1rem;
+  }
+
   .gsv-detail-pane {
     position: sticky;
     top: 5.1rem;
@@ -137,6 +143,11 @@
   }
 
   .gsv-integration-detail {
+    position: sticky;
+    top: 5.1rem;
+  }
+
+  .gsv-package-detail {
     position: sticky;
     top: 5.1rem;
   }
@@ -165,5 +176,9 @@
 
   .gsv-integrations {
     grid-template-columns: minmax(30rem, 0.7fr) minmax(26rem, 0.52fr);
+  }
+
+  .gsv-packages {
+    grid-template-columns: minmax(32rem, 0.74fr) minmax(26rem, 0.5fr);
   }
 }

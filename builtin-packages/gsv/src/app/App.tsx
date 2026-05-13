@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "preact/hooks";
 import type { GsvBackend } from "./backend";
 import { DevicesSection } from "./features/devices/DevicesSection";
 import { IntegrationsSection } from "./features/integrations/IntegrationsSection";
+import { PackagesSection } from "./features/packages/PackagesSection";
 import { RuntimeSection } from "./features/runtime/RuntimeSection";
 import { ATTENTION_ITEMS, GROUPS, SECTIONS, findSection, sectionExists } from "./navigation";
 import type { GsvGroup, GsvSection, GsvSectionId, Tone } from "./types";
@@ -57,6 +58,8 @@ export function App({ backend }: { backend: GsvBackend }) {
             <DevicesSection backend={backend} />
           ) : activeSection.id === "integrations" ? (
             <IntegrationsSection backend={backend} />
+          ) : activeSection.id === "packages" ? (
+            <PackagesSection backend={backend} />
           ) : (
             <SectionWorkspace section={activeSection} onOpenHandoff={openHandoff} />
           )}
