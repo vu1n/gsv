@@ -1843,6 +1843,7 @@ button:disabled {
   -webkit-user-select: none;
   -webkit-user-drag: none;
   touch-action: none;
+  border-bottom: 1px solid #0000000f;
 }
 
 .window-titlebar * {
