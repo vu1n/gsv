@@ -1,4 +1,12 @@
 import type {
+  CreateNodeTokenArgs,
+  CreateNodeTokenResult,
+  DevicesState,
+  LoadDevicesStateArgs,
+  RevokeDeviceTokenArgs,
+  UpdateDeviceDescriptionArgs,
+} from "./features/devices/types";
+import type {
   KillRuntimeProcessArgs,
   KillRuntimeProcessResult,
   RuntimeState,
@@ -7,4 +15,8 @@ import type {
 export interface GsvBackend {
   loadRuntimeState(): Promise<RuntimeState>;
   killRuntimeProcess(args: KillRuntimeProcessArgs): Promise<KillRuntimeProcessResult>;
+  loadDevicesState(args: LoadDevicesStateArgs): Promise<DevicesState>;
+  createDeviceNodeToken(args: CreateNodeTokenArgs): Promise<CreateNodeTokenResult>;
+  revokeDeviceToken(args: RevokeDeviceTokenArgs): Promise<DevicesState>;
+  updateDeviceDescription(args: UpdateDeviceDescriptionArgs): Promise<DevicesState>;
 }

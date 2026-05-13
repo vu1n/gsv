@@ -1,6 +1,7 @@
 import { openApp } from "@gsv/package/host";
 import { useEffect, useMemo, useState } from "preact/hooks";
 import type { GsvBackend } from "./backend";
+import { DevicesSection } from "./features/devices/DevicesSection";
 import { RuntimeSection } from "./features/runtime/RuntimeSection";
 import { ATTENTION_ITEMS, GROUPS, SECTIONS, findSection, sectionExists } from "./navigation";
 import type { GsvGroup, GsvSection, GsvSectionId, Tone } from "./types";
@@ -51,6 +52,8 @@ export function App({ backend }: { backend: GsvBackend }) {
             <Overview onNavigate={navigate} onOpenHandoff={openHandoff} />
           ) : activeSection.id === "runtime" ? (
             <RuntimeSection backend={backend} />
+          ) : activeSection.id === "devices" ? (
+            <DevicesSection backend={backend} />
           ) : (
             <SectionWorkspace section={activeSection} onOpenHandoff={openHandoff} />
           )}
