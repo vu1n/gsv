@@ -7,7 +7,18 @@ import {
   updateDeviceDescription,
 } from "./backend/devices";
 import { addMcpServer, loadMcpState, refreshMcpServer, removeMcpServer } from "./backend/mcp";
-import { loadPackagesState } from "./backend/packages";
+import {
+  approvePackageReview,
+  disablePackage,
+  enablePackage,
+  loadPackagesState,
+  pullPackage,
+  pullPackageSource,
+  refreshPackage,
+  setPackagePublic,
+  startPackageReview,
+  syncPackages,
+} from "./backend/packages";
 import { killRuntimeProcess, loadRuntimeState } from "./backend/runtime";
 
 export default class GsvBackend extends PackageBackendEntrypoint {
@@ -65,5 +76,41 @@ export default class GsvBackend extends PackageBackendEntrypoint {
 
   async loadPackagesState(args: unknown): Promise<unknown> {
     return loadPackagesState(args as never, this.kernel, this);
+  }
+
+  async syncPackages(): Promise<unknown> {
+    return syncPackages(this.kernel, this);
+  }
+
+  async enablePackage(args: unknown): Promise<unknown> {
+    return enablePackage(this.kernel, args as never);
+  }
+
+  async disablePackage(args: unknown): Promise<unknown> {
+    return disablePackage(this.kernel, args as never);
+  }
+
+  async approvePackageReview(args: unknown): Promise<unknown> {
+    return approvePackageReview(this.kernel, args as never);
+  }
+
+  async refreshPackage(args: unknown): Promise<unknown> {
+    return refreshPackage(this.kernel, args as never);
+  }
+
+  async pullPackage(args: unknown): Promise<unknown> {
+    return pullPackage(this.kernel, args as never);
+  }
+
+  async pullPackageSource(args: unknown): Promise<unknown> {
+    return pullPackageSource(this.kernel, args as never);
+  }
+
+  async setPackagePublic(args: unknown): Promise<unknown> {
+    return setPackagePublic(this.kernel, args as never);
+  }
+
+  async startPackageReview(args: unknown): Promise<unknown> {
+    return startPackageReview(this.kernel, args as never);
   }
 }

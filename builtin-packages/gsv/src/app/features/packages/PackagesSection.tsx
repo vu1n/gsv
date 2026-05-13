@@ -16,6 +16,7 @@ import {
 } from "./packages-domain";
 import type { PackageRecord, PackageScopeFilter, PackagesState, PackagesView } from "./types";
 import { usePackages } from "./usePackages";
+import type { PackagesRuntime } from "./usePackages";
 
 const VIEWS: Array<{ id: PackagesView; label: string; countKey: "installed" | "updates" | "review" }> = [
   { id: "inventory", label: "Inventory", countKey: "installed" },
@@ -40,9 +41,17 @@ export function PackagesSection({ backend }: { backend: GsvBackend }) {
             type="button"
             class="gsv-mini-button"
             onClick={() => void runtime.refresh()}
-            disabled={runtime.loading}
+            disabled={runtime.loading || runtime.pendingAction !== null}
           >
             Refresh
+          </button>
+          <button
+            type="button"
+            class="gsv-mini-button"
+            onClick={() => void runtime.syncPackages()}
+            disabled={runtime.loading || runtime.pendingAction !== null}
+          >
+            {runtime.pendingAction === "packages:sync" ? "Syncing" : "Sync"}
           </button>
 
           <div class="gsv-package-queues" aria-label="Package queues">
@@ -84,6 +93,7 @@ export function PackagesSection({ backend }: { backend: GsvBackend }) {
         </section>
 
         {runtime.error ? <p class="gsv-inline-error">{runtime.error}</p> : null}
+        {runtime.notice ? <p class="gsv-inline-status">{runtime.notice}</p> : null}
 
         <div class="gsv-package-list" aria-label="Packages">
           {runtime.loading ? (
@@ -104,7 +114,7 @@ export function PackagesSection({ backend }: { backend: GsvBackend }) {
         </div>
       </div>
 
-      <PackageDetail pkg={runtime.selectedPackage} state={runtime.state} />
+      <PackageDetail runtime={runtime} />
     </section>
   );
 }
@@ -144,7 +154,8 @@ function PackageRow({
   );
 }
 
-function PackageDetail({ pkg, state }: { pkg: PackageRecord | null; state: PackagesState | null }) {
+function PackageDetail({ runtime }: { runtime: PackagesRuntime }) {
+  const { selectedPackage: pkg, state } = runtime;
   if (!pkg) {
     return (
       <section class="gsv-package-detail">
@@ -159,6 +170,24 @@ function PackageDetail({ pkg, state }: { pkg: PackageRecord | null; state: Packa
   const surfaces = packageSurfaceCounts(pkg);
   const detail = state?.packageDetail;
   const viewerUsername = state?.viewer.username ?? "";
+  const packageId = pkg.packageId;
+  const packageRepo = pkg.source.repo;
+  const busy = runtime.pendingAction !== null;
+  const reviewAction = `package:review:${packageId}`;
+  const approveAction = `package:approve:${packageId}`;
+  const enableAction = `package:enable:${packageId}`;
+  const disableAction = `package:disable:${packageId}`;
+  const refreshAction = `package:refresh:${packageId}`;
+  const pullAction = `package:pull:${packageId}`;
+  const pullSourceAction = `source:pull:${packageRepo}`;
+  const publicAction = `package:public:${packageId}`;
+
+  async function openReview(): Promise<void> {
+    const detail = await runtime.startPackageReview(packageId);
+    if (detail) {
+      openChatProcess(detail);
+    }
+  }
 
   return (
     <section class="gsv-package-detail" aria-label={`${pkg.name} package detail`}>
@@ -235,10 +264,87 @@ function PackageDetail({ pkg, state }: { pkg: PackageRecord | null; state: Packa
         <section class="gsv-package-panel">
           <header>
             <div>
-              <h4>Action readiness</h4>
-              <p>Lifecycle mutations move in the next package batch.</p>
+              <h4>Actions</h4>
+              <p>Permission-sensitive package lifecycle operations for the selected package.</p>
             </div>
           </header>
+          <div class="gsv-package-actions">
+            <button
+              type="button"
+              class="gsv-action-button"
+              disabled={busy}
+              onClick={() => void openReview()}
+            >
+              {runtime.pendingAction === reviewAction ? "Opening review" : "Review in Chat"}
+            </button>
+            {pkg.reviewPending ? (
+              <button
+                type="button"
+                class="gsv-action-button"
+                disabled={busy || !pkg.canMutate}
+                onClick={() => void runtime.approvePackageReview(pkg.packageId)}
+              >
+                {runtime.pendingAction === approveAction ? "Approving" : "Approve review"}
+              </button>
+            ) : pkg.enabled ? (
+              <button
+                type="button"
+                class="gsv-action-button is-danger"
+                disabled={busy || !pkg.canMutate}
+                onClick={() => void runtime.disablePackage(pkg.packageId)}
+              >
+                {runtime.pendingAction === disableAction ? "Disabling" : "Disable"}
+              </button>
+            ) : (
+              <button
+                type="button"
+                class="gsv-action-button"
+                disabled={busy || !pkg.canMutate}
+                onClick={() => void runtime.enablePackage(pkg.packageId)}
+              >
+                {runtime.pendingAction === enableAction ? "Enabling" : "Enable"}
+              </button>
+            )}
+            <button
+              type="button"
+              class="gsv-action-button"
+              disabled={busy || !pkg.canMutate}
+              onClick={() => void runtime.refreshPackage(pkg.packageId)}
+            >
+              {runtime.pendingAction === refreshAction ? "Refreshing" : "Refresh package"}
+            </button>
+            <button
+              type="button"
+              class="gsv-action-button"
+              disabled={busy || !pkg.canPullSource}
+              onClick={() => void runtime.pullPackage(pkg.packageId)}
+            >
+              {runtime.pendingAction === pullAction ? "Pulling" : "Pull upstream"}
+            </button>
+            <button
+              type="button"
+              class="gsv-action-button"
+              disabled={busy || !pkg.canPullSource}
+              onClick={() => void runtime.pullPackageSource(pkg.source.repo)}
+            >
+              {runtime.pendingAction === pullSourceAction ? "Pulling source" : "Pull source refs"}
+            </button>
+            {!pkg.isBuiltin ? (
+              <button
+                type="button"
+                class="gsv-action-button"
+                disabled={busy || !pkg.canChangeVisibility}
+                onClick={() => void runtime.setPackagePublic({
+                  packageId: pkg.packageId,
+                  public: !pkg.source.public,
+                })}
+              >
+                {runtime.pendingAction === publicAction
+                  ? "Updating visibility"
+                  : pkg.source.public ? "Make private" : "Publish"}
+              </button>
+            ) : null}
+          </div>
           <div class="gsv-package-permission-list">
             {packageActionLimitations(pkg).map((note) => (
               <div class="gsv-package-permission-row" key={note}>{note}</div>
@@ -290,4 +396,17 @@ function SurfaceRow({ label, value }: { label: string; value: number }) {
 
 function shortCommit(value: string | null | undefined): string {
   return value ? value.slice(0, 10) : "Unknown";
+}
+
+function openChatProcess(detail: { pid: string; workspaceId: string | null; cwd: string | null }): void {
+  const pid = String(detail.pid ?? "").trim();
+  const cwd = String(detail.cwd ?? "").trim();
+  if (!pid || !cwd) {
+    return;
+  }
+  const workspaceId = detail.workspaceId == null ? null : String(detail.workspaceId);
+  openApp({
+    target: "chat",
+    payload: { pid, workspaceId, cwd },
+  });
 }

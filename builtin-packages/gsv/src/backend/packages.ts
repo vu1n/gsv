@@ -7,8 +7,12 @@ import type {
   PackageEntrypoint,
   PackageProfile,
   PackageRecord,
+  PullPackageSourceArgs,
   PackagesState,
+  PackageIdArgs,
+  SetPackagePublicArgs,
   SourceRecord,
+  StartPackageReviewResult,
 } from "../app/features/packages/types";
 
 type KernelClientLike = {
@@ -119,6 +123,10 @@ function asNumber(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
+function asBoolean(value: unknown): boolean {
+  return value === true;
+}
+
 function unique<T>(items: T[]): T[] {
   return [...new Set(items)];
 }
@@ -141,6 +149,135 @@ function normalizeViewer(viewer: { uid: number; username: string }): NormalizedV
 
 function canMutatePackage(pkg: PackageLike, viewer: NormalizedViewer): boolean {
   return viewer.isRoot || (pkg.scope.kind === "user" && pkg.scope.uid === viewer.uid);
+}
+
+function packageSourcePathName(pkg: PackageLike): string {
+  return pkg.name.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+function packageSourcePathNameForPackage(pkg: PackageLike, packages: PackageLike[]): string {
+  const names = packageSourcePathNameMap(packages);
+  const targetKey = packageSourceRecordKey(pkg);
+  for (const [record, name] of names) {
+    if (packageSourceRecordKey(record) === targetKey) {
+      return name;
+    }
+  }
+  return packageSourcePathName(pkg);
+}
+
+function packageSourcePathNameMap(packages: PackageLike[]): Map<PackageLike, string> {
+  const entries = packages.map((pkg) => ({
+    pkg,
+    baseName: packageSourcePathName(pkg) || sanitizeSourcePathSegment(pkg.packageId) || "package",
+  }));
+  const counts = new Map<string, number>();
+  for (const entry of entries) {
+    counts.set(entry.baseName, (counts.get(entry.baseName) ?? 0) + 1);
+  }
+
+  const used = new Set<string>();
+  const result = new Map<PackageLike, string>();
+  for (const entry of entries.sort(compareSourcePathEntries)) {
+    const collides = (counts.get(entry.baseName) ?? 0) > 1;
+    const preferred = collides
+      ? `${entry.baseName}--${packageSourcePathDisambiguator(entry.pkg)}`
+      : entry.baseName;
+    const name = uniqueSourcePathName(preferred, used);
+    used.add(name);
+    result.set(entry.pkg, name);
+  }
+  return result;
+}
+
+function compareSourcePathEntries(
+  left: { pkg: PackageLike; baseName: string },
+  right: { pkg: PackageLike; baseName: string },
+): number {
+  const name = left.baseName.localeCompare(right.baseName);
+  if (name !== 0) {
+    return name;
+  }
+  const source = sourcePathDisambiguationKey(left.pkg).localeCompare(sourcePathDisambiguationKey(right.pkg));
+  if (source !== 0) {
+    return source;
+  }
+  return packageSourceRecordKey(left.pkg).localeCompare(packageSourceRecordKey(right.pkg));
+}
+
+function packageSourcePathDisambiguator(pkg: PackageLike): string {
+  return sanitizeSourcePathSegment(sourcePathDisambiguationKey(pkg))
+    || sanitizeSourcePathSegment(pkg.packageId)
+    || "package";
+}
+
+function sourcePathDisambiguationKey(pkg: PackageLike): string {
+  const subdir = pkg.source.subdir.trim().replace(/^\/+|\/+$/g, "");
+  return subdir && subdir !== "."
+    ? `${pkg.source.repo}-${subdir}`
+    : pkg.source.repo;
+}
+
+function sanitizeSourcePathSegment(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+function uniqueSourcePathName(preferred: string, used: Set<string>): string {
+  let candidate = preferred || "package";
+  let index = 2;
+  while (used.has(candidate)) {
+    candidate = `${preferred || "package"}-${index}`;
+    index += 1;
+  }
+  return candidate;
+}
+
+function packageSourceRecordKey(pkg: PackageLike): string {
+  switch (pkg.scope.kind) {
+    case "user":
+      return `user:${pkg.scope.uid ?? ""}:${pkg.packageId}`;
+    case "workspace":
+      return `workspace:${pkg.scope.workspaceId ?? ""}:${pkg.packageId}`;
+    case "global":
+      return `global:${pkg.packageId}`;
+    default:
+      return `${pkg.scope.kind}:${pkg.packageId}`;
+  }
+}
+
+function buildReviewPrompt(pkg: PackageLike, packages: PackageLike[]): string {
+  const bindings = pkg.bindingNames.length > 0 ? pkg.bindingNames.join(", ") : "none declared";
+  const entrypoints = pkg.entrypoints.length > 0
+    ? pkg.entrypoints.map((entry) => `${entry.name}:${entry.kind}`).join(", ")
+    : "none";
+  const sourcePath = `/src/packages/${packageSourcePathNameForPackage(pkg, packages)}`;
+
+  return [
+    `Review the imported package "${pkg.name}".`,
+    "",
+    `Current directory is already ${sourcePath}.`,
+    `The package source is available at ${sourcePath}.`,
+    "Source writes are staged in the review process. Use pkg source status/diff to inspect staged changes; do not commit unless explicitly asked.",
+    "",
+    `Source repo: ${pkg.source.repo}`,
+    `Source ref: ${pkg.source.ref}`,
+    `Subdir: ${pkg.source.subdir}`,
+    `Declared bindings: ${bindings}`,
+    `Entrypoints: ${entrypoints}`,
+    "",
+    "Review workflow:",
+    "1. Start with pkg manifest, pkg capabilities, pkg refs, and pkg log.",
+    `2. Inspect ${sourcePath}, prioritizing manifest, entrypoints, and system integration points.`,
+    "3. Search for network access, parent-window messaging, host bridge use, process spawning, filesystem writes, shell execution, eval, and destructive actions.",
+    "4. If a command fails, note it briefly and continue with other evidence. Do not guess.",
+    "5. Keep tool use tight. Do not narrate trivial navigation or run placeholder commands.",
+    "",
+    "Use normal filesystem and shell exploration plus the pkg CLI.",
+    "Helpful commands: ls, find, grep, cat, pkg manifest, pkg capabilities, pkg refs, pkg log, pkg source status, pkg source diff.",
+    "Focus on requested capabilities, suspicious behavior, hidden network or shell access, destructive actions, and whether it should be enabled.",
+    "Call out privileged integrations explicitly, including host bridge access, parent-window messaging, and process spawning if present.",
+    "Conclude with a short verdict: approve or do not approve, followed by a concise evidence-based summary.",
+  ].join("\n");
 }
 
 async function listPackages(kernel: KernelClientLike): Promise<PackageLike[]> {
@@ -378,5 +515,126 @@ function normalizeCommit(entry: Record<string, unknown>): PackageCommit {
     message: asString(entry.message),
     author: asString(entry.author),
     commitTime: asNumber(entry.commitTime),
+  };
+}
+
+export async function syncPackages(kernel: KernelClientLike, ctx: ViewerRuntime): Promise<{ ok: boolean }> {
+  const viewer = normalizeViewer({
+    uid: ctx.viewer?.uid ?? 0,
+    username: ctx.viewer?.username ?? "",
+  });
+  await kernel.request("pkg.sync", {});
+  const packages = await listPackages(kernel);
+  for (const pkg of packages) {
+    if (isBuiltinRepo(pkg.source.repo) || !canMutatePackage(pkg, viewer)) {
+      continue;
+    }
+    await kernel.request("pkg.checkout", {
+      packageId: pkg.packageId,
+      ref: pkg.source.ref,
+    });
+  }
+  return { ok: true };
+}
+
+export async function enablePackage(kernel: KernelClientLike, args: PackageIdArgs): Promise<unknown> {
+  return kernel.request("pkg.install", { packageId: asString(args?.packageId) });
+}
+
+export async function disablePackage(kernel: KernelClientLike, args: PackageIdArgs): Promise<unknown> {
+  return kernel.request("pkg.remove", { packageId: asString(args?.packageId) });
+}
+
+export async function approvePackageReview(kernel: KernelClientLike, args: PackageIdArgs): Promise<unknown> {
+  return kernel.request("pkg.review.approve", { packageId: asString(args?.packageId) });
+}
+
+export async function refreshPackage(kernel: KernelClientLike, args: PackageIdArgs): Promise<unknown> {
+  const packageId = asString(args?.packageId);
+  const packages = await listPackages(kernel);
+  const target = packages.find((pkg) => pkg.packageId === packageId);
+  if (!target) {
+    throw new Error(`Unknown package: ${packageId}`);
+  }
+  if (isBuiltinRepo(target.source.repo)) {
+    return kernel.request("pkg.sync", {});
+  }
+  return kernel.request("pkg.checkout", {
+    packageId: target.packageId,
+    ref: target.source.ref,
+  });
+}
+
+export async function pullPackage(kernel: KernelClientLike, args: PackageIdArgs): Promise<unknown> {
+  const packageId = asString(args?.packageId);
+  const packages = await listPackages(kernel);
+  const target = packages.find((pkg) => pkg.packageId === packageId);
+  if (!target) {
+    throw new Error(`Unknown package: ${packageId}`);
+  }
+  return kernel.request("repo.import", {
+    repo: target.source.repo,
+    ref: target.source.ref,
+    remoteRef: target.source.ref,
+  });
+}
+
+export async function pullPackageSource(
+  kernel: KernelClientLike,
+  args: PullPackageSourceArgs,
+): Promise<{ ok: boolean }> {
+  const repo = asString(args?.repo);
+  if (!repo) {
+    throw new Error("repo is required");
+  }
+  const packages = await listPackages(kernel);
+  const sourcePackages = packages.filter((pkg) => pkg.source.repo === repo);
+  if (sourcePackages.length === 0) {
+    throw new Error(`Unknown source: ${repo}`);
+  }
+  const refs = unique(sourcePackages.map((pkg) => pkg.source.ref));
+  for (const ref of refs) {
+    await kernel.request("repo.import", { repo, ref, remoteRef: ref });
+  }
+  return { ok: true };
+}
+
+export async function setPackagePublic(kernel: KernelClientLike, args: SetPackagePublicArgs): Promise<unknown> {
+  return kernel.request("pkg.public.set", {
+    packageId: asString(args?.packageId) || undefined,
+    repo: asString(args?.repo) || undefined,
+    public: args?.public === true,
+  });
+}
+
+export async function startPackageReview(
+  kernel: KernelClientLike,
+  args: PackageIdArgs,
+): Promise<StartPackageReviewResult> {
+  const packageId = asString(args?.packageId);
+  const packages = await listPackages(kernel);
+  const target = packages.find((pkg) => pkg.packageId === packageId);
+  if (!target) {
+    throw new Error(`Unknown package: ${packageId}`);
+  }
+
+  const spawned = asRecord(await kernel.request("proc.spawn", {
+    profile: "review",
+    label: `Review ${target.name}`,
+    prompt: buildReviewPrompt(target, packages),
+    workspace: { mode: "none" },
+    mounts: [
+      { kind: "package-source", packageId: target.packageId },
+    ],
+  }));
+
+  if (!asBoolean(spawned?.ok)) {
+    throw new Error(asString(spawned?.error) || "Failed to spawn review process");
+  }
+
+  return {
+    pid: asString(spawned?.pid),
+    workspaceId: asString(spawned?.workspaceId) || null,
+    cwd: asString(spawned?.cwd) || null,
   };
 }

@@ -20,6 +20,9 @@
 
 .gsv-packages-toolbar {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: start;
+  gap: 0.6rem;
   padding: 0.75rem;
   border: 1px solid #dce2ea;
   border-radius: 8px;
@@ -43,6 +46,7 @@
 }
 
 .gsv-package-queues {
+  grid-column: 1 / -1;
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
@@ -78,6 +82,7 @@
 }
 
 .gsv-package-filters {
+  grid-column: 1 / -1;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 8rem;
   gap: 0.6rem;
@@ -167,6 +172,11 @@
 .gsv-package-tags,
 .gsv-package-actions {
   flex-wrap: wrap;
+}
+
+.gsv-package-panel .gsv-package-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .gsv-package-pill,
@@ -278,7 +288,12 @@
 @media (max-width: 520px) {
   .gsv-package-queues,
   .gsv-package-filters,
-  .gsv-package-row {
+  .gsv-package-row,
+  .gsv-package-panel .gsv-package-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .gsv-packages-toolbar {
     grid-template-columns: 1fr;
   }
 

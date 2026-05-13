@@ -132,3 +132,23 @@ export type PackagesState = {
 export type LoadPackagesStateArgs = {
   packageId?: string;
 };
+
+export type PackageIdArgs = {
+  packageId: string;
+};
+
+export type PullPackageSourceArgs = {
+  repo: string;
+};
+
+export type SetPackagePublicArgs = {
+  packageId?: string;
+  repo?: string;
+  public: boolean;
+};
+
+export type StartPackageReviewResult = {
+  pid: string;
+  workspaceId: string | null;
+  cwd: string | null;
+};

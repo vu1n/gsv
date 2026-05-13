@@ -154,7 +154,7 @@ export function packageActionLimitations(pkg: PackageRecord): string[] {
   if (!pkg.canMutate) notes.push("You cannot mutate this package from the current viewer.");
   if (!pkg.canChangeVisibility) notes.push("Visibility is controlled by the source owner or root.");
   if (!pkg.canPullSource) notes.push("Pulling source updates is unavailable for this package.");
-  if (notes.length === 0) notes.push("Lifecycle actions are available in the next migration batch.");
+  if (notes.length === 0) notes.push("Lifecycle actions are available for this package.");
   return notes;
 }
 
