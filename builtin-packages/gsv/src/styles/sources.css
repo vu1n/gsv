@@ -386,6 +386,48 @@
   min-width: 0;
 }
 
+.gsv-source-current-commit {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  gap: 0.75rem;
+  min-height: 2.65rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  background: #ffffff;
+  text-align: left;
+}
+
+.gsv-source-current-commit:hover {
+  background: #f6f8fa;
+}
+
+.gsv-source-current-commit span {
+  display: grid;
+  min-width: 0;
+  gap: 0.12rem;
+}
+
+.gsv-source-current-commit strong {
+  min-width: 0;
+  color: #24292f;
+  font-size: 0.84rem;
+  overflow-wrap: anywhere;
+}
+
+.gsv-source-current-commit small,
+.gsv-source-current-commit code {
+  color: #57606a;
+  font-size: 0.76rem;
+}
+
+.gsv-source-current-commit code {
+  flex: 0 0 auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
 .gsv-source-breadcrumbs {
   display: flex;
   min-width: 0;
@@ -561,9 +603,9 @@
   background: #f6f8fa;
 }
 
-.gsv-source-search-result {
+.gsv-source-search-file {
   display: grid;
-  gap: 0.25rem;
+  gap: 0.38rem;
   width: 100%;
   min-width: 0;
   padding: 0.7rem 0.75rem;
@@ -573,19 +615,44 @@
   text-align: left;
 }
 
-.gsv-source-search-result:last-child {
+.gsv-source-search-file:last-child {
   border-bottom: 0;
 }
 
-.gsv-source-search-result strong {
+.gsv-source-search-file header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.gsv-source-search-file strong {
   color: #0969da;
   overflow-wrap: anywhere;
 }
 
-.gsv-source-search-result span,
-.gsv-source-search-result code {
+.gsv-source-search-file header span,
+.gsv-source-search-file small {
   color: #57606a;
   font-size: 0.78rem;
+}
+
+.gsv-source-search-file code {
+  display: grid;
+  grid-template-columns: 3rem minmax(0, 1fr);
+  gap: 0.55rem;
+  min-width: 0;
+  color: #57606a;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.76rem;
+  white-space: pre-wrap;
+}
+
+.gsv-source-search-file code span:first-child {
+  color: #8c959f;
+  text-align: right;
+  user-select: none;
 }
 
 .gsv-source-history {
@@ -714,11 +781,6 @@
     overflow: auto;
   }
 
-  .gsv-source-browser {
-    grid-template-columns: minmax(0, 1fr) minmax(17rem, 22rem);
-    align-items: start;
-  }
-
   .gsv-source-ref-row {
     grid-template-columns: 12rem minmax(0, 1fr);
     align-items: end;
@@ -738,6 +800,7 @@
 
   .gsv-source-actions,
   .gsv-source-search,
+  .gsv-source-current-commit,
   .gsv-source-tree-head,
   .gsv-source-tree-row {
     grid-template-columns: 1fr;

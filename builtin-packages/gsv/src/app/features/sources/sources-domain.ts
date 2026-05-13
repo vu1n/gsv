@@ -15,9 +15,7 @@ export function repoKindTone(kind: SourceRepoKind): "is-home" | "is-workspace" |
 }
 
 export function sourceModeLabel(mode: SourceMode): string {
-  if (mode === "history") return "History";
-  if (mode === "search") return "Search";
-  return "Code";
+  return mode === "history" ? "History" : "Code";
 }
 
 export function repoMatchesQuery(repo: SourceRepoRecord, query: string): boolean {

@@ -160,4 +160,4 @@ export type CreateSourceRepoResult = {
   created: boolean;
 };
 
-export type SourceMode = "code" | "search" | "history";
+export type SourceMode = "code" | "history";

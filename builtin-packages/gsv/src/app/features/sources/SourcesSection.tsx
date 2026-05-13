@@ -18,6 +18,7 @@ import type {
   SourceDiffResult,
   SourceReadResult,
   SourceRepoRecord,
+  SourceSearchMatch,
   SourceTreeEntry,
 } from "./types";
 import { useSources, type SourcesRuntime } from "./useSources";
@@ -260,7 +261,7 @@ function RepoWorkspace({ runtime }: { runtime: SourcesRuntime }) {
       {runtime.notice ? <p class="gsv-inline-status">{runtime.notice}</p> : null}
 
       <nav class="gsv-source-tabs" aria-label="Repository views">
-        {(["code", "search", "history"] as const).map((mode) => (
+        {(["code", "history"] as const).map((mode) => (
           <button
             type="button"
             key={mode}
@@ -273,18 +274,23 @@ function RepoWorkspace({ runtime }: { runtime: SourcesRuntime }) {
       </nav>
 
       <section class="gsv-source-browser">
-        <div class="gsv-source-code-pane">
-          <RepoToolbar runtime={runtime} refOptions={refOptions} />
-          {runtime.mode === "search" ? <SearchResults runtime={runtime} /> : null}
-          <ReadPanel runtime={runtime} read={runtime.state?.read ?? null} />
-        </div>
-        <HistoryPane runtime={runtime} />
+        {runtime.mode === "history" ? (
+          <HistoryPane runtime={runtime} />
+        ) : (
+          <div class="gsv-source-code-pane">
+            <RepoToolbar runtime={runtime} refOptions={refOptions} />
+            <SearchResults runtime={runtime} />
+            <ReadPanel runtime={runtime} read={runtime.state?.read ?? null} />
+          </div>
+        )}
       </section>
     </section>
   );
 }
 
 function RepoToolbar({ runtime, refOptions }: { runtime: SourcesRuntime; refOptions: string[] }) {
+  const currentCommit = currentRefCommit(runtime);
+  const currentHash = currentCommit?.hash ?? currentRefHash(runtime);
   return (
     <header class="gsv-source-toolbar">
       <div class="gsv-source-ref-row">
@@ -316,6 +322,19 @@ function RepoToolbar({ runtime, refOptions }: { runtime: SourcesRuntime; refOpti
           </button>
         </form>
       </div>
+      {currentHash ? (
+        <button
+          type="button"
+          class="gsv-source-current-commit"
+          onClick={() => void runtime.selectCommit(currentHash)}
+        >
+          <span>
+            <strong>{currentCommit ? firstLine(currentCommit.message) : `Current ${runtime.ref || "main"}`}</strong>
+            <small>{currentCommit?.author || "unknown"} - {formatRelativeTime(currentCommit?.commitTime)}</small>
+          </span>
+          <code>{shortHash(currentHash)}</code>
+        </button>
+      ) : null}
       <nav class="gsv-source-breadcrumbs" aria-label="Repository path">
         <button type="button" onClick={() => void runtime.openPath("")}>
           <SourceIcon name="repo" />
@@ -402,26 +421,38 @@ function FileView({ read, onOpenParent }: { read: Extract<SourceReadResult, { ki
 
 function SearchResults({ runtime }: { runtime: SourcesRuntime }) {
   const result = runtime.searchResult;
+  if (!result) {
+    return null;
+  }
+  const groups = groupSearchMatches(result.matches);
   return (
     <section class="gsv-source-search-results">
       <header>
         <strong>Search results</strong>
-        <span>{result ? `${result.matches.length} matches` : "Run a repository search"}</span>
+        <span>{result.matches.length} matches in {groups.length} files</span>
       </header>
       {result?.truncated ? <p class="gsv-runtime-meta">Search results were truncated.</p> : null}
-      {!result ? null : result.matches.length === 0 ? (
+      {result.matches.length === 0 ? (
         <div class="gsv-empty-state">No source matches found.</div>
       ) : (
-        result.matches.map((match) => (
+        groups.map((group) => (
           <button
             type="button"
-            class="gsv-source-search-result"
-            key={`${match.path}:${match.line}:${match.content}`}
-            onClick={() => void runtime.openPath(match.path)}
+            class="gsv-source-search-file"
+            key={group.path}
+            onClick={() => void runtime.openPath(group.path)}
           >
-            <strong>{match.path}</strong>
-            <span>Line {match.line}</span>
-            <code>{match.content}</code>
+            <header>
+              <strong>{group.path}</strong>
+              <span>{group.matches.length} match{group.matches.length === 1 ? "" : "es"}</span>
+            </header>
+            {group.matches.slice(0, 4).map((match) => (
+              <code key={`${match.line}:${match.content}`}>
+                <span>{match.line}</span>
+                <span>{match.content}</span>
+              </code>
+            ))}
+            {group.matches.length > 4 ? <small>{group.matches.length - 4} more matches</small> : null}
           </button>
         ))
       )}
@@ -550,4 +581,31 @@ function SourceIcon({ name }: { name: "repo" | "folder" | "file" | "package" }) 
     return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9Z"></path><path d="m4 7.5 8 4.5 8-4.5"></path><path d="M12 12v9"></path></svg>;
   }
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3.5h7l3 3V20a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4.5a1 1 0 0 1 1-1z"></path><path d="M14 3.5V7h3"></path></svg>;
+}
+
+function currentRefHash(runtime: SourcesRuntime): string | null {
+  const refs = runtime.state?.refs;
+  if (!refs) return null;
+  return refs.heads[runtime.ref] ?? refs.tags[runtime.ref] ?? null;
+}
+
+function currentRefCommit(runtime: SourcesRuntime): SourceCommit | null {
+  const hash = currentRefHash(runtime);
+  if (!hash) return runtime.state?.commits[0] ?? null;
+  return runtime.state?.commits.find((commit) => commit.hash === hash) ?? runtime.state?.commits[0] ?? null;
+}
+
+function groupSearchMatches(matches: SourceSearchMatch[]): Array<{ path: string; matches: SourceSearchMatch[] }> {
+  const groups = new Map<string, SourceSearchMatch[]>();
+  for (const match of matches) {
+    const group = groups.get(match.path) ?? [];
+    group.push(match);
+    groups.set(match.path, group);
+  }
+  return [...groups.entries()]
+    .map(([path, group]) => ({
+      path,
+      matches: group.sort((left, right) => left.line - right.line),
+    }))
+    .sort((left, right) => left.path.localeCompare(right.path));
 }

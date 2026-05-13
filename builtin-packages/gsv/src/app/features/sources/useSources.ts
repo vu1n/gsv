@@ -177,7 +177,7 @@ export function useSources(backend: GsvBackend): SourcesRuntime {
     if (!repo || !searchQuery.trim()) return;
     setSearchBusy(true);
     setError(null);
-    setMode("search");
+    setMode("code");
     try {
       const result = await backend.searchSourceRepo({
         repo,
@@ -300,7 +300,7 @@ function readPathFromLocation(): string {
 
 function readModeFromLocation(): SourceMode {
   const value = new URL(window.location.href).searchParams.get("mode");
-  return value === "search" || value === "history" ? value : "code";
+  return value === "history" ? "history" : "code";
 }
 
 function writeLocation(repo: string | null, ref: string, path: string, mode: SourceMode): void {
