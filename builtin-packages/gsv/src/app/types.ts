@@ -5,6 +5,7 @@ export type GsvSectionId =
   | "runtime"
   | "devices"
   | "packages"
+  | "sources"
   | "integrations"
   | "access"
   | "settings";

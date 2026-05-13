@@ -5,6 +5,7 @@ import { DevicesSection } from "./features/devices/DevicesSection";
 import { IntegrationsSection } from "./features/integrations/IntegrationsSection";
 import { PackagesSection } from "./features/packages/PackagesSection";
 import { RuntimeSection } from "./features/runtime/RuntimeSection";
+import { SourcesSection } from "./features/sources/SourcesSection";
 import { ATTENTION_ITEMS, GROUPS, SECTIONS, findSection, sectionExists } from "./navigation";
 import type { GsvGroup, GsvSection, GsvSectionId, Tone } from "./types";
 
@@ -33,6 +34,25 @@ export function App({ backend }: { backend: GsvBackend }) {
     });
   }
 
+  function openSources(repo: string, ref?: string, path?: string): void {
+    const url = new URL(window.location.href);
+    url.searchParams.set("section", "sources");
+    url.searchParams.set("repo", repo);
+    if (ref) {
+      url.searchParams.set("ref", ref);
+    } else {
+      url.searchParams.delete("ref");
+    }
+    if (path && path !== ".") {
+      url.searchParams.set("path", path);
+    } else {
+      url.searchParams.delete("path");
+    }
+    url.searchParams.delete("mode");
+    window.history.pushState({}, "", url);
+    setActiveSectionId("sources");
+  }
+
   return (
     <div class="gsv-app">
       <aside class="gsv-sidebar" aria-label="GSV sections">
@@ -59,7 +79,9 @@ export function App({ backend }: { backend: GsvBackend }) {
           ) : activeSection.id === "integrations" ? (
             <IntegrationsSection backend={backend} />
           ) : activeSection.id === "packages" ? (
-            <PackagesSection backend={backend} />
+            <PackagesSection backend={backend} onOpenSources={openSources} />
+          ) : activeSection.id === "sources" ? (
+            <SourcesSection backend={backend} />
           ) : (
             <SectionWorkspace section={activeSection} onOpenHandoff={openHandoff} />
           )}

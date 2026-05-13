@@ -30,6 +30,18 @@ import type {
   SetPackagePublicArgs,
   StartPackageReviewResult,
 } from "./features/packages/types";
+import type {
+  CreateSourceRepoArgs,
+  CreateSourceRepoResult,
+  DiffSourceRepoArgs,
+  LoadSourcesStateArgs,
+  PullSourceRepoArgs,
+  SearchSourceRepoArgs,
+  SetSourceRepoPublicArgs,
+  SourceDiffResult,
+  SourcesState,
+  SourceSearchResult,
+} from "./features/sources/types";
 
 export interface GsvBackend {
   loadRuntimeState(): Promise<RuntimeState>;
@@ -55,4 +67,10 @@ export interface GsvBackend {
   pullPackageSource(args: PullPackageSourceArgs): Promise<{ ok: boolean }>;
   setPackagePublic(args: SetPackagePublicArgs): Promise<unknown>;
   startPackageReview(args: PackageIdArgs): Promise<StartPackageReviewResult>;
+  loadSourcesState(args: LoadSourcesStateArgs): Promise<SourcesState>;
+  searchSourceRepo(args: SearchSourceRepoArgs): Promise<SourceSearchResult>;
+  diffSourceRepo(args: DiffSourceRepoArgs): Promise<SourceDiffResult>;
+  pullSourceRepo(args: PullSourceRepoArgs): Promise<unknown>;
+  setSourceRepoPublic(args: SetSourceRepoPublicArgs): Promise<unknown>;
+  createSourceRepo(args: CreateSourceRepoArgs): Promise<CreateSourceRepoResult>;
 }

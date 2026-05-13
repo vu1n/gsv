@@ -24,7 +24,13 @@ const VIEWS: Array<{ id: PackagesView; label: string; countKey: "installed" | "u
   { id: "review", label: "Review", countKey: "review" },
 ];
 
-export function PackagesSection({ backend }: { backend: GsvBackend }) {
+export function PackagesSection({
+  backend,
+  onOpenSources,
+}: {
+  backend: GsvBackend;
+  onOpenSources?: (repo: string, ref?: string, path?: string) => void;
+}) {
   const runtime = usePackages(backend);
   const counts = runtime.state?.counts ?? { installed: 0, updates: 0, review: 0 };
 
@@ -114,7 +120,7 @@ export function PackagesSection({ backend }: { backend: GsvBackend }) {
         </div>
       </div>
 
-      <PackageDetail runtime={runtime} />
+      <PackageDetail runtime={runtime} onOpenSources={onOpenSources} />
     </section>
   );
 }
@@ -154,7 +160,13 @@ function PackageRow({
   );
 }
 
-function PackageDetail({ runtime }: { runtime: PackagesRuntime }) {
+function PackageDetail({
+  runtime,
+  onOpenSources,
+}: {
+  runtime: PackagesRuntime;
+  onOpenSources?: (repo: string, ref?: string, path?: string) => void;
+}) {
   const { selectedPackage: pkg, state } = runtime;
   if (!pkg) {
     return (
@@ -353,12 +365,14 @@ function PackageDetail({ runtime }: { runtime: PackagesRuntime }) {
           <button
             type="button"
             class="gsv-action-button"
-            onClick={() => openApp({
-              target: "packages",
-              payload: { route: `/apps/packages?package=${encodeURIComponent(pkg.packageId)}` },
-            })}
+            onClick={() => onOpenSources?.(
+              pkg.source.repo,
+              pkg.source.ref,
+              pkg.source.subdir && pkg.source.subdir !== "." ? pkg.source.subdir : undefined,
+            )}
+            disabled={!onOpenSources}
           >
-            Open advanced Packages
+            Open in Sources
           </button>
         </section>
 

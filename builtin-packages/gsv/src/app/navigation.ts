@@ -17,7 +17,7 @@ export const GROUPS: GsvGroup[] = [
     id: "extensions",
     label: "Extensions",
     shortLabel: "Extend",
-    sections: ["packages", "integrations"],
+    sections: ["packages", "sources", "integrations"],
   },
   {
     id: "administration",
@@ -166,18 +166,40 @@ export const SECTIONS: GsvSection[] = [
         meta: "List/detail",
       },
       {
-        label: "Sources and remotes",
-        description: "Manage package sources, public catalog entries, and source browsing.",
+        label: "Source relationship",
+        description: "See package source posture and open the repository browser when deeper inspection is needed.",
         meta: "Source",
       },
     ],
-    handoffs: [
+    handoffs: [],
+  },
+  {
+    id: "sources",
+    groupId: "extensions",
+    label: "Sources",
+    shortLabel: "Sources",
+    title: "Sources",
+    summary: "Browse visible ripgit repositories, source history, files, and diffs.",
+    statusLabel: "Extensions",
+    tone: "good",
+    localItems: [
       {
-        label: "Open current Packages",
-        description: "Launch the existing package lifecycle app.",
-        target: "packages",
+        label: "Repository browser",
+        description: "Open any visible ripgit repository, branch, folder, or file.",
+        meta: "Code",
+      },
+      {
+        label: "History and diffs",
+        description: "Review commits and inspect source changes without leaving GSV.",
+        meta: "History",
+      },
+      {
+        label: "Repository operations",
+        description: "Create repositories, pull upstream, and manage public visibility when allowed.",
+        meta: "Actions",
       },
     ],
+    handoffs: [],
   },
   {
     id: "integrations",

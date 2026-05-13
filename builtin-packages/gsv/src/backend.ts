@@ -20,6 +20,14 @@ import {
   syncPackages,
 } from "./backend/packages";
 import { killRuntimeProcess, loadRuntimeState } from "./backend/runtime";
+import {
+  createSourceRepo,
+  diffSourceRepo,
+  loadSourcesState,
+  pullSourceRepo,
+  searchSourceRepo,
+  setSourceRepoPublic,
+} from "./backend/sources";
 
 export default class GsvBackend extends PackageBackendEntrypoint {
   async loadRuntimeState(): Promise<unknown> {
@@ -112,5 +120,29 @@ export default class GsvBackend extends PackageBackendEntrypoint {
 
   async startPackageReview(args: unknown): Promise<unknown> {
     return startPackageReview(this.kernel, args as never);
+  }
+
+  async loadSourcesState(args: unknown): Promise<unknown> {
+    return loadSourcesState(args as never, this.kernel);
+  }
+
+  async searchSourceRepo(args: unknown): Promise<unknown> {
+    return searchSourceRepo(this.kernel, args as never);
+  }
+
+  async diffSourceRepo(args: unknown): Promise<unknown> {
+    return diffSourceRepo(this.kernel, args as never);
+  }
+
+  async pullSourceRepo(args: unknown): Promise<unknown> {
+    return pullSourceRepo(this.kernel, args as never);
+  }
+
+  async setSourceRepoPublic(args: unknown): Promise<unknown> {
+    return setSourceRepoPublic(this.kernel, args as never);
+  }
+
+  async createSourceRepo(args: unknown): Promise<unknown> {
+    return createSourceRepo(this.kernel, args as never);
   }
 }
