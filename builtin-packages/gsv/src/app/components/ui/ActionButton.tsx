@@ -16,7 +16,7 @@ export function ActionButton({
   busyLabel,
   busy = false,
   variant = "default",
-  size = "compact",
+  size,
   class: className = "",
   disabled,
   title,
@@ -24,11 +24,12 @@ export function ActionButton({
   ...props
 }: ActionButtonProps) {
   const text = busy && busyLabel ? busyLabel : label;
-  const iconOnly = size === "icon";
+  const resolvedSize = size ?? (icon ? "icon" : "compact");
+  const iconOnly = resolvedSize === "icon";
   const classes = [
     "gsv-action-control",
     `is-${variant}`,
-    `is-${size}`,
+    `is-${resolvedSize}`,
     className,
   ].filter(Boolean).join(" ");
 

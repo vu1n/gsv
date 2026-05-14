@@ -40,6 +40,8 @@ type PackageLike = {
   };
 };
 
+type KernelSourceRepoKind = Exclude<SourceRepoRecord["kind"], "multi-package">;
+
 export async function loadSourcesState(
   args: LoadSourcesStateArgs | undefined,
   kernel: KernelClientLike,
@@ -270,25 +272,27 @@ function normalizeRepo(entry: Record<string, unknown>, packages: PackageLike[]):
   if (!repo || !owner || !name || !isSourceRepoKind(kind)) {
     return null;
   }
+  const linkedPackages = packages
+    .filter((pkg) => pkg.source.repo === repo)
+    .map((pkg) => ({
+      packageId: pkg.packageId,
+      name: pkg.name,
+      subdir: pkg.source.subdir,
+      enabled: pkg.enabled,
+      reviewPending: pkg.review.required && !pkg.review.approvedAt,
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  const sourceKind = kind === "package" && linkedPackages.length > 1 ? "multi-package" : kind;
   return {
     repo,
     owner,
     name,
-    kind,
+    kind: sourceKind,
     writable: entry.writable === true,
     public: entry.public === true,
     description: asString(entry.description) || undefined,
     updatedAt: asOptionalNumber(entry.updatedAt),
-    linkedPackages: packages
-      .filter((pkg) => pkg.source.repo === repo)
-      .map((pkg) => ({
-        packageId: pkg.packageId,
-        name: pkg.name,
-        subdir: pkg.source.subdir,
-        enabled: pkg.enabled,
-        reviewPending: pkg.review.required && !pkg.review.approvedAt,
-      }))
-      .sort((left, right) => left.name.localeCompare(right.name)),
+    linkedPackages,
   };
 }
 
@@ -371,7 +375,7 @@ function normalizeRepoPath(path: string | undefined): string {
   return parts.join("/");
 }
 
-function isSourceRepoKind(value: string): value is SourceRepoRecord["kind"] {
+function isSourceRepoKind(value: string): value is KernelSourceRepoKind {
   return value === "home" || value === "workspace" || value === "package" || value === "user";
 }
 

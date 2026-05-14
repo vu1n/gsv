@@ -4,7 +4,7 @@ import { formatRelativeTime } from "../../utils/format";
 import { SourceCodePane } from "./SourceCodeBrowser";
 import { SourceIcon, SourcePill } from "./SourceChrome";
 import { HistoryPane } from "./SourceHistory";
-import { repoKindLabel, repoKindTone, sourceModeLabel } from "./sources-domain";
+import { repoDescription, repoKindLabel, repoKindTone, sourceModeLabel } from "./sources-domain";
 import type { SourceLinkedPackage } from "./types";
 import type { SourcesRuntime } from "./useSources";
 
@@ -47,7 +47,7 @@ export function RepoWorkspace({
           <div>
             <span class="gsv-kicker">{repoKindLabel(repo.kind)}</span>
             <h3><span>{repo.owner}</span> / {repo.name}</h3>
-            <p>{repo.description || repo.linkedPackages.map((pkg) => pkg.name).join(", ") || "Ripgit repository"}</p>
+            <p>{repoDescription(repo)}</p>
           </div>
         </div>
         <div class="gsv-source-actions">

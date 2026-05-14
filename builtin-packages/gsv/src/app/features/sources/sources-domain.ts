@@ -3,15 +3,31 @@ import type { SourceDiffFile, SourceMode, SourceRepoKind, SourceRepoRecord, Sour
 export function repoKindLabel(kind: SourceRepoKind): string {
   if (kind === "home") return "Home";
   if (kind === "workspace") return "Workspace";
+  if (kind === "multi-package") return "Multi-package";
   if (kind === "package") return "Package";
-  return "Repository";
+  return "General";
 }
 
 export function repoKindTone(kind: SourceRepoKind): "is-home" | "is-workspace" | "is-package" | "is-user" {
   if (kind === "home") return "is-home";
   if (kind === "workspace") return "is-workspace";
-  if (kind === "package") return "is-package";
+  if (kind === "package" || kind === "multi-package") return "is-package";
   return "is-user";
+}
+
+export function repoDescription(repo: SourceRepoRecord): string {
+  if (repo.description && repo.kind !== "package" && repo.kind !== "multi-package") {
+    return repo.description;
+  }
+  if (repo.linkedPackages.length > 1) {
+    const names = repo.linkedPackages.slice(0, 3).map((pkg) => pkg.name).join(", ");
+    const more = repo.linkedPackages.length > 3 ? `, +${repo.linkedPackages.length - 3}` : "";
+    return `${repo.linkedPackages.length} packages: ${names}${more}`;
+  }
+  if (repo.linkedPackages.length === 1) {
+    return repo.linkedPackages[0].name;
+  }
+  return repo.description || "No description";
 }
 
 export function sourceModeLabel(mode: SourceMode): string {

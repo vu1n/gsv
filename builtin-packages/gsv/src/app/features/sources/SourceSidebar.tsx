@@ -1,5 +1,5 @@
 import { ActionButton } from "../../components/ui/ActionButton";
-import { repoKindLabel, repoKindTone } from "./sources-domain";
+import { repoDescription, repoKindLabel, repoKindTone } from "./sources-domain";
 import type { SourceRepoRecord } from "./types";
 import type { SourcesRuntime } from "./useSources";
 import { SourcePill } from "./SourceChrome";
@@ -144,7 +144,7 @@ function RepoRow({
     >
       <span class="gsv-source-repo-title">
         <strong><span>{repo.owner}</span> / {repo.name}</strong>
-        <span>{repo.description || repo.linkedPackages.map((pkg) => pkg.name).join(", ") || "No description"}</span>
+        <span>{repoDescription(repo)}</span>
       </span>
       <span class="gsv-source-repo-meta">
         <SourcePill className={repoKindTone(repo.kind)}>{repoKindLabel(repo.kind)}</SourcePill>

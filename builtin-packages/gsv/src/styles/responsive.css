@@ -86,70 +86,12 @@
     padding: 1rem;
   }
 
-  .gsv-overview {
-    grid-template-columns: minmax(0, 1fr) minmax(18rem, 0.58fr);
-    align-items: start;
-  }
-
-  .gsv-overview > .gsv-section-intro {
-    grid-column: 1 / -1;
-  }
-
-  .gsv-section-workspace {
-    grid-template-columns: minmax(22rem, 0.72fr) minmax(18rem, 0.48fr);
-    align-items: start;
-    gap: 1rem;
-  }
-
-  .gsv-runtime {
-    grid-template-columns: minmax(24rem, 0.68fr) minmax(20rem, 0.42fr);
-    align-items: start;
-    gap: 1rem;
-  }
-
-  .gsv-devices {
-    grid-template-columns: minmax(24rem, 0.68fr) minmax(20rem, 0.42fr);
-    align-items: start;
-    gap: 1rem;
-  }
-
-  .gsv-integrations {
-    grid-template-columns: minmax(24rem, 0.62fr) minmax(22rem, 0.48fr);
-    align-items: start;
-    gap: 1rem;
-  }
-
+  .gsv-section-workspace,
+  .gsv-runtime,
+  .gsv-devices,
+  .gsv-integrations,
   .gsv-packages {
-    grid-template-columns: minmax(24rem, 0.66fr) minmax(21rem, 0.44fr);
-    align-items: start;
     gap: 1rem;
-  }
-
-  .gsv-detail-pane {
-    position: sticky;
-    top: 5.1rem;
-    border-top: 0;
-    padding-top: 0;
-  }
-
-  .gsv-runtime-detail {
-    position: sticky;
-    top: 5.1rem;
-  }
-
-  .gsv-device-detail {
-    position: sticky;
-    top: 5.1rem;
-  }
-
-  .gsv-integration-detail {
-    position: sticky;
-    top: 5.1rem;
-  }
-
-  .gsv-package-detail {
-    position: sticky;
-    top: 5.1rem;
   }
 }
 
@@ -162,23 +104,4 @@
     padding: 1.25rem;
   }
 
-  .gsv-section-workspace {
-    grid-template-columns: minmax(28rem, 0.78fr) minmax(22rem, 0.42fr);
-  }
-
-  .gsv-runtime {
-    grid-template-columns: minmax(30rem, 0.74fr) minmax(24rem, 0.46fr);
-  }
-
-  .gsv-devices {
-    grid-template-columns: minmax(30rem, 0.74fr) minmax(24rem, 0.46fr);
-  }
-
-  .gsv-integrations {
-    grid-template-columns: minmax(30rem, 0.7fr) minmax(26rem, 0.52fr);
-  }
-
-  .gsv-packages {
-    grid-template-columns: minmax(32rem, 0.74fr) minmax(26rem, 0.5fr);
-  }
 }
