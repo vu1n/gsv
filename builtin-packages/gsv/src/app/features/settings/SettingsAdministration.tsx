@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
+import { ActionButton } from "../../components/ui/ActionButton";
 import {
   AI_FIELDS,
   PROFILE_CONTEXT_FIELDS,
@@ -203,8 +204,8 @@ function SettingsForm({
       {editableRows.length > 0 ? (
         <div class="gsv-admin-actions">
           <span>{dirty ? "Unsaved changes" : "No changes"}</span>
-          <button class="gsv-mini-button" type="button" disabled={!dirty || pendingAction === actionId} onClick={() => onReset(editableRows.map((row) => row.editableKey))}>Reset</button>
-          <button class="gsv-action-button" type="button" disabled={!dirty || pendingAction === actionId} onClick={() => void onSave(actionId, editableRows.map((row) => ({ key: row.editableKey, value: row.value })))}>{pendingAction === actionId ? "Saving" : "Save changes"}</button>
+          <ActionButton icon="refresh" label="Reset" disabled={!dirty || pendingAction === actionId} onClick={() => onReset(editableRows.map((row) => row.editableKey))} />
+          <ActionButton icon="check" label="Save changes" busyLabel="Saving" busy={pendingAction === actionId} disabled={!dirty} onClick={() => void onSave(actionId, editableRows.map((row) => ({ key: row.editableKey, value: row.value })))} />
         </div>
       ) : null}
     </section>
@@ -293,8 +294,8 @@ function ProfilesForm({
       </div>
       <div class="gsv-admin-actions">
         <span>{dirty ? "Unsaved changes" : "No changes"}</span>
-        <button class="gsv-mini-button" type="button" disabled={!dirty || pendingAction === actionId} onClick={() => onReset(rows.map((row) => row.editableKey))}>Reset</button>
-        <button class="gsv-action-button" type="button" disabled={!dirty || pendingAction === actionId} onClick={() => void onSave(actionId, rows.map((row) => ({ key: row.editableKey, value: row.value })))}>{pendingAction === actionId ? "Saving" : "Save changes"}</button>
+        <ActionButton icon="refresh" label="Reset" disabled={!dirty || pendingAction === actionId} onClick={() => onReset(rows.map((row) => row.editableKey))} />
+        <ActionButton icon="check" label="Save changes" busyLabel="Saving" busy={pendingAction === actionId} disabled={!dirty} onClick={() => void onSave(actionId, rows.map((row) => ({ key: row.editableKey, value: row.value })))} />
       </div>
     </section>
   );
@@ -361,8 +362,8 @@ function AdvancedConfig({
       ) : null}
       <textarea class="gsv-admin-raw" value={draft} onInput={(event) => setDraft(event.currentTarget.value)} />
       <div class="gsv-admin-actions">
-        <button class="gsv-action-button" type="button" disabled={pendingAction === "save:advanced"} onClick={apply}>{pendingAction === "save:advanced" ? "Applying" : "Apply raw updates"}</button>
-        <button class="gsv-mini-button" type="button" disabled={pendingAction === "save:advanced"} onClick={() => setDraft(initialDraft)}>Reset</button>
+        <ActionButton icon="check" label="Apply raw updates" busyLabel="Applying" busy={pendingAction === "save:advanced"} onClick={apply} />
+        <ActionButton icon="refresh" label="Reset" disabled={pendingAction === "save:advanced"} onClick={() => setDraft(initialDraft)} />
       </div>
     </section>
   );

@@ -97,22 +97,6 @@ export type CatalogRecord = {
   error?: string;
 };
 
-export type PackageCommit = {
-  hash: string;
-  message: string;
-  author: string;
-  commitTime: number;
-};
-
-export type PackageDetail = {
-  refs: {
-    activeRef: string;
-    heads: Record<string, string>;
-    tags: Record<string, string>;
-  };
-  commits: PackageCommit[];
-};
-
 export type PackagesState = {
   viewer: {
     uid: number;
@@ -127,7 +111,6 @@ export type PackagesState = {
     review: number;
     updates: number;
   };
-  packageDetail: PackageDetail | null;
 };
 
 export type LoadPackagesStateArgs = {

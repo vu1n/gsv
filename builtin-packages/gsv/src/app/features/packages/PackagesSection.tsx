@@ -1,4 +1,5 @@
 import { useMemo, useState } from "preact/hooks";
+import { ActionButton } from "../../components/ui/ActionButton";
 import type { GsvBackend } from "../../backend-contract";
 import {
   catalogPackageCount,
@@ -52,22 +53,20 @@ export function PackagesSection({
             <h3>{viewTitle(runtime.view)}</h3>
             <p class="gsv-runtime-meta">{viewDescription(runtime.view)}</p>
           </div>
-          <button
-            type="button"
-            class="gsv-mini-button"
+          <ActionButton
+            icon="refresh"
+            label="Refresh"
             onClick={() => void runtime.refresh()}
             disabled={runtime.loading || runtime.pendingAction !== null}
-          >
-            Refresh
-          </button>
-          <button
-            type="button"
-            class="gsv-mini-button"
+          />
+          <ActionButton
+            icon="refresh"
+            label="Sync"
+            busyLabel="Syncing"
+            busy={runtime.pendingAction === "packages:sync"}
             onClick={() => void runtime.syncPackages()}
             disabled={runtime.loading || runtime.pendingAction !== null}
-          >
-            {runtime.pendingAction === "packages:sync" ? "Syncing" : "Sync"}
-          </button>
+          />
 
           <div class="gsv-package-queues" aria-label="Package queues">
             {VIEWS.map((view) => (

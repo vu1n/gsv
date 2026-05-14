@@ -7,8 +7,6 @@ import type {
   ImportPackageArgs,
   ImportPackageResult,
   LoadPackagesStateArgs,
-  PackageCommit,
-  PackageDetail,
   PackageEntrypoint,
   PackageProfile,
   PackageRecord,
@@ -59,7 +57,7 @@ type RemoteRecord = {
 type DerivedPackageRecord = PackageRecord;
 
 export async function loadPackagesState(
-  args: LoadPackagesStateArgs | undefined,
+  _args: LoadPackagesStateArgs | undefined,
   kernel: KernelClientLike,
   ctx: ViewerRuntime,
 ): Promise<PackagesState> {
@@ -73,19 +71,6 @@ export async function loadPackagesState(
   const sources = aggregateSources(packages);
   const catalogs = await loadCatalogs(kernel);
 
-  let packageDetail: PackageDetail | null = null;
-  const packageId = typeof args?.packageId === "string" ? args.packageId.trim() : "";
-  if (packageId) {
-    const target = packages.find((pkg) => pkg.packageId === packageId);
-    if (target) {
-      try {
-        packageDetail = await loadPackageDetail(kernel, target);
-      } catch {
-        packageDetail = null;
-      }
-    }
-  }
-
   return {
     viewer,
     packages,
@@ -96,7 +81,6 @@ export async function loadPackagesState(
       review: packages.filter((pkg) => pkg.reviewPending).length,
       updates: packages.filter((pkg) => pkg.updateAvailable).length,
     },
-    packageDetail,
   };
 }
 
@@ -123,10 +107,6 @@ function asStringRecord(value: unknown): Record<string, string> {
     }
   }
   return result;
-}
-
-function asNumber(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 function asBoolean(value: unknown): boolean {
@@ -499,40 +479,6 @@ function normalizeCatalogEntries(value: unknown): CatalogEntry[] {
       bindingNames: asArray<string>(entry.bindingNames),
     };
   });
-}
-
-async function loadPackageDetail(
-  kernel: KernelClientLike,
-  pkg: Pick<PackageRecord, "source">,
-): Promise<PackageDetail> {
-  const [refs, log] = await Promise.all([
-    kernel.request("repo.refs", { repo: pkg.source.repo }),
-    kernel.request("repo.log", {
-      repo: pkg.source.repo,
-      ref: pkg.source.ref,
-      limit: 20,
-      offset: 0,
-    }),
-  ]);
-  const refsRecord = asRecord(refs);
-  const logRecord = asRecord(log);
-  return {
-    refs: {
-      activeRef: pkg.source.ref,
-      heads: asStringRecord(refsRecord?.heads),
-      tags: asStringRecord(refsRecord?.tags),
-    },
-    commits: asArray<Record<string, unknown>>(logRecord?.entries).map(normalizeCommit),
-  };
-}
-
-function normalizeCommit(entry: Record<string, unknown>): PackageCommit {
-  return {
-    hash: asString(entry.hash),
-    message: asString(entry.message),
-    author: asString(entry.author),
-    commitTime: asNumber(entry.commitTime),
-  };
 }
 
 export async function syncPackages(kernel: KernelClientLike, ctx: ViewerRuntime): Promise<{ ok: boolean }> {

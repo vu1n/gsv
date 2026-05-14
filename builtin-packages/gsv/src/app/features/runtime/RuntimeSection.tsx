@@ -1,5 +1,6 @@
 import { openApp } from "@gsv/package/host";
 import type { GsvBackend } from "../../backend-contract";
+import { ActionButton } from "../../components/ui/ActionButton";
 import { formatTimestampMs } from "../../utils/format";
 import {
   canOpenChat,
@@ -40,9 +41,14 @@ export function RuntimeSection({ backend }: { backend: GsvBackend }) {
               onInput={(event) => runtime.setQuery(event.currentTarget.value)}
             />
           </label>
-          <button class="gsv-mini-button" type="button" disabled={runtime.loading} onClick={() => void runtime.loadState()}>
-            {runtime.loading ? "Refreshing" : "Refresh"}
-          </button>
+          <ActionButton
+            icon="refresh"
+            label="Refresh"
+            busyLabel="Refreshing"
+            busy={runtime.loading}
+            size="icon"
+            onClick={() => void runtime.loadState()}
+          />
         </form>
 
         <p class="gsv-runtime-meta" aria-live="polite">{statusText}</p>
@@ -166,29 +172,30 @@ function ProcessDetail({
       </dl>
 
       <div class="gsv-detail-actions">
-        <button
-          class="gsv-action-button"
-          type="button"
+        <ActionButton
+          icon="external"
+          label="Open in Chat"
+          size="full"
           disabled={!canOpenChat(process)}
           onClick={() => openApp({
             target: "chat",
             payload: { pid, cwd, workspaceId: workspaceId || null },
           })}
-        >
-          Open in Chat
-        </button>
-        <button
-          class="gsv-action-button is-danger"
-          type="button"
+        />
+        <ActionButton
+          icon="trash"
+          label="Kill Process"
+          busyLabel="Killing"
+          busy={killPending}
+          variant="danger"
+          size="full"
           disabled={!pid || Boolean(killingPid)}
           onClick={() => {
             if (window.confirm(`Kill process ${title}?\n\nThis stops the process immediately.`)) {
               onKill(pid);
             }
           }}
-        >
-          {killPending ? "Killing" : "Kill Process"}
-        </button>
+        />
       </div>
     </section>
   );

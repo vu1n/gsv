@@ -12,11 +12,15 @@ export function SourcesSection({
   onOpenPackage?: (packageId: string, view?: PackagesRouteView) => void;
 }) {
   const runtime = useSources(backend);
+  const repoView = runtime.repositoryRoute !== null;
 
   return (
-    <section class="gsv-sources">
-      <RepoSidebar runtime={runtime} />
-      <RepoWorkspace runtime={runtime} onOpenPackage={onOpenPackage} />
+    <section class={`gsv-sources${repoView ? " is-repo-view" : " is-list-view"}`}>
+      {repoView ? (
+        <RepoWorkspace runtime={runtime} onOpenPackage={onOpenPackage} />
+      ) : (
+        <RepoSidebar runtime={runtime} />
+      )}
     </section>
   );
 }

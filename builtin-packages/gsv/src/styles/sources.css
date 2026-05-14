@@ -4,13 +4,18 @@
   min-width: 0;
 }
 
+.gsv-sources.is-list-view,
+.gsv-sources.is-repo-view {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .gsv-sources-sidebar,
 .gsv-source-workspace {
   min-width: 0;
   border: 1px solid #d0d7de;
   border-radius: 8px;
   background: #ffffff;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .gsv-source-sidebar-head,
@@ -181,6 +186,7 @@
 
 .gsv-source-repo-identity {
   display: flex;
+  align-items: flex-start;
   min-width: 0;
   gap: 0.75rem;
 }
@@ -368,7 +374,7 @@
   min-width: 0;
   min-height: 0;
   padding: 0.75rem;
-  overflow: auto;
+  overflow: visible;
 }
 
 .gsv-source-code-pane,
@@ -490,6 +496,12 @@
   border-radius: 0 0 8px 8px;
   background: #ffffff;
   overflow: hidden;
+}
+
+.gsv-source-history,
+.gsv-source-commit-detail,
+.gsv-source-diff {
+  overflow: visible;
 }
 
 .gsv-source-tree-head,
@@ -707,22 +719,6 @@
   font-size: 0.78rem;
 }
 
-.gsv-source-back-button {
-  min-height: 2rem;
-  flex: 0 0 auto;
-  padding: 0 0.65rem;
-  border: 1px solid #d0d7de;
-  border-radius: 6px;
-  background: #ffffff;
-  color: #0969da;
-  font-size: 0.8rem;
-  font-weight: 750;
-}
-
-.gsv-source-back-button:hover {
-  background: #f6f8fa;
-}
-
 .gsv-source-history-pager {
   display: flex;
   align-items: center;
@@ -817,7 +813,9 @@
 }
 
 .gsv-source-diff-lines {
-  overflow: auto;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
 }
 
 .gsv-source-diff-line {
@@ -847,23 +845,6 @@
 }
 
 @media (min-width: 860px) {
-  .gsv-sources {
-    grid-template-columns: minmax(16rem, 21rem) minmax(0, 1fr);
-    align-items: start;
-  }
-
-  .gsv-sources-sidebar,
-  .gsv-source-workspace {
-    height: calc(100dvh - 7rem);
-    max-height: calc(100dvh - 7rem);
-  }
-
-  .gsv-sources-sidebar {
-    position: sticky;
-    top: 5.35rem;
-    overflow: auto;
-  }
-
   .gsv-source-ref-row {
     grid-template-columns: 12rem minmax(0, 1fr);
     align-items: end;

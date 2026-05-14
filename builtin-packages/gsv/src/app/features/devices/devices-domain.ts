@@ -11,6 +11,7 @@ export function filterDevices(devices: DeviceSummary[], scope: DeviceScope, quer
       device.description,
       device.platform,
       device.version,
+      device.ownerUsername ?? "",
       String(device.ownerUid),
     ].some((part) => part.toLowerCase().includes(normalizedQuery));
   });
@@ -59,5 +60,13 @@ export function formatRelativeTime(timestamp: number): string {
 }
 
 export function formatNullableTimestamp(timestamp: number | null): string {
-  return typeof timestamp === "number" ? new Date(timestamp).toLocaleString() : "-";
+  return typeof timestamp === "number" ? formatRelativeTime(timestamp) : "never";
+}
+
+export function formatOwner(device: Pick<DeviceDetail, "ownerUid" | "ownerUsername">): string {
+  return device.ownerUsername || `uid ${device.ownerUid}`;
+}
+
+export function absoluteTimestamp(timestamp: number | null): string | undefined {
+  return typeof timestamp === "number" ? new Date(timestamp).toLocaleString() : undefined;
 }

@@ -2,10 +2,11 @@ import { sectionExists } from "./sections";
 import type { GsvSectionId } from "./types";
 
 export type SourcesRoute = {
-  repo: string;
+  repo?: string | null;
   ref?: string;
   path?: string;
   mode?: "code" | "history";
+  commit?: string;
 };
 
 export type PackagesRouteView = "inventory" | "updates" | "review" | "discover" | "create" | "remotes";
@@ -53,9 +54,10 @@ export function replacePackagesLocation(route: PackagesRoute): void {
 export function pushSourcesLocation(route: SourcesRoute): void {
   const url = new URL(window.location.href);
   url.searchParams.set("section", "sources");
-  url.searchParams.set("repo", route.repo);
+  setOptionalParam(url, "repo", route.repo ?? undefined);
   setOptionalParam(url, "ref", route.ref);
   setOptionalParam(url, "path", route.path && route.path !== "." ? route.path : undefined);
+  setOptionalParam(url, "commit", route.commit);
   if (route.mode && route.mode !== "code") {
     url.searchParams.set("mode", route.mode);
   } else {

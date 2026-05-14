@@ -1,4 +1,5 @@
 import type { ComponentChildren } from "preact";
+import { ActionButton } from "../../components/ui/ActionButton";
 import {
   MCP_TRANSPORT_OPTIONS,
   attentionServerCount,
@@ -70,9 +71,15 @@ export function McpServersSummary({ runtime }: { runtime: McpServersRuntime }) {
             ))}
           </select>
         </label>
-        <button type="submit" class="gsv-action-button" disabled={addDisabled}>
-          {runtime.pendingAction === "mcp:add" ? "Connecting..." : "Connect server"}
-        </button>
+        <ActionButton
+          type="submit"
+          icon="plug"
+          label="Connect server"
+          busyLabel="Connecting"
+          busy={runtime.pendingAction === "mcp:add"}
+          disabled={addDisabled}
+          size="full"
+        />
       </form>
 
       <div class="gsv-mcp-counts">
@@ -163,21 +170,15 @@ export function McpServersDetail({ runtime }: { runtime: McpServersRuntime }) {
           </header>
           {server.state === "authenticating" && server.authUrl ? (
             <div class="gsv-mcp-auth-flow">
-              <button
-                type="button"
-                class="gsv-action-button"
-                onClick={() => runtime.openSignIn(server)}
-              >
-                Continue sign-in
-              </button>
-              <button
-                type="button"
-                class="gsv-action-button"
-                disabled={runtime.pendingAction === refreshAction}
+              <ActionButton icon="external" label="Continue sign-in" size="full" onClick={() => runtime.openSignIn(server)} />
+              <ActionButton
+                icon="refresh"
+                label="Check connection"
+                busyLabel="Checking"
+                busy={runtime.pendingAction === refreshAction}
+                size="full"
                 onClick={() => void runtime.refreshServer(server.serverId)}
-              >
-                {runtime.pendingAction === refreshAction ? "Checking..." : "Check connection"}
-              </button>
+              />
               {runtime.signInOpenedFor === server.serverId ? (
                 <p class="gsv-runtime-meta">Waiting for the browser flow to finish.</p>
               ) : null}
@@ -226,25 +227,26 @@ export function McpServersDetail({ runtime }: { runtime: McpServersRuntime }) {
         <section class="gsv-integration-panel gsv-mcp-actions">
           <p>Connected {formatShortDate(server.createdAt)}. Last refreshed {formatShortDate(server.updatedAt)}.</p>
           <div>
-            <button
-              type="button"
-              class="gsv-action-button"
-              disabled={runtime.pendingAction === refreshAction}
+            <ActionButton
+              icon="refresh"
+              label="Refresh"
+              busyLabel="Refreshing"
+              busy={runtime.pendingAction === refreshAction}
+              size="full"
               onClick={() => void runtime.refreshServer(server.serverId)}
-            >
-              {runtime.pendingAction === refreshAction ? "Refreshing..." : "Refresh"}
-            </button>
-            <button
-              type="button"
-              class="gsv-action-button is-danger"
-              disabled={runtime.pendingAction === removeAction}
+            />
+            <ActionButton
+              icon="trash"
+              label="Remove"
+              busyLabel="Removing"
+              busy={runtime.pendingAction === removeAction}
+              variant="danger"
+              size="full"
               onClick={() => {
                 if (!window.confirm(`Remove MCP server ${server.name}?`)) return;
                 void runtime.removeServer(server.serverId);
               }}
-            >
-              {runtime.pendingAction === removeAction ? "Removing..." : "Remove"}
-            </button>
+            />
           </div>
         </section>
       </div>

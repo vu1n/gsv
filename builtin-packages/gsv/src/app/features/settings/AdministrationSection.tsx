@@ -1,4 +1,5 @@
 import type { GsvBackend } from "../../backend-contract";
+import { ActionButton } from "../../components/ui/ActionButton";
 import { AccessView } from "./AccessAdministration";
 import { SettingsView } from "./SettingsAdministration";
 import type { AdministrationMode } from "./types";
@@ -21,9 +22,14 @@ export function AdministrationSection({
           <h3>{mode === "access" ? "Access" : "Settings"}</h3>
           <p>{mode === "access" ? "Credentials, linked identities, and authorization posture." : "Curated runtime configuration with raw recovery controls."}</p>
         </div>
-        <button class="gsv-mini-button" type="button" disabled={runtime.pendingAction === "load-state"} onClick={() => void runtime.refresh()}>
-          {runtime.pendingAction === "load-state" ? "Refreshing" : "Refresh"}
-        </button>
+        <ActionButton
+          icon="refresh"
+          label="Refresh"
+          busyLabel="Refreshing"
+          busy={runtime.pendingAction === "load-state"}
+          size="icon"
+          onClick={() => void runtime.refresh()}
+        />
       </header>
 
       {runtime.errorText ? <p class="gsv-inline-error">{runtime.errorText}</p> : null}

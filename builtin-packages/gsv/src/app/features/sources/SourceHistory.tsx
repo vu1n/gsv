@@ -1,3 +1,4 @@
+import { ActionButton } from "../../components/ui/ActionButton";
 import {
   diffStatusLabel,
   diffStatusTone,
@@ -51,23 +52,19 @@ function HistoryPager({ runtime }: { runtime: SourcesRuntime }) {
   const pageNumber = page ? Math.floor(page.offset / page.limit) + 1 : 1;
   return (
     <div class="gsv-source-history-pager">
-      <button
-        type="button"
-        class="gsv-mini-button"
+      <ActionButton
+        icon="chevron-left"
+        label="Previous"
         disabled={runtime.historyBusy || !page || page.offset <= 0}
         onClick={() => void runtime.previousCommitPage()}
-      >
-        Previous
-      </button>
+      />
       <span>Page {pageNumber}</span>
-      <button
-        type="button"
-        class="gsv-mini-button"
+      <ActionButton
+        icon="chevron-right"
+        label="Next"
         disabled={runtime.historyBusy || !page?.hasNextPage}
         onClick={() => void runtime.nextCommitPage()}
-      >
-        Next
-      </button>
+      />
     </div>
   );
 }
@@ -78,9 +75,7 @@ function CommitDetailPage({ runtime }: { runtime: SourcesRuntime }) {
   return (
     <article class="gsv-source-commit-detail" aria-label="Commit changes">
       <header>
-        <button type="button" class="gsv-source-back-button" onClick={runtime.closeCommit}>
-          Back to commits
-        </button>
+        <ActionButton icon="arrow-left" label="Commits" onClick={runtime.closeCommit} />
         <div>
           <span class="gsv-kicker">Commit</span>
           <h4>{commit ? firstLine(commit.message) : shortHash(commitHash)}</h4>

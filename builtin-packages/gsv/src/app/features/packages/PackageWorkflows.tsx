@@ -1,4 +1,5 @@
 import { useState } from "preact/hooks";
+import { ActionButton } from "../../components/ui/ActionButton";
 import {
   catalogImportSource,
   catalogPackageCount,
@@ -93,14 +94,14 @@ export function DiscoverPane({
               <h4>Import by source</h4>
               <p>Imported packages stay in the normal inventory and can be reviewed before enablement.</p>
             </div>
-            <button
-              type="button"
-              class="gsv-action-button"
+            <ActionButton
+              icon="external"
+              label="Import"
+              busyLabel="Importing"
+              busy={runtime.pendingAction === "package:import"}
               disabled={busy || !source.trim()}
               onClick={() => void importSource()}
-            >
-              {runtime.pendingAction === "package:import" ? "Importing" : "Import"}
-            </button>
+            />
           </header>
           <div class="gsv-package-filters">
             <label class="gsv-package-search">
@@ -181,25 +182,23 @@ export function DiscoverPane({
                         <span>{entry.description || formatRepoDisplay(entry.source.repo, viewerUsername)}</span>
                         <div class="gsv-package-actions">
                           {installed ? (
-                            <button
-                              type="button"
-                              class="gsv-action-button"
+                            <ActionButton
+                              icon="external"
+                              label="Inspect"
                               onClick={() => {
                                 runtime.selectPackage(installed.packageId);
                                 runtime.setView(installed.reviewPending ? "review" : installed.updateAvailable ? "updates" : "inventory");
                               }}
-                            >
-                              Inspect
-                            </button>
+                            />
                           ) : null}
-                          <button
-                            type="button"
-                            class="gsv-action-button"
+                          <ActionButton
+                            icon="external"
+                            label={installed ? "Re-import" : "Import"}
+                            busyLabel="Importing"
+                            busy={runtime.pendingAction === actionId}
                             disabled={busy}
                             onClick={() => void importCatalogEntry(selectedCatalog, entry)}
-                          >
-                            {runtime.pendingAction === actionId ? "Importing" : installed ? "Re-import" : "Import"}
-                          </button>
+                          />
                         </div>
                       </div>
                     );
@@ -251,14 +250,14 @@ export function CreatePackagePane({ runtime }: { runtime: PackagesRuntime }) {
           <h3>Create package source</h3>
           <p>Scaffold a user-owned package source, install it, and keep later source work in Sources.</p>
         </div>
-        <button
-          type="button"
-          class="gsv-action-button"
+        <ActionButton
+          icon="package"
+          label="Create package"
+          busyLabel="Creating"
+          busy={runtime.pendingAction === "package:create"}
           disabled={busy || !form.repo.trim()}
           onClick={() => void createPackage()}
-        >
-          {runtime.pendingAction === "package:create" ? "Creating" : "Create package"}
-        </button>
+        />
       </header>
 
       <div class="gsv-package-detail-body">
@@ -332,14 +331,13 @@ export function CreatePackagePane({ runtime }: { runtime: PackagesRuntime }) {
           </header>
           <div class="gsv-package-actions">
             {(["web-ui", "command"] as PackageCreateTemplate[]).map((template) => (
-              <button
+              <ActionButton
                 key={template}
-                type="button"
-                class={`gsv-action-button${form.template === template ? " is-active" : ""}`}
+                icon={template === "web-ui" ? "package" : "terminal"}
+                label={template === "web-ui" ? "App UI" : "CLI command"}
+                class={form.template === template ? "is-active" : ""}
                 onClick={() => patchForm({ template })}
-              >
-                {template === "web-ui" ? "App UI" : "CLI command"}
-              </button>
+              />
             ))}
           </div>
           {form.template === "command" ? (
@@ -412,14 +410,14 @@ export function CatalogRemotesPane({
               <h4>Add remote catalog</h4>
               <p>Use a stable name and the base URL of the publishing GSV instance.</p>
             </div>
-            <button
-              type="button"
-              class="gsv-action-button"
+            <ActionButton
+              icon="external"
+              label="Add remote"
+              busyLabel="Adding"
+              busy={runtime.pendingAction === "catalog-remote:add"}
               disabled={busy || !name.trim() || !baseUrl.trim()}
               onClick={() => void addRemote()}
-            >
-              {runtime.pendingAction === "catalog-remote:add" ? "Adding" : "Add remote"}
-            </button>
+            />
           </header>
           <div class="gsv-package-filters">
             <label class="gsv-package-search">
@@ -449,21 +447,20 @@ export function CatalogRemotesPane({
                   <strong>{catalog.name}</strong>
                   <span>{catalog.baseUrl || "No base URL"} - {catalog.packages.length} package{catalog.packages.length === 1 ? "" : "s"}</span>
                   <div class="gsv-package-actions">
-                    <button
-                      type="button"
-                      class="gsv-action-button"
+                    <ActionButton
+                      icon="external"
+                      label="Catalog"
                       onClick={() => onOpenCatalog(catalog.name)}
-                    >
-                      Open catalog
-                    </button>
-                    <button
-                      type="button"
-                      class="gsv-action-button is-danger"
+                    />
+                    <ActionButton
+                      icon="trash"
+                      label="Remove"
+                      busyLabel="Removing"
+                      busy={runtime.pendingAction === `catalog-remote:remove:${catalog.name}`}
+                      variant="danger"
                       disabled={busy}
                       onClick={() => void runtime.removeCatalogRemote({ name: catalog.name })}
-                    >
-                      {runtime.pendingAction === `catalog-remote:remove:${catalog.name}` ? "Removing" : "Remove"}
-                    </button>
+                    />
                   </div>
                 </div>
               ))}

@@ -1,3 +1,4 @@
+import { ActionButton } from "../../components/ui/ActionButton";
 import { repoKindLabel, repoKindTone } from "./sources-domain";
 import type { SourceRepoRecord } from "./types";
 import type { SourcesRuntime } from "./useSources";
@@ -11,14 +12,13 @@ export function RepoSidebar({ runtime }: { runtime: SourcesRuntime }) {
           <span class="gsv-kicker">Sources</span>
           <h3>Repositories</h3>
         </div>
-        <button
-          type="button"
-          class="gsv-mini-button"
+        <ActionButton
+          icon="refresh"
+          label="Refresh"
+          size="icon"
           disabled={runtime.loading || runtime.pendingAction !== null}
           onClick={() => void runtime.refresh()}
-        >
-          Refresh
-        </button>
+        />
       </header>
 
       <label class="gsv-source-filter">
@@ -111,9 +111,16 @@ function CreateRepoForm({ runtime }: { runtime: SourcesRuntime }) {
               }}
             />
           </label>
-          <button type="submit" class="gsv-action-button is-primary is-wide" disabled={disabled}>
-            {runtime.pendingAction === "source:create" ? "Creating" : "Create repository"}
-          </button>
+          <ActionButton
+            class="is-wide"
+            icon="package"
+            label="Create repository"
+            busyLabel="Creating"
+            busy={runtime.pendingAction === "source:create"}
+            variant="primary"
+            disabled={disabled}
+            type="submit"
+          />
         </div>
       </details>
     </form>

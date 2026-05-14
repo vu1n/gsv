@@ -132,6 +132,7 @@ export type LoadSourcesStateArgs = {
   repo?: string;
   ref?: string;
   path?: string;
+  selectFirst?: boolean;
   commitLimit?: number;
   commitOffset?: number;
 };

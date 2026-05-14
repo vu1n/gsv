@@ -1,5 +1,7 @@
 import { openApp } from "@gsv/package/host";
-import { formatTimestampMs } from "../../utils/format";
+import { ActionButton } from "../../components/ui/ActionButton";
+import { Icon, type IconName } from "../../components/ui/Icon";
+import { formatRelativeTime } from "../../utils/format";
 import {
   buildPermissionSummary,
   formatScope,
@@ -34,7 +36,6 @@ export function PackageDetail({
   }
 
   const surfaces = packageSurfaceCounts(pkg);
-  const detail = state?.packageDetail;
   const viewerUsername = state?.viewer.username ?? "";
   const packageId = pkg.packageId;
   const packageRepo = pkg.source.repo;
@@ -78,48 +79,25 @@ export function PackageDetail({
               <h4>Source</h4>
               <p>{sourceSummary(pkg, viewerUsername)}</p>
             </div>
-            <button
-              type="button"
-              class="gsv-mini-button"
+            <ActionButton
+              icon="external"
+              label="Sources"
               onClick={() => onOpenSources?.(pkg.source.repo, pkg.source.ref, packageSourcePath)}
               disabled={!onOpenSources}
-            >
-              Open in Sources
-            </button>
+            />
           </header>
-          <div class="gsv-summary-grid">
-            <article class="gsv-info-box">
-              <span>Installed</span>
-              <strong>{shortCommit(pkg.source.resolvedCommit)}</strong>
-            </article>
-            <article class="gsv-info-box">
-              <span>Current head</span>
-              <strong>{shortCommit(pkg.currentHead)}</strong>
-            </article>
-            <article class="gsv-info-box">
-              <span>Updated</span>
-              <strong>{formatTimestampMs(pkg.updatedAt)}</strong>
-            </article>
-            <article class="gsv-info-box">
-              <span>Public</span>
-              <strong>{pkg.source.public ? "Public" : "Private"}</strong>
-            </article>
+          <div class="gsv-package-source-compact" aria-label="Source posture">
+            <SourceFact label="Installed" value={shortCommit(pkg.source.resolvedCommit)} />
+            <SourceFact label="Head" value={shortCommit(pkg.currentHead)} tone={pkg.updateAvailable ? "warning" : "good"} />
+            <SourceFact label="Updated" value={formatRelativeTime(pkg.updatedAt)} />
+            <SourceFact label="Visibility" value={pkg.source.public ? "Public" : "Private"} />
           </div>
-        </section>
-
-        <section class="gsv-package-panel">
-          <header>
-            <div>
-              <h4>Surfaces</h4>
-              <p>{surfaces.total} declared package surfaces.</p>
-            </div>
-          </header>
-          <div class="gsv-package-surface-list">
-            <SurfaceRow label="Apps" value={surfaces.ui} />
-            <SurfaceRow label="Commands" value={surfaces.command} />
-            <SurfaceRow label="RPC" value={surfaces.rpc} />
-            <SurfaceRow label="HTTP" value={surfaces.http} />
-            <SurfaceRow label="Profiles" value={surfaces.profile} />
+          <div class="gsv-package-surface-chips" aria-label={`${surfaces.total} declared package surfaces`}>
+            <SurfaceChip icon="package" label="Apps" value={surfaces.ui} />
+            <SurfaceChip icon="terminal" label="Commands" value={surfaces.command} />
+            <SurfaceChip icon="plug" label="RPC" value={surfaces.rpc} />
+            <SurfaceChip icon="external" label="HTTP" value={surfaces.http} />
+            <SurfaceChip icon="user" label="Profiles" value={surfaces.profile} />
           </div>
         </section>
 
@@ -145,81 +123,80 @@ export function PackageDetail({
             </div>
           </header>
           <div class="gsv-package-actions">
-            <button
-              type="button"
-              class="gsv-action-button"
+            <ActionButton
+              icon="shield"
+              label="Review in Chat"
+              busyLabel="Opening review"
+              busy={runtime.pendingAction === reviewAction}
               disabled={busy}
               onClick={() => void openReview()}
-            >
-              {runtime.pendingAction === reviewAction ? "Opening review" : "Review in Chat"}
-            </button>
+            />
             {pkg.reviewPending ? (
-              <button
-                type="button"
-                class="gsv-action-button"
+              <ActionButton
+                icon="check"
+                label="Approve review"
+                busyLabel="Approving"
+                busy={runtime.pendingAction === approveAction}
                 disabled={busy || !pkg.canMutate}
                 onClick={() => void runtime.approvePackageReview(pkg.packageId)}
-              >
-                {runtime.pendingAction === approveAction ? "Approving" : "Approve review"}
-              </button>
+              />
             ) : pkg.enabled ? (
-              <button
-                type="button"
-                class="gsv-action-button is-danger"
+              <ActionButton
+                icon="lock"
+                label="Disable"
+                busyLabel="Disabling"
+                busy={runtime.pendingAction === disableAction}
+                variant="danger"
                 disabled={busy || !pkg.canMutate || disableBlocked}
                 title={disableBlocked ? "The GSV console is required and cannot be disabled." : undefined}
                 onClick={() => void runtime.disablePackage(pkg.packageId)}
-              >
-                {runtime.pendingAction === disableAction ? "Disabling" : "Disable"}
-              </button>
+              />
             ) : (
-              <button
-                type="button"
-                class="gsv-action-button"
+              <ActionButton
+                icon="unlock"
+                label="Enable"
+                busyLabel="Enabling"
+                busy={runtime.pendingAction === enableAction}
                 disabled={busy || !pkg.canMutate}
                 onClick={() => void runtime.enablePackage(pkg.packageId)}
-              >
-                {runtime.pendingAction === enableAction ? "Enabling" : "Enable"}
-              </button>
+              />
             )}
-            <button
-              type="button"
-              class="gsv-action-button"
+            <ActionButton
+              icon="refresh"
+              label="Refresh"
+              busyLabel="Refreshing"
+              busy={runtime.pendingAction === refreshAction}
               disabled={busy || !pkg.canMutate}
               onClick={() => void runtime.refreshPackage(pkg.packageId)}
-            >
-              {runtime.pendingAction === refreshAction ? "Refreshing" : "Refresh package"}
-            </button>
-            <button
-              type="button"
-              class="gsv-action-button"
+            />
+            <ActionButton
+              icon="git-commit"
+              label="Pull upstream"
+              busyLabel="Pulling"
+              busy={runtime.pendingAction === pullAction}
               disabled={busy || !pkg.canPullSource}
               onClick={() => void runtime.pullPackage(pkg.packageId)}
-            >
-              {runtime.pendingAction === pullAction ? "Pulling" : "Pull upstream"}
-            </button>
-            <button
-              type="button"
-              class="gsv-action-button"
+            />
+            <ActionButton
+              icon="refresh"
+              label="Source refs"
+              busyLabel="Pulling source"
+              busy={runtime.pendingAction === pullSourceAction}
               disabled={busy || !pkg.canPullSource}
               onClick={() => void runtime.pullPackageSource(pkg.source.repo)}
-            >
-              {runtime.pendingAction === pullSourceAction ? "Pulling source" : "Pull source refs"}
-            </button>
+            />
             {!pkg.isBuiltin ? (
-              <button
-                type="button"
-                class="gsv-action-button"
+              <ActionButton
+                icon={pkg.source.public ? "lock" : "external"}
+                label={pkg.source.public ? "Make private" : "Publish"}
+                busyLabel="Updating visibility"
+                busy={runtime.pendingAction === publicAction}
                 disabled={busy || !pkg.canChangeVisibility}
                 onClick={() => void runtime.setPackagePublic({
                   packageId: pkg.packageId,
                   public: !pkg.source.public,
                 })}
-              >
-                {runtime.pendingAction === publicAction
-                  ? "Updating visibility"
-                  : pkg.source.public ? "Make private" : "Publish"}
-              </button>
+              />
             ) : null}
           </div>
           <div class="gsv-package-permission-list">
@@ -229,35 +206,35 @@ export function PackageDetail({
           </div>
         </section>
 
-        {detail?.commits.length ? (
-          <section class="gsv-package-panel">
-            <header>
-              <div>
-                <h4>Recent commits</h4>
-                <p>{detail.refs.activeRef}</p>
-              </div>
-            </header>
-            <div class="gsv-package-commit-list">
-              {detail.commits.slice(0, 6).map((commit) => (
-                <div class="gsv-package-commit-row" key={commit.hash}>
-                  <strong>{commit.message || shortCommit(commit.hash)}</strong>
-                  <span>{shortCommit(commit.hash)} by {commit.author || "unknown"} on {formatTimestampMs(commit.commitTime)}</span>
-                </div>
-              ))}
-            </div>
-          </section>
-        ) : null}
       </div>
     </section>
   );
 }
 
-function SurfaceRow({ label, value }: { label: string; value: number }) {
+function SourceFact({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: "good" | "warning";
+}) {
   return (
-    <div class="gsv-package-surface-row">
-      <strong>{label}</strong>
-      <span>{value}</span>
-    </div>
+    <span class={`gsv-package-source-fact${tone ? ` is-${tone}` : ""}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </span>
+  );
+}
+
+function SurfaceChip({ icon, label, value }: { icon: IconName; label: string; value: number }) {
+  return (
+    <span class="gsv-package-surface-chip" title={`${value} ${label.toLowerCase()}`}>
+      <Icon name={icon} />
+      <strong>{value}</strong>
+      <span>{label}</span>
+    </span>
   );
 }
 

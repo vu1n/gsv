@@ -3,11 +3,12 @@ import { useEffect, useMemo, useState } from "preact/hooks";
 import type { GsvBackend } from "./backend-contract";
 import { DevicesSection } from "./features/devices/DevicesSection";
 import { IntegrationsSection } from "./features/integrations/IntegrationsSection";
+import { OverviewSection } from "./features/overview/OverviewSection";
 import { PackagesSection } from "./features/packages/PackagesSection";
 import { RuntimeSection } from "./features/runtime/RuntimeSection";
 import { AdministrationSection } from "./features/settings/AdministrationSection";
 import { SourcesSection } from "./features/sources/SourcesSection";
-import { ATTENTION_ITEMS, GROUPS, findSection } from "./navigation/sections";
+import { GROUPS, findSection } from "./navigation/sections";
 import {
   pushPackagesLocation,
   pushSectionLocation,
@@ -29,6 +30,11 @@ export function App({ backend }: { backend: GsvBackend }) {
   }, []);
 
   function navigate(sectionId: GsvSectionId): void {
+    if (sectionId === "sources") {
+      pushSourcesLocation({ repo: null });
+      setActiveSectionId(sectionId);
+      return;
+    }
     pushSectionLocation(sectionId);
     setActiveSectionId(sectionId);
   }
@@ -68,7 +74,7 @@ export function App({ backend }: { backend: GsvBackend }) {
         <MobileSectionTabs group={activeGroup} activeSectionId={activeSectionId} onNavigate={navigate} />
         <main class="gsv-main">
           {activeSection.id === "overview" ? (
-            <Overview onNavigate={navigate} onOpenHandoff={openHandoff} />
+            <OverviewSection backend={backend} onNavigate={navigate} onOpenPackage={openPackage} />
           ) : activeSection.id === "runtime" ? (
             <RuntimeSection backend={backend} />
           ) : activeSection.id === "devices" ? (
@@ -172,69 +178,6 @@ function MobileSectionTabs({
         );
       })}
     </nav>
-  );
-}
-
-function Overview({
-  onNavigate,
-  onOpenHandoff,
-}: {
-  onNavigate: (sectionId: GsvSectionId) => void;
-  onOpenHandoff: (target: string, route?: string) => void;
-}) {
-  const overview = findSection("overview");
-
-  return (
-    <section class="gsv-overview">
-      <div class="gsv-section-intro">
-        <span class="gsv-kicker">Attention inbox</span>
-        <h3>{overview.summary}</h3>
-      </div>
-
-      <div class="gsv-attention-list" aria-label="Attention destinations">
-        {ATTENTION_ITEMS.map((item) => {
-          const section = findSection(item.sectionId);
-          return (
-            <button
-              class="gsv-attention-row"
-              key={item.label}
-              type="button"
-              onClick={() => onNavigate(item.sectionId)}
-            >
-              <StatusMark tone={item.tone} />
-              <span class="gsv-row-copy">
-                <strong>{item.label}</strong>
-                <span>{item.description}</span>
-              </span>
-              <span class="gsv-row-target">{section.label}</span>
-            </button>
-          );
-        })}
-      </div>
-
-      <section class="gsv-handoff-panel" aria-label="Console handoffs">
-        <header>
-          <span class="gsv-kicker">Quick paths</span>
-          <h3>Open related surfaces</h3>
-        </header>
-        <div class="gsv-handoff-list">
-          {overview.handoffs.map((handoff) => (
-            <button
-              class="gsv-handoff-row"
-              key={handoff.label}
-              type="button"
-              onClick={() => openHandoffTarget(handoff, onNavigate, onOpenHandoff)}
-            >
-              <span>
-                <strong>{handoff.label}</strong>
-                <span>{handoff.description}</span>
-              </span>
-              <span class="gsv-arrow" aria-hidden="true">&gt;</span>
-            </button>
-          ))}
-        </div>
-      </section>
-    </section>
   );
 }
 

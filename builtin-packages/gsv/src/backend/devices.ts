@@ -139,6 +139,9 @@ function normalizeDeviceSummary(device: DeviceSummary): DeviceSummary {
   return {
     deviceId: device.deviceId,
     ownerUid: device.ownerUid,
+    ownerUsername: typeof device.ownerUsername === "string" && device.ownerUsername.trim()
+      ? device.ownerUsername.trim()
+      : null,
     description: device.description ?? "",
     platform: device.platform,
     version: device.version,

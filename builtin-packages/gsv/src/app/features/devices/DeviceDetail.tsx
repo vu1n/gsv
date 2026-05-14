@@ -1,6 +1,16 @@
 import { openApp } from "@gsv/package/host";
 import { useEffect, useState } from "preact/hooks";
-import { formatNullableTimestamp, groupCapabilities, hasFiles, hasShell, deviceHealthSummary } from "./devices-domain";
+import { ActionButton } from "../../components/ui/ActionButton";
+import { Icon, type IconName } from "../../components/ui/Icon";
+import {
+  absoluteTimestamp,
+  formatNullableTimestamp,
+  formatOwner,
+  groupCapabilities,
+  hasFiles,
+  hasShell,
+  deviceHealthSummary,
+} from "./devices-domain";
 import type { DeviceDetail, DeviceToken, DevicesTabId, DevicesViewer } from "./types";
 
 export function DeviceDetailPanel({
@@ -46,17 +56,23 @@ export function DeviceDetailPanel({
           <p>{device.online ? "Online and ready for routing." : "Offline. Review health and access before routing work here."}</p>
         </div>
         <div class="gsv-device-actions">
-          <button class="gsv-mini-button gsv-device-compact-back" type="button" onClick={onBackToFleet}>
-            Back to fleet
-          </button>
-          <button class="gsv-mini-button" type="button" disabled={!hasFiles(device)} onClick={() => openApp({ target: "files", payload: { device: device.deviceId, path: "." } })}>
-            Files
-          </button>
-          <button class="gsv-mini-button" type="button" disabled={!hasShell(device)} onClick={() => openApp({ target: "shell", payload: { device: device.deviceId, cwd: "." } })}>
-            Shell
-          </button>
+          <ActionButton class="gsv-device-compact-back" icon="arrow-left" label="Fleet" onClick={onBackToFleet} />
+          <ActionButton
+            icon="folder"
+            label="Files"
+            disabled={!hasFiles(device)}
+            title={hasFiles(device) ? "Open this device in Files." : "Files capability is unavailable on this device."}
+            onClick={() => openApp({ target: "files", payload: { device: device.deviceId, path: "." } })}
+          />
+          <ActionButton
+            icon="terminal"
+            label="Shell"
+            disabled={!hasShell(device)}
+            title={hasShell(device) ? "Open this device in Shell." : "Shell capability is unavailable on this device."}
+            onClick={() => openApp({ target: "shell", payload: { device: device.deviceId, cwd: "." } })}
+          />
           {viewer?.canManageTokens ? (
-            <button class="gsv-mini-button" type="button" onClick={() => onProvision(device.deviceId)}>Add access</button>
+            <ActionButton icon="key" label="Add access" onClick={() => onProvision(device.deviceId)} />
           ) : null}
         </div>
       </header>
@@ -123,21 +139,26 @@ function DeviceOverview({
         </label>
         <div class="gsv-device-note-actions">
           <span>{description.length}/500</span>
-          <button class="gsv-mini-button" type="button" disabled={!canEdit || pending || !changed} onClick={() => onUpdateDescription(description)}>
-            {pending ? "Saving" : "Save note"}
-          </button>
+          <ActionButton
+            icon="check"
+            label="Save note"
+            busyLabel="Saving"
+            busy={pending}
+            disabled={!canEdit || !changed}
+            onClick={() => onUpdateDescription(description)}
+          />
         </div>
       </div>
 
-      <div class="gsv-summary-grid">
-        <Info label="Status" value={device.online ? "Ready" : "Offline"} />
-        <Info label="Platform" value={device.platform || "Unknown"} />
-        <Info label="Version" value={device.version || "Unknown"} />
-        <Info label="Owner" value={`uid ${device.ownerUid}`} />
-        <Info label="First seen" value={formatNullableTimestamp(device.firstSeenAt)} />
-        <Info label="Last seen" value={formatNullableTimestamp(device.lastSeenAt)} />
-        <Info label="Shell" value={hasShell(device) ? "Available" : "Unavailable"} />
-        <Info label="Files" value={hasFiles(device) ? "Available" : "Unavailable"} />
+      <div class="gsv-device-facts" aria-label="Device overview">
+        <FactChip icon="activity" label="Status" value={device.online ? "Ready" : "Offline"} tone={device.online ? "good" : "warning"} />
+        <FactChip icon="server" label="Platform" value={device.platform || "Unknown"} />
+        <FactChip icon="code" label="Version" value={device.version || "Unknown"} />
+        <FactChip icon="user" label="Owner" value={formatOwner(device)} />
+        <FactChip icon="clock" label="First seen" value={formatNullableTimestamp(device.firstSeenAt)} title={absoluteTimestamp(device.firstSeenAt)} />
+        <FactChip icon="clock" label="Last seen" value={formatNullableTimestamp(device.lastSeenAt)} title={absoluteTimestamp(device.lastSeenAt)} />
+        <CapabilityIndicator icon="terminal" label="Shell" available={hasShell(device)} />
+        <CapabilityIndicator icon="folder" label="Files" available={hasFiles(device)} />
       </div>
     </section>
   );
@@ -181,7 +202,7 @@ function DeviceAccess({
     <section class="gsv-device-tab">
       <div class="gsv-device-access-head">
         <span>{tokens.length} node token{tokens.length === 1 ? "" : "s"}</span>
-        {viewer?.canManageTokens ? <button class="gsv-mini-button" type="button" onClick={() => onProvision(device.deviceId)}>Issue token</button> : null}
+        {viewer?.canManageTokens ? <ActionButton icon="key" label="Issue token" onClick={() => onProvision(device.deviceId)} /> : null}
       </div>
       <div class="gsv-token-list">
         {tokens.length === 0 ? (
@@ -194,14 +215,18 @@ function DeviceAccess({
               <span class="gsv-row-copy">
                 <strong>{token.tokenPrefix}</strong>
                 <span>{token.label || device.deviceId} / {revoked ? "revoked" : "active"}</span>
-                <span>created {formatNullableTimestamp(token.createdAt)}</span>
-                <span>last used {formatNullableTimestamp(token.lastUsedAt)}</span>
-                <span>expires {formatNullableTimestamp(token.expiresAt)}</span>
+                <span title={absoluteTimestamp(token.createdAt)}>created {formatNullableTimestamp(token.createdAt)}</span>
+                <span title={absoluteTimestamp(token.lastUsedAt)}>last used {formatNullableTimestamp(token.lastUsedAt)}</span>
+                <span title={absoluteTimestamp(token.expiresAt)}>expires {formatNullableTimestamp(token.expiresAt)}</span>
               </span>
               {viewer?.canManageTokens && !revoked ? (
-                <button class="gsv-mini-button" type="button" disabled={pendingAction === `revoke:${token.tokenId}`} onClick={() => onRevoke(token.tokenId)}>
-                  Revoke
-                </button>
+                <ActionButton
+                  icon="trash"
+                  label="Revoke"
+                  variant="danger"
+                  disabled={pendingAction === `revoke:${token.tokenId}`}
+                  onClick={() => onRevoke(token.tokenId)}
+                />
               ) : null}
             </article>
           );
@@ -219,20 +244,54 @@ function DeviceHealth({ device }: { device: DeviceDetail }) {
         <span>{deviceHealthSummary(device)}</span>
       </div>
       <dl class="gsv-detail-list">
-        <div><dt>Last heartbeat</dt><dd>{new Date(device.lastSeenAt).toLocaleString()}</dd></div>
-        <div><dt>Connected</dt><dd>{formatNullableTimestamp(device.connectedAt)}</dd></div>
-        <div><dt>Disconnected</dt><dd>{formatNullableTimestamp(device.disconnectedAt)}</dd></div>
+        <div><dt>Last heartbeat</dt><dd title={absoluteTimestamp(device.lastSeenAt)}>{formatNullableTimestamp(device.lastSeenAt)}</dd></div>
+        <div><dt>Connected</dt><dd title={absoluteTimestamp(device.connectedAt)}>{formatNullableTimestamp(device.connectedAt)}</dd></div>
+        <div><dt>Disconnected</dt><dd title={absoluteTimestamp(device.disconnectedAt)}>{formatNullableTimestamp(device.disconnectedAt)}</dd></div>
         <div><dt>Capabilities</dt><dd>{device.implements.length}</dd></div>
       </dl>
     </section>
   );
 }
 
-function Info({ label, value }: { label: string; value: string }) {
+function FactChip({
+  icon,
+  label,
+  value,
+  tone,
+  title,
+}: {
+  icon: IconName;
+  label: string;
+  value: string;
+  tone?: "good" | "warning";
+  title?: string;
+}) {
   return (
-    <div class="gsv-info-box">
+    <span class={`gsv-device-fact${tone ? ` is-${tone}` : ""}`} title={title}>
+      <Icon name={icon} />
       <span>{label}</span>
       <strong>{value}</strong>
-    </div>
+    </span>
+  );
+}
+
+function CapabilityIndicator({
+  icon,
+  label,
+  available,
+}: {
+  icon: IconName;
+  label: string;
+  available: boolean;
+}) {
+  return (
+    <span
+      class={`gsv-device-capability-indicator is-${available ? "available" : "unavailable"}`}
+      title={`${label} capability is ${available ? "available" : "unavailable"} on this device.`}
+    >
+      <Icon name={icon} />
+      <span>{label}</span>
+      <strong>{available ? "Yes" : "No"}</strong>
+    </span>
   );
 }

@@ -1,6 +1,7 @@
 import qrcode from "qrcode-generator";
 import { useMemo, useState } from "preact/hooks";
 import type { GsvBackend } from "../../backend-contract";
+import { ActionButton } from "../../components/ui/ActionButton";
 import { formatTimestampMs } from "../../utils/format";
 import {
   ADAPTERS,
@@ -47,14 +48,7 @@ export function IntegrationsSection({ backend }: { backend: GsvBackend }) {
             <span class="gsv-kicker">Extensions</span>
             <h3>Integrations</h3>
           </div>
-          <button
-            type="button"
-            class="gsv-mini-button"
-            onClick={refreshActiveKind}
-            disabled={busy}
-          >
-            Refresh
-          </button>
+          <ActionButton icon="refresh" label="Refresh" size="icon" busy={busy} onClick={refreshActiveKind} />
         </header>
 
         <div class="gsv-integration-kind-list">
@@ -127,14 +121,13 @@ function MessageAdapterDetail({ runtime }: { runtime: ReturnType<typeof useMessa
           <p>{runtime.adapterMeta.detail}</p>
         </div>
         {runtime.currentAccount ? (
-          <button
-            type="button"
-            class="gsv-mini-button is-danger"
-            onClick={() => void runtime.disconnectCurrentAccount()}
+          <ActionButton
+            icon="x"
+            label="Disconnect"
+            variant="danger"
             disabled={runtime.busy}
-          >
-            Disconnect
-          </button>
+            onClick={() => void runtime.disconnectCurrentAccount()}
+          />
         ) : null}
       </header>
 
@@ -287,9 +280,13 @@ function ConnectAccountPanel({ runtime }: { runtime: ReturnType<typeof useMessag
             </label>
           )}
 
-          <button type="submit" class="gsv-action-button" disabled={runtime.busy}>
-            {runtime.selectedAdapter === "whatsapp" ? "Open pairing flow" : "Connect bot"}
-          </button>
+          <ActionButton
+            icon="plug"
+            label={runtime.selectedAdapter === "whatsapp" ? "Pair" : "Connect"}
+            busyLabel="Connecting"
+            busy={runtime.busy}
+            type="submit"
+          />
         </form>
       </section>
 

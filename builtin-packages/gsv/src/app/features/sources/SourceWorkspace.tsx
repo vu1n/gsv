@@ -1,3 +1,4 @@
+import { ActionButton } from "../../components/ui/ActionButton";
 import type { PackagesRouteView } from "../../navigation/route-state";
 import { formatRelativeTime } from "../../utils/format";
 import { SourceCodePane } from "./SourceCodeBrowser";
@@ -18,9 +19,12 @@ export function RepoWorkspace({
   if (!repo) {
     return (
       <section class="gsv-source-workspace">
+        <header class="gsv-source-repo-head">
+          <ActionButton icon="arrow-left" label="Repositories" onClick={() => void runtime.showRepositoryList()} />
+        </header>
         <div class="gsv-empty-state">
-          <h3>No repository selected</h3>
-          <p>Visible ripgit repositories will appear here when the gateway knows about them.</p>
+          <h3>{runtime.loading ? "Loading repository" : "Repository not found"}</h3>
+          <p>{runtime.loading ? "Opening the requested source repository." : "Return to the repository list and choose another source."}</p>
         </div>
       </section>
     );
@@ -38,6 +42,7 @@ export function RepoWorkspace({
     <section class="gsv-source-workspace" aria-label={`${repo.repo} source repository`}>
       <header class="gsv-source-repo-head">
         <div class="gsv-source-repo-identity">
+          <ActionButton icon="arrow-left" label="Repositories" onClick={() => void runtime.showRepositoryList()} />
           <span class="gsv-source-repo-icon"><SourceIcon name="repo" /></span>
           <div>
             <span class="gsv-kicker">{repoKindLabel(repo.kind)}</span>
@@ -46,22 +51,22 @@ export function RepoWorkspace({
           </div>
         </div>
         <div class="gsv-source-actions">
-          <button
-            type="button"
-            class="gsv-action-button"
+          <ActionButton
+            icon="refresh"
+            label="Pull"
+            busyLabel="Pulling"
+            busy={runtime.pendingAction === pullAction}
             disabled={!repo.writable || runtime.pendingAction !== null}
             onClick={() => void runtime.pullRepo()}
-          >
-            {runtime.pendingAction === pullAction ? "Pulling" : "Pull upstream"}
-          </button>
-          <button
-            type="button"
-            class="gsv-action-button"
+          />
+          <ActionButton
+            icon={repo.public ? "lock" : "external"}
+            label={repo.public ? "Private" : "Publish"}
+            busyLabel="Updating"
+            busy={runtime.pendingAction === publicAction}
             disabled={!repo.writable || runtime.pendingAction !== null}
             onClick={() => void runtime.setRepoPublic(!repo.public)}
-          >
-            {runtime.pendingAction === publicAction ? "Updating" : repo.public ? "Make private" : "Publish"}
-          </button>
+          />
         </div>
       </header>
 

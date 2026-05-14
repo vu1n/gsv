@@ -22,6 +22,14 @@ export type CreateRepoForm = {
   description: string;
 };
 
+type SourcesLocation = {
+  repo: string | null;
+  ref: string;
+  path: string;
+  mode: SourceMode;
+  commit: string | null;
+};
+
 export type SourcesRuntime = {
   state: SourcesState | null;
   loading: boolean;
@@ -34,6 +42,7 @@ export type SourcesRuntime = {
   setMode(mode: SourceMode): void;
   path: string;
   ref: string;
+  repositoryRoute: string | null;
   selectedRepo: SourceRepoRecord | null;
   visibleRepos: SourceRepoRecord[];
   searchQuery: string;
@@ -50,6 +59,7 @@ export type SourcesRuntime = {
   createForm: CreateRepoForm;
   setCreateForm(form: CreateRepoForm | ((current: CreateRepoForm) => CreateRepoForm)): void;
   refresh(): Promise<void>;
+  showRepositoryList(): Promise<void>;
   selectRepo(repo: string): Promise<void>;
   selectRef(ref: string): Promise<void>;
   openPath(path: string): Promise<void>;
@@ -65,20 +75,21 @@ export type SourcesRuntime = {
 };
 
 export function useSources(backend: GsvBackend): SourcesRuntime {
+  const initialRoute = readSourcesLocation();
   const [state, setState] = useState<SourcesState | null>(null);
   const [loading, setLoading] = useState(true);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [mode, setModeState] = useState<SourceMode>(readModeFromLocation);
-  const [repo, setRepo] = useState<string | null>(readRepoFromLocation);
-  const [ref, setRef] = useState(readRefFromLocation);
-  const [path, setPath] = useState(readPathFromLocation);
+  const [mode, setModeState] = useState<SourceMode>(initialRoute.mode);
+  const [repo, setRepo] = useState<string | null>(initialRoute.repo);
+  const [ref, setRef] = useState(initialRoute.ref);
+  const [path, setPath] = useState(initialRoute.path);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchBusy, setSearchBusy] = useState(false);
   const [searchResult, setSearchResult] = useState<SourceSearchResult | null>(null);
-  const [selectedCommitHash, setSelectedCommitHash] = useState<string | null>(null);
+  const [selectedCommitHash, setSelectedCommitHash] = useState<string | null>(initialRoute.commit);
   const [historyBusy, setHistoryBusy] = useState(false);
   const [diffBusy, setDiffBusy] = useState(false);
   const [diffResult, setDiffResult] = useState<SourceDiffResult | null>(null);
@@ -102,11 +113,31 @@ export function useSources(backend: GsvBackend): SourcesRuntime {
   );
 
   useEffect(() => {
-    void refresh();
+    void loadLocation(readSourcesLocation());
+    const onPopState = () => {
+      void loadLocation(readSourcesLocation());
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
   }, []);
+
+  async function loadLocation(route: SourcesLocation): Promise<void> {
+    setRepo(route.repo);
+    setRef(route.ref);
+    setPath(route.path);
+    setModeState(route.mode);
+    setSearchResult(null);
+    await refresh({
+      repo: route.repo,
+      ref: route.ref,
+      path: route.path,
+      mode: route.mode,
+    }, { commitHash: route.commit });
+  }
 
   async function refresh(
     overrides: { repo?: string | null; ref?: string; path?: string; mode?: SourceMode } = {},
+    options: { commitHash?: string | null } = {},
   ): Promise<void> {
     setLoading(true);
     setError(null);
@@ -114,6 +145,7 @@ export function useSources(backend: GsvBackend): SourcesRuntime {
     const nextRef = overrides.ref !== undefined ? overrides.ref : ref;
     const nextPath = overrides.path !== undefined ? overrides.path : path;
     const nextMode = overrides.mode ?? mode;
+    const nextCommitHash = options.commitHash ?? null;
     try {
       const nextState = await backend.loadSourcesState({
         repo: nextRepo ?? undefined,
@@ -127,12 +159,19 @@ export function useSources(backend: GsvBackend): SourcesRuntime {
       setRepo(resolvedRepo);
       setRef(resolvedRef);
       setPath(resolvedPath);
-      clearCommitDetail();
+      setModeState(nextMode);
+      setSelectedCommitHash(nextCommitHash);
+      setDiffResult(null);
+      setDiffError(null);
       setCreateForm((current) => ({
         ...current,
         owner: current.owner || nextState.selectedRepo?.owner || nextState.repos[0]?.owner || "",
       }));
-      writeLocation(resolvedRepo, resolvedRef, resolvedPath, nextMode);
+      if (nextCommitHash && resolvedRepo) {
+        await loadDiffForRepo(resolvedRepo, nextCommitHash);
+      } else {
+        setDiffBusy(false);
+      }
     } catch (cause) {
       setError(errorToText(cause));
     } finally {
@@ -140,15 +179,25 @@ export function useSources(backend: GsvBackend): SourcesRuntime {
     }
   }
 
+  async function showRepositoryList(): Promise<void> {
+    setRepo(null);
+    setRef("");
+    setPath("");
+    setModeState("code");
+    setSearchResult(null);
+    clearCommitDetail();
+    writeLocation(null, "", "", "code", null);
+    await refresh({ repo: null, ref: "", path: "", mode: "code" });
+  }
+
   async function selectRepo(nextRepo: string): Promise<void> {
     setRepo(nextRepo);
+    setRef("");
     setPath("");
     setSearchResult(null);
-    setDiffResult(null);
-    setDiffError(null);
-    setSelectedCommitHash(null);
-    setMode("code");
-    writeLocation(nextRepo, "", "", "code");
+    clearCommitDetail();
+    setModeState("code");
+    writeLocation(nextRepo, "", "", "code", null);
     await refresh({ repo: nextRepo, ref: "", path: "", mode: "code" });
   }
 
@@ -157,8 +206,8 @@ export function useSources(backend: GsvBackend): SourcesRuntime {
     setPath("");
     setSearchResult(null);
     clearCommitDetail();
-    setMode("code");
-    writeLocation(repo, nextRef, "", "code");
+    setModeState("code");
+    writeLocation(repo, nextRef, "", "code", null);
     await refresh({ ref: nextRef, path: "", mode: "code" });
   }
 
@@ -166,8 +215,8 @@ export function useSources(backend: GsvBackend): SourcesRuntime {
     setPath(nextPath);
     setSearchResult(null);
     clearCommitDetail();
-    setMode("code");
-    writeLocation(repo, ref, nextPath, "code");
+    setModeState("code");
+    writeLocation(repo, ref, nextPath, "code", null);
     await refresh({ path: nextPath, mode: "code" });
   }
 
@@ -177,7 +226,8 @@ export function useSources(backend: GsvBackend): SourcesRuntime {
 
   function setMode(nextMode: SourceMode): void {
     setModeState(nextMode);
-    writeLocation(repo, ref, path, nextMode);
+    clearCommitDetail();
+    writeLocation(repo, ref, path, nextMode, null);
   }
 
   async function runMutation(action: string, task: () => Promise<void>): Promise<void> {
@@ -198,7 +248,8 @@ export function useSources(backend: GsvBackend): SourcesRuntime {
     setSearchBusy(true);
     setError(null);
     clearCommitDetail();
-    setMode("code");
+    setModeState("code");
+    writeLocation(repo, ref, path, "code", null);
     try {
       const result = await backend.searchSourceRepo({
         repo,
@@ -218,26 +269,36 @@ export function useSources(backend: GsvBackend): SourcesRuntime {
     setSelectedCommitHash(null);
     setDiffResult(null);
     setDiffError(null);
+    setDiffBusy(false);
   }
 
   async function selectCommit(hash: string): Promise<void> {
     if (!repo || !hash) return;
+    if (mode !== "history") {
+      writeLocation(repo, ref, path, "history", null);
+    }
     setSelectedCommitHash(hash);
+    setModeState("history");
+    writeLocation(repo, ref, path, "history", hash);
+    await loadDiffForRepo(repo, hash);
+  }
+
+  function closeCommit(): void {
+    clearCommitDetail();
+    writeLocation(repo, ref, path, "history", null);
+  }
+
+  async function loadDiffForRepo(targetRepo: string, hash: string): Promise<void> {
     setDiffBusy(true);
     setDiffResult(null);
     setDiffError(null);
-    setMode("history");
     try {
-      setDiffResult(await backend.diffSourceRepo({ repo, commit: hash, context: 3 }));
+      setDiffResult(await backend.diffSourceRepo({ repo: targetRepo, commit: hash, context: 3 }));
     } catch (cause) {
       setDiffError(errorToText(cause));
     } finally {
       setDiffBusy(false);
     }
-  }
-
-  function closeCommit(): void {
-    clearCommitDetail();
   }
 
   async function loadCommitPage(offset: number): Promise<void> {
@@ -246,6 +307,7 @@ export function useSources(backend: GsvBackend): SourcesRuntime {
     setHistoryBusy(true);
     setError(null);
     clearCommitDetail();
+    writeLocation(repo, ref, path, "history", null);
     try {
       const page = await backend.loadSourceCommits({
         repo,
@@ -311,7 +373,9 @@ export function useSources(backend: GsvBackend): SourcesRuntime {
       setRepo(result.repo);
       setRef(result.ref);
       setPath("");
-      writeLocation(result.repo, result.ref, "", "code");
+      clearCommitDetail();
+      setModeState("code");
+      writeLocation(result.repo, result.ref, "", "code", null);
       await refresh({ repo: result.repo, ref: result.ref, path: "", mode: "code" });
     });
     return result;
@@ -329,6 +393,7 @@ export function useSources(backend: GsvBackend): SourcesRuntime {
     setMode,
     path,
     ref,
+    repositoryRoute: repo,
     selectedRepo,
     visibleRepos: filteredRepos,
     searchQuery,
@@ -345,6 +410,7 @@ export function useSources(backend: GsvBackend): SourcesRuntime {
     createForm,
     setCreateForm,
     refresh,
+    showRepositoryList,
     selectRepo,
     selectRef,
     openPath,
@@ -360,46 +426,52 @@ export function useSources(backend: GsvBackend): SourcesRuntime {
   };
 }
 
-function readRepoFromLocation(): string | null {
-  const value = new URL(window.location.href).searchParams.get("repo");
-  return value?.trim() || null;
+function readSourcesLocation(): SourcesLocation {
+  const url = new URL(window.location.href);
+  const commit = url.searchParams.get("commit")?.trim() || null;
+  return {
+    repo: url.searchParams.get("repo")?.trim() || null,
+    ref: url.searchParams.get("ref")?.trim() || "",
+    path: normalizeLocationPath(url.searchParams.get("path")?.trim() || ""),
+    mode: readMode(url, commit),
+    commit,
+  };
 }
 
-function readRefFromLocation(): string {
-  return new URL(window.location.href).searchParams.get("ref")?.trim() || "";
+function readMode(url: URL, commit: string | null): SourceMode {
+  const value = url.searchParams.get("mode");
+  return value === "history" || commit ? "history" : "code";
 }
 
-function readPathFromLocation(): string {
-  return new URL(window.location.href).searchParams.get("path")?.trim().replace(/^\/+|\/+$/g, "") || "";
+function normalizeLocationPath(path: string): string {
+  return path.replace(/^\/+|\/+$/g, "");
 }
 
-function readModeFromLocation(): SourceMode {
-  const value = new URL(window.location.href).searchParams.get("mode");
-  return value === "history" ? "history" : "code";
-}
-
-function writeLocation(repo: string | null, ref: string, path: string, mode: SourceMode): void {
+function writeLocation(
+  repo: string | null,
+  ref: string,
+  path: string,
+  mode: SourceMode,
+  commit: string | null,
+): void {
   const url = new URL(window.location.href);
   url.searchParams.set("section", "sources");
-  if (repo) {
-    url.searchParams.set("repo", repo);
-  } else {
-    url.searchParams.delete("repo");
-  }
-  if (ref) {
-    url.searchParams.set("ref", ref);
-  } else {
-    url.searchParams.delete("ref");
-  }
-  if (path) {
-    url.searchParams.set("path", path);
-  } else {
-    url.searchParams.delete("path");
-  }
+  setOptionalParam(url, "repo", repo ?? undefined);
+  setOptionalParam(url, "ref", ref);
+  setOptionalParam(url, "path", path && path !== "." ? path : undefined);
+  setOptionalParam(url, "commit", commit ?? undefined);
   if (mode === "code") {
     url.searchParams.delete("mode");
   } else {
     url.searchParams.set("mode", mode);
   }
-  window.history.replaceState({}, "", url);
+  window.history.pushState({}, "", url);
+}
+
+function setOptionalParam(url: URL, key: string, value: string | undefined): void {
+  if (value) {
+    url.searchParams.set(key, value);
+  } else {
+    url.searchParams.delete(key);
+  }
 }

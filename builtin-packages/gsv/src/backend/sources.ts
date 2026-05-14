@@ -53,7 +53,9 @@ export async function loadSourcesState(
     .filter((repo): repo is SourceRepoRecord => repo !== null)
     .sort((left, right) => left.repo.localeCompare(right.repo));
   const requestedRepo = asString(args?.repo);
-  const selectedRepo = repos.find((repo) => repo.repo === requestedRepo) ?? repos[0] ?? null;
+  const selectedRepo = repos.find((repo) => repo.repo === requestedRepo)
+    ?? (args?.selectFirst === true ? repos[0] : null)
+    ?? null;
   if (!selectedRepo) {
     return {
       repos,

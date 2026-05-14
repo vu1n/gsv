@@ -46,10 +46,3 @@ export type GsvHandoff = {
   target?: string;
   route?: string;
 };
-
-export type AttentionItem = {
-  label: string;
-  description: string;
-  sectionId: GsvSectionId;
-  tone: Tone;
-};

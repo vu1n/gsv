@@ -1,4 +1,5 @@
 import { useEffect, useState } from "preact/hooks";
+import { ActionButton } from "../../components/ui/ActionButton";
 import { formatDate } from "./settings-domain";
 import type {
   AccessToken,
@@ -77,14 +78,12 @@ export function AccessView({
           ) : null}
         </div>
         <div class="gsv-admin-actions">
-          <button class="gsv-action-button" type="button" disabled={pendingAction === "create-token"} onClick={() => void onCreateToken({
+          <ActionButton icon="key" label="Issue token" busyLabel="Issuing" busy={pendingAction === "create-token"} onClick={() => void onCreateToken({
             kind: tokenForm.kind,
             label: tokenForm.label,
             allowedDeviceId: tokenForm.allowedDeviceId,
             expiresAt: tokenForm.expiresAt ? new Date(tokenForm.expiresAt).getTime() : null,
-          })}>
-            {pendingAction === "create-token" ? "Issuing" : "Issue token"}
-          </button>
+          })} />
         </div>
 
         <TokenList tokens={state.tokens} pendingAction={pendingAction} onRevoke={onRevokeToken} />
@@ -100,12 +99,10 @@ export function AccessView({
 
         <div class="gsv-admin-inline-form">
           <input value={code} placeholder="link code" onInput={(event) => setCode(event.currentTarget.value)} />
-          <button class="gsv-mini-button" type="button" disabled={pendingAction === "consume-link"} onClick={() => {
+          <ActionButton icon="key" label="Redeem" busyLabel="Redeeming" busy={pendingAction === "consume-link"} onClick={() => {
             onConsumeCode(code);
             setCode("");
-          }}>
-            {pendingAction === "consume-link" ? "Redeeming" : "Redeem"}
-          </button>
+          }} />
         </div>
 
         <div class="gsv-admin-form-grid">
@@ -114,12 +111,10 @@ export function AccessView({
           <label><span>Actor</span><input value={manualLink.actorId} onInput={(event) => setManualLink((current) => ({ ...current, actorId: event.currentTarget.value }))} /></label>
         </div>
         <div class="gsv-admin-actions">
-          <button class="gsv-mini-button" type="button" disabled={pendingAction === "create-link"} onClick={() => {
+          <ActionButton icon="external" label="Create link" busyLabel="Creating" busy={pendingAction === "create-link"} onClick={() => {
             onCreateLink(manualLink);
             setManualLink({ adapter: "", accountId: "", actorId: "" });
-          }}>
-            {pendingAction === "create-link" ? "Creating" : "Create link"}
-          </button>
+          }} />
         </div>
 
         <LinkList links={state.links} pendingAction={pendingAction} onRemove={onRemoveLink} />
@@ -157,12 +152,10 @@ function TokenList({
               <div><dt>Last used</dt><dd>{formatDate(token.lastUsedAt)}</dd></div>
               <div><dt>Expires</dt><dd>{formatDate(token.expiresAt)}</dd></div>
             </dl>
-            <button class="gsv-mini-button is-danger" type="button" disabled={revoked || pendingAction === `revoke:${token.tokenId}`} onClick={() => {
+            <ActionButton icon="trash" label={revoked ? "Revoked" : "Revoke"} busyLabel="Revoking" busy={pendingAction === `revoke:${token.tokenId}`} variant="danger" disabled={revoked} onClick={() => {
               if (!window.confirm(`Revoke token ${token.tokenPrefix}?`)) return;
               onRevoke(token);
-            }}>
-              {revoked ? "Revoked" : pendingAction === `revoke:${token.tokenId}` ? "Revoking" : "Revoke"}
-            </button>
+            }} />
           </article>
         );
       })}
@@ -194,12 +187,10 @@ function LinkList({
             <div><dt>Actor</dt><dd><code>{link.actorId}</code></dd></div>
             <div><dt>Created</dt><dd>{formatDate(link.createdAt)}</dd></div>
           </dl>
-          <button class="gsv-mini-button is-danger" type="button" disabled={pendingAction === linkActionId(link)} onClick={() => {
+          <ActionButton icon="trash" label="Unlink" busyLabel="Removing" busy={pendingAction === linkActionId(link)} variant="danger" onClick={() => {
             if (!window.confirm(`Unlink ${link.adapter}:${link.accountId}?`)) return;
             onRemove(link);
-          }}>
-            {pendingAction === linkActionId(link) ? "Removing" : "Unlink"}
-          </button>
+          }} />
         </article>
       ))}
     </div>

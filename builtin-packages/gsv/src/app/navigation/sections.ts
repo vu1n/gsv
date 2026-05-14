@@ -1,4 +1,4 @@
-import type { AttentionItem, GsvGroup, GsvSection, GsvSectionId } from "./types";
+import type { GsvGroup, GsvSection, GsvSectionId } from "./types";
 
 export const GROUPS: GsvGroup[] = [
   {
@@ -295,33 +295,6 @@ export const SECTIONS: GsvSection[] = [
       },
     ],
     handoffs: [],
-  },
-];
-
-export const ATTENTION_ITEMS: AttentionItem[] = [
-  {
-    label: "Package trust decisions",
-    description: "Review packages before they become active system code.",
-    sectionId: "packages",
-    tone: "warning",
-  },
-  {
-    label: "Fleet readiness",
-    description: "Check offline nodes, health, capabilities, and provisioning.",
-    sectionId: "devices",
-    tone: "good",
-  },
-  {
-    label: "External connections",
-    description: "Inspect adapters and MCP servers from one integration surface.",
-    sectionId: "integrations",
-    tone: "accent",
-  },
-  {
-    label: "Credentials and identity",
-    description: "Review tokens and linked external identities.",
-    sectionId: "access",
-    tone: "danger",
   },
 ];
 

@@ -1,4 +1,6 @@
+import { ActionButton } from "../../components/ui/ActionButton";
 import { formatRelativeTime } from "../../utils/format";
+import { formatOwner } from "./devices-domain";
 import type { DeviceScope, DeviceSummary, DevicesState } from "./types";
 
 export function DeviceFleetPane({
@@ -32,15 +34,13 @@ export function DeviceFleetPane({
           <span class="gsv-kicker">Fleet</span>
           <h3>Devices</h3>
         </div>
-        <button
-          class="gsv-mini-button"
-          type="button"
+        <ActionButton
+          icon="key"
+          label="Add"
           disabled={!viewer?.canManageTokens}
           title={viewer?.canManageTokens ? "Issue a node token and enroll a device." : "Token permissions are required to add devices."}
           onClick={onAdd}
-        >
-          Add
-        </button>
+        />
       </header>
 
       <DeviceFilters query={query} scope={scope} onQuery={onQuery} onScope={onScope} />
@@ -108,7 +108,7 @@ function DeviceRow({ device, selected, onSelect }: { device: DeviceSummary; sele
       <span class={`gsv-mark is-${device.online ? "good" : "warning"}`} aria-hidden="true"></span>
       <span class="gsv-row-copy">
         <strong>{device.deviceId}</strong>
-        <span>{device.platform || "unknown"} / uid {device.ownerUid}</span>
+        <span>{device.platform || "unknown"} / {formatOwner(device)}</span>
         {device.description ? <span>{device.description}</span> : null}
       </span>
       <span class="gsv-row-meta">{formatRelativeTime(device.lastSeenAt)}</span>

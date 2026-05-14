@@ -11,6 +11,7 @@ export type DevicesViewer = {
 export type DeviceSummary = {
   deviceId: string;
   ownerUid: number;
+  ownerUsername: string | null;
   description: string;
   platform: string;
   version: string;

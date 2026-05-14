@@ -1,3 +1,4 @@
+import { ActionButton } from "../../components/ui/ActionButton";
 import {
   buildBreadcrumbs,
   fileLanguageLabel,
@@ -58,9 +59,14 @@ function RepoToolbar({ runtime, refOptions }: { runtime: SourcesRuntime; refOpti
             placeholder="Search this repository"
             onInput={(event) => runtime.setSearchQuery((event.currentTarget as HTMLInputElement).value)}
           />
-          <button type="submit" class="gsv-mini-button" disabled={runtime.searchBusy || !runtime.searchQuery.trim()}>
-            {runtime.searchBusy ? "Searching" : "Search"}
-          </button>
+          <ActionButton
+            icon="search"
+            label="Search"
+            busyLabel="Searching"
+            busy={runtime.searchBusy}
+            disabled={!runtime.searchQuery.trim()}
+            type="submit"
+          />
         </form>
       </div>
       {currentHash ? (
@@ -149,7 +155,7 @@ function FileView({ read, onOpenParent }: { read: Extract<SourceReadResult, { ki
           </strong>
           <span>{formatBytes(read.size)} - {read.isBinary ? "Binary" : fileLanguageLabel(read.path)}</span>
         </div>
-        <button type="button" class="gsv-mini-button" onClick={() => void onOpenParent()}>Directory</button>
+        <ActionButton icon="folder" label="Directory" onClick={() => void onOpenParent()} />
       </header>
       {read.isBinary ? (
         <div class="gsv-empty-state">This file is binary and cannot be previewed inline.</div>

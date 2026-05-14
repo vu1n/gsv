@@ -1,4 +1,5 @@
 import { useState } from "preact/hooks";
+import { ActionButton } from "../../components/ui/ActionButton";
 import { buildBootstrapCommand, buildInstallCommand, type ProvisionInstallPlatform } from "./provision";
 import type { DevicesViewer, IssuedNodeToken } from "./types";
 
@@ -56,7 +57,7 @@ export function ProvisionPanel({
           <h3>Add device</h3>
           <p>Issue a node token and bootstrap the next execution target.</p>
         </div>
-        <button class="gsv-mini-button" type="button" onClick={onBack}>Back to fleet</button>
+        <ActionButton icon="arrow-left" label="Fleet" onClick={onBack} />
       </header>
 
       <form
@@ -75,7 +76,13 @@ export function ProvisionPanel({
         <label><span>Device id</span><input name="deviceId" defaultValue={initialDeviceId} required /></label>
         <label><span>Label</span><input name="label" placeholder="MacBook Pro" /></label>
         <label><span>Expires in days</span><input name="expiresDays" type="number" min="1" defaultValue="30" /></label>
-        <button class="gsv-action-button" type="submit" disabled={pendingAction === "create-token"}>{pendingAction === "create-token" ? "Issuing" : "Issue token"}</button>
+        <ActionButton
+          icon="key"
+          label="Issue token"
+          busyLabel="Issuing"
+          busy={pendingAction === "create-token"}
+          type="submit"
+        />
       </form>
 
       {issuedToken ? (
@@ -100,7 +107,7 @@ function CommandBlock({ title, value, copied, onCopy }: { title: string; value: 
     <section class="gsv-command-block">
       <header>
         <h4>{title}</h4>
-        <button class="gsv-mini-button" type="button" onClick={onCopy}>{copied ? "Copied" : "Copy"}</button>
+        <ActionButton icon="copy" label={copied ? "Copied" : "Copy"} onClick={onCopy} />
       </header>
       <textarea readOnly value={value} onFocus={(event) => event.currentTarget.select()} />
     </section>
