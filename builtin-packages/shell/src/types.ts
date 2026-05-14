@@ -1,13 +1,11 @@
-import type { ITerminalAddon, ITerminalOptions } from "ghostty-web";
-
 export type FitAddonLike = {
-  activate: ITerminalAddon["activate"];
-  dispose: ITerminalAddon["dispose"];
+  activate: (terminal: unknown) => void;
+  dispose: () => void;
   fit: () => void;
 };
 
 export type TerminalLike = {
-  loadAddon: (addon: ITerminalAddon) => void;
+  loadAddon: (addon: FitAddonLike) => void;
   open: (element: HTMLElement) => void;
   focus: () => void;
   write: (value: string | Uint8Array) => void;
@@ -15,7 +13,7 @@ export type TerminalLike = {
   onData: (handler: (value: string) => void) => void;
 };
 
-export type TerminalOptions = ITerminalOptions;
+export type TerminalOptions = Record<string, unknown>;
 
 export type ShellDevice = {
   deviceId: string;
