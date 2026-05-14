@@ -165,9 +165,9 @@ export function PackageDetail({
               />
             )}
             <ActionButton
-              icon="refresh"
-              label="Refresh"
-              busyLabel="Refreshing"
+              icon="package"
+              label="Rebuild"
+              busyLabel="Rebuilding"
               busy={runtime.pendingAction === refreshAction}
               disabled={busy || !pkg.canMutate}
               onClick={() => void runtime.refreshPackage(pkg.packageId)}

@@ -103,15 +103,9 @@ export function PackagesSection({
             <p class="gsv-runtime-meta">{viewDescription(runtime.view)}</p>
           </div>
           <ActionButton
-            icon="refresh"
-            label="Refresh"
-            onClick={() => void runtime.refresh()}
-            disabled={runtime.loading || runtime.pendingAction !== null}
-          />
-          <ActionButton
-            icon="refresh"
-            label="Sync"
-            busyLabel="Syncing"
+            icon="package"
+            label="Rebuild from source"
+            busyLabel="Rebuilding"
             busy={runtime.pendingAction === "packages:sync"}
             onClick={() => void runtime.syncPackages()}
             disabled={runtime.loading || runtime.pendingAction !== null}

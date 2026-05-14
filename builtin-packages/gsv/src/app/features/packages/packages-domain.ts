@@ -21,7 +21,7 @@ export function viewDescription(view: PackagesView): string {
   if (view === "discover") return "Import from a source URL, shorthand, local catalog, or configured remote.";
   if (view === "create") return "Scaffold a user package source and install it into your package inventory.";
   if (view === "remotes") return "Manage remote catalogs that advertise public packages from other systems.";
-  if (view === "updates") return "Packages whose source heads moved ahead of the installed commit.";
+  if (view === "updates") return "Packages with source changes under their installed package path.";
   if (view === "review") return "Packages that need a trust decision before enablement.";
   return "Operational inventory of software installed in this GSV instance.";
 }

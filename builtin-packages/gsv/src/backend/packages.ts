@@ -56,6 +56,12 @@ type RemoteRecord = {
 
 type DerivedPackageRecord = PackageRecord;
 
+type SourceUpdateComparison = {
+  repo: string;
+  base: string;
+  head: string;
+};
+
 export async function loadPackagesState(
   _args: LoadPackagesStateArgs | undefined,
   kernel: KernelClientLike,
@@ -67,7 +73,8 @@ export async function loadPackagesState(
   });
   const packagesRaw = await listPackages(kernel);
   const refsByRepo = await loadRefsForPackages(kernel, packagesRaw);
-  const packages = packagesRaw.map((pkg) => derivePackageView(pkg, refsByRepo, viewer));
+  const changedPathsByComparison = await loadChangedPathsForPackageUpdates(kernel, packagesRaw, refsByRepo);
+  const packages = packagesRaw.map((pkg) => derivePackageView(pkg, refsByRepo, changedPathsByComparison, viewer));
   const sources = aggregateSources(packages);
   const catalogs = await loadCatalogs(kernel);
 
@@ -115,6 +122,10 @@ function asBoolean(value: unknown): boolean {
 
 function unique<T>(items: T[]): T[] {
   return [...new Set(items)];
+}
+
+function comparisonKey(repo: string, base: string, head: string): string {
+  return `${repo}\0${base}\0${head}`;
 }
 
 function parseImportSource(raw: string): { remoteUrl?: string; repo?: string } {
@@ -308,25 +319,118 @@ async function loadRefsForPackages(
   return new Map(entries);
 }
 
+async function loadChangedPathsForPackageUpdates(
+  kernel: KernelClientLike,
+  packages: PackageLike[],
+  refsByRepo: Map<string, Record<string, string>>,
+): Promise<Map<string, string[] | null>> {
+  const comparisons = new Map<string, SourceUpdateComparison>();
+  for (const pkg of packages) {
+    const head = sourceRefHead(pkg, refsByRepo);
+    const base = pkg.source.resolvedCommit ?? null;
+    if (!base || !head || base === head) {
+      continue;
+    }
+    comparisons.set(comparisonKey(pkg.source.repo, base, head), {
+      repo: pkg.source.repo,
+      base,
+      head,
+    });
+  }
+
+  const entries = await Promise.all([...comparisons.values()].map(async (comparison) => {
+    const key = comparisonKey(comparison.repo, comparison.base, comparison.head);
+    try {
+      const result = asRecord(await kernel.request("repo.compare", {
+        repo: comparison.repo,
+        base: comparison.base,
+        head: comparison.head,
+        context: 0,
+        stat: true,
+      }));
+      const paths = asArray<Record<string, unknown>>(result?.files)
+        .map((file) => normalizeRepoPath(asString(file.path)))
+        .filter((path) => path.length > 0);
+      return [key, paths] as const;
+    } catch {
+      return [key, null] as const;
+    }
+  }));
+
+  return new Map(entries);
+}
+
+function sourceRefHead(
+  pkg: PackageLike,
+  refsByRepo: Map<string, Record<string, string>>,
+): string | null {
+  const refs = refsByRepo.get(pkg.source.repo) ?? {};
+  return typeof refs[pkg.source.ref] === "string" ? refs[pkg.source.ref] : null;
+}
+
 function describeSourceHealth(
   pkg: PackageLike,
   refsByRepo: Map<string, Record<string, string>>,
+  changedPathsByComparison: Map<string, string[] | null>,
 ): Pick<PackageRecord, "currentHead" | "updateAvailable"> {
-  const refs = refsByRepo.get(pkg.source.repo) ?? {};
-  const refHead = typeof refs[pkg.source.ref] === "string" ? refs[pkg.source.ref] : null;
+  const refHead = sourceRefHead(pkg, refsByRepo);
   const resolvedCommit = pkg.source.resolvedCommit ?? null;
+  const updateAvailable = packageUpdateAvailable(pkg, resolvedCommit, refHead, changedPathsByComparison);
   return {
     currentHead: refHead,
-    updateAvailable: refHead !== null && resolvedCommit !== refHead,
+    updateAvailable,
   };
+}
+
+function packageUpdateAvailable(
+  pkg: PackageLike,
+  resolvedCommit: string | null,
+  refHead: string | null,
+  changedPathsByComparison: Map<string, string[] | null>,
+): boolean {
+  if (!refHead || resolvedCommit === refHead) {
+    return false;
+  }
+  if (!resolvedCommit) {
+    return true;
+  }
+
+  const key = comparisonKey(pkg.source.repo, resolvedCommit, refHead);
+  if (!changedPathsByComparison.has(key)) {
+    return true;
+  }
+  const changedPaths = changedPathsByComparison.get(key);
+  if (changedPaths === null) {
+    return true;
+  }
+  return changedPaths.some((path) => pathIsInPackageSubdir(path, pkg.source.subdir));
+}
+
+function pathIsInPackageSubdir(path: string, subdir: string): boolean {
+  const normalizedPath = normalizeRepoPath(path);
+  const normalizedSubdir = normalizePackageSubdir(subdir);
+  if (!normalizedSubdir) {
+    return normalizedPath.length > 0;
+  }
+  return normalizedPath === normalizedSubdir || normalizedPath.startsWith(`${normalizedSubdir}/`);
+}
+
+function normalizeRepoPath(path: string): string {
+  return path.trim().replace(/^\/+|\/+$/g, "").replace(/\/+/g, "/");
+}
+
+function normalizePackageSubdir(path: string): string {
+  const normalized = normalizeRepoPath(path);
+  return normalized === "." ? "" : normalized;
 }
 
 function derivePackageView(
   pkg: PackageLike,
   refsByRepo: Map<string, Record<string, string>>,
+  changedPathsByComparison: Map<string, string[] | null>,
   viewer: NormalizedViewer,
 ): DerivedPackageRecord {
-  const sourceHealth = describeSourceHealth(pkg, refsByRepo);
+  const sourceHealth = describeSourceHealth(pkg, refsByRepo, changedPathsByComparison);
   const entrypoints = asArray<PackageEntrypoint>(pkg.entrypoints);
   const declaredSyscalls = unique(entrypoints.flatMap((entry) => asArray<string>(entry.syscalls)));
   const uiEntrypoints = entrypoints.filter((entry) => entry.kind === "ui" && asString(entry.route).length > 0);

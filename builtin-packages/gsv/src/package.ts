@@ -49,6 +49,7 @@ export default definePackage({
         "pkg.public.set",
         "proc.spawn",
         "repo.create",
+        "repo.compare",
         "repo.diff",
         "repo.list",
         "repo.refs",

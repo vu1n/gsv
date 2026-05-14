@@ -116,7 +116,7 @@ export function usePackages(backend: GsvBackend): PackagesRuntime {
   async function syncPackages(): Promise<void> {
     await runMutation("packages:sync", async () => {
       await backend.syncPackages();
-      setNotice("Synced packages from source.");
+      setNotice("Rebuilt packages from source.");
       await refresh();
     });
   }
@@ -148,7 +148,7 @@ export function usePackages(backend: GsvBackend): PackagesRuntime {
   async function refreshPackage(packageId: string): Promise<void> {
     await runMutation(`package:refresh:${packageId}`, async () => {
       await backend.refreshPackage({ packageId });
-      setNotice("Synced package from source.");
+      setNotice("Rebuilt package from source.");
       await refresh(packageId);
     });
   }
@@ -156,7 +156,7 @@ export function usePackages(backend: GsvBackend): PackagesRuntime {
   async function pullPackage(packageId: string): Promise<void> {
     await runMutation(`package:pull:${packageId}`, async () => {
       await backend.pullPackage({ packageId });
-      setNotice("Pulled upstream changes. Sync the package to install them.");
+      setNotice("Pulled upstream changes. Rebuild the package to install them.");
       await refresh(packageId);
     });
   }
@@ -164,7 +164,7 @@ export function usePackages(backend: GsvBackend): PackagesRuntime {
   async function pullPackageSource(repo: string): Promise<void> {
     await runMutation(`source:pull:${repo}`, async () => {
       await backend.pullPackageSource({ repo });
-      setNotice(`Pulled upstream changes for ${repo}. Sync packages to install them.`);
+      setNotice(`Pulled upstream changes for ${repo}. Rebuild packages to install them.`);
       await refresh();
     });
   }
