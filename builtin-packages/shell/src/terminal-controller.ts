@@ -55,6 +55,13 @@ export function createShellTerminalController(
   let running = false;
   let pendingFit = 0;
 
+  function syncAppViewportHeight(): void {
+    const viewportHeight = window.visualViewport?.height ?? window.innerHeight ?? document.documentElement.clientHeight;
+    if (Number.isFinite(viewportHeight) && viewportHeight > 0) {
+      elements.root.style.setProperty("--shell-app-height", `${Math.floor(viewportHeight)}px`);
+    }
+  }
+
   function currentPath(): string {
     const value = elements.cwdInput.value ? elements.cwdInput.value.trim() : "";
     return value || "~";
@@ -181,6 +188,12 @@ export function createShellTerminalController(
     });
   }
 
+  function syncViewportAndFit(syncLine = true): void {
+    syncAppViewportHeight();
+    scheduleFit(syncLine);
+  }
+
+  syncAppViewportHeight();
   terminal.loadAddon(fitAddon);
   elements.terminalNode.replaceChildren();
   terminal.open(elements.terminalNode);
@@ -252,8 +265,17 @@ export function createShellTerminalController(
   });
 
   window.addEventListener("resize", () => {
-    scheduleFit(true);
+    syncViewportAndFit(true);
   });
+
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", () => {
+      syncViewportAndFit(true);
+    });
+    window.visualViewport.addEventListener("scroll", () => {
+      syncViewportAndFit(true);
+    });
+  }
 
   if (typeof ResizeObserver !== "undefined") {
     const resizeObserver = new ResizeObserver(() => {

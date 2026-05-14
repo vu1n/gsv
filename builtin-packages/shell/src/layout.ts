@@ -18,29 +18,29 @@ const SHELL_LAYOUT = `
   <main class="shell-app">
     <section class="shell-toolbar">
       <label class="shell-field shell-field-target">
-        <span>Target</span>
-        <select data-shell-target></select>
+        <span class="shell-field-label">Target</span>
+        <select data-shell-target aria-label="Target"></select>
       </label>
       <label class="shell-field shell-field-cwd">
-        <span>Working directory</span>
-        <input data-shell-cwd type="text" value="" placeholder="Optional" spellcheck="false" />
+        <span class="shell-field-label">Working directory</span>
+        <input data-shell-cwd type="text" value="" placeholder="Optional" spellcheck="false" aria-label="Working directory" />
       </label>
       <button class="shell-status-indicator" data-shell-status data-kind="booting" type="button" aria-label="Shell loading" title="Shell loading" aria-live="polite">
         <span class="shell-status-dot" aria-hidden="true"></span>
         <span class="shell-status-label" data-shell-status-label>Loading</span>
       </button>
       <button class="shell-settings-toggle" data-shell-settings-toggle type="button" aria-expanded="false" aria-controls="shell-options" title="Shell options">
-        <span aria-hidden="true">⚙</span>
+        <span class="shell-settings-icon" aria-hidden="true">⚙</span>
         <span class="shell-settings-label">Options</span>
       </button>
-      <div class="shell-options" id="shell-options" data-shell-options hidden>
+      <div class="shell-options" id="shell-options" data-shell-options role="group" aria-label="Shell run options" hidden>
         <label class="shell-field">
-          <span>Timeout (ms)</span>
-          <input data-shell-timeout type="text" inputmode="numeric" value="" placeholder="30000" />
+          <span class="shell-field-label">Timeout (ms)</span>
+          <input data-shell-timeout type="text" inputmode="numeric" value="" placeholder="30000" aria-label="Timeout in milliseconds" />
         </label>
         <label class="shell-field">
-          <span>Yield (ms)</span>
-          <input data-shell-yield type="text" inputmode="numeric" value="" placeholder="2000" />
+          <span class="shell-field-label">Yield (ms)</span>
+          <input data-shell-yield type="text" inputmode="numeric" value="" placeholder="2000" aria-label="Yield in milliseconds" />
         </label>
         <label class="shell-toggle-row">
           <input data-shell-background type="checkbox" />

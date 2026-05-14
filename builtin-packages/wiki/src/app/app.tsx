@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "preact/hooks";
 import { WikiHeader } from "./components/header/wiki-header";
-import { WikiInspector } from "./components/navigation/wiki-inspector";
+import { WikiCompactTools, WikiInspector } from "./components/navigation/wiki-inspector";
 import { WikiRail } from "./components/navigation/wiki-rail";
 import { BrowsePane } from "./components/panes/browse-pane";
 import { BuildPane } from "./components/panes/build-pane";
@@ -315,6 +315,14 @@ export function App({ backend }: { backend: WikiBackend }) {
         />
 
         <main class="wiki-main">
+          <WikiCompactTools
+            pageHeadings={pageHeadings}
+            onEditCurrentPage={() => setMode("edit")}
+            onBuildFromDirectory={() => setMode("build")}
+            onStageSource={() => setMode("ingest")}
+            onReviewInbox={() => setMode("inbox")}
+          />
+
           {loading ? <div class="wiki-empty">Loading wiki…</div> : null}
           {!loading && error ? <div class="wiki-status is-error">{error}</div> : null}
           {!loading && !error && notice ? <div class="wiki-status is-info">{notice}</div> : null}
@@ -426,6 +434,10 @@ export function App({ backend }: { backend: WikiBackend }) {
           onDismiss={() => hidePreview(true)}
           onMouseEnter={keepPreviewOpen}
           onMouseLeave={() => hidePreview(false)}
+          onOpenPage={(path) => {
+            hidePreview(true);
+            openPage(path);
+          }}
         />
       ) : null}
     </div>

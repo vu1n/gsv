@@ -86,7 +86,7 @@ export function BuildPane(props: Props) {
         </fieldset>
 
         <div class="wiki-inline-actions">
-          <button type="submit" disabled={props.mutating}>Start background build</button>
+          <button type="submit" disabled={props.mutating} title="Start background build" aria-label="Start background build">Start build</button>
         </div>
       </form>
     </section>

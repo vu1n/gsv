@@ -20,7 +20,7 @@ export function EditPane(props: Props) {
           <p>Write canonical pages without hand-building paths unless you want to.</p>
         </div>
         <div class="wiki-pane-actions">
-          <button type="button" onClick={() => void props.onSaveCurrentPage()} disabled={props.mutating}>Save page</button>
+          <button type="button" onClick={() => void props.onSaveCurrentPage()} disabled={props.mutating} title="Save current page" aria-label="Save current page">Save</button>
         </div>
       </div>
       <div class="wiki-form-grid">
@@ -34,8 +34,8 @@ export function EditPane(props: Props) {
         </label>
       </div>
       <div class="wiki-inline-actions">
-        <button type="button" onClick={() => void props.onCreatePage()} disabled={props.mutating || !props.newPageTitle.trim()}>Create page</button>
-        <button type="button" class="is-secondary" onClick={props.onUseSuggestedPath}>Use suggested path</button>
+        <button type="button" onClick={() => void props.onCreatePage()} disabled={props.mutating || !props.newPageTitle.trim()} title="Create page" aria-label="Create page">Create</button>
+        <button type="button" class="is-secondary" onClick={props.onUseSuggestedPath} title="Use suggested path" aria-label="Use suggested path">Suggest path</button>
       </div>
       <textarea class="wiki-editor" value={props.editorMarkdown} onInput={(event) => props.onEditorMarkdownChange((event.currentTarget as HTMLTextAreaElement).value)} placeholder="Write markdown for the current page." />
     </section>

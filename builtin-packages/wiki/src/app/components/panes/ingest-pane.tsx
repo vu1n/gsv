@@ -66,7 +66,7 @@ export function IngestPane(props: Props) {
           </label>
         </div>
         <div class="wiki-inline-actions">
-          <button type="submit" disabled={props.mutating}>Stage in inbox</button>
+          <button type="submit" disabled={props.mutating} title="Stage source in inbox" aria-label="Stage source in inbox">Stage</button>
         </div>
       </form>
     </section>

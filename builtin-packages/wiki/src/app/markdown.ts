@@ -165,6 +165,9 @@ function renderMarkdownHtml(markdown: string): string {
   return DOMPurify.sanitize(typeof parsed === "string" ? parsed : String(parsed));
 }
 
+function shouldUsePreviewSheet(): boolean {
+  return window.matchMedia("(hover: none), (pointer: coarse), (max-width: 860px)").matches;
+}
 
 export function renderPreviewBodyHtml(payload: WikiPreviewPayload): string {
   if (!payload) {
@@ -221,14 +224,21 @@ export function renderArticleInto(container: HTMLElement, options: RenderOptions
     if (internalPath) {
       anchor.href = buildEntryHref(options.routeBase, options.selectedDb, internalPath);
       anchor.dataset.previewKind = "page";
+      const request: WikiPreviewRequest = { kind: "page", db: options.selectedDb, path: internalPath };
       const onClick = (event: MouseEvent) => {
         event.preventDefault();
+        if (shouldUsePreviewSheet()) {
+          options.onPreviewOpen(anchor, request, true);
+          return;
+        }
         options.onPreviewHide(true);
         options.onNavigate(internalPath);
       };
-      const onEnter = () => options.onPreviewOpen(anchor, { kind: "page", db: options.selectedDb, path: internalPath }, false);
+      const onEnter = () => {
+        options.onPreviewOpen(anchor, request, false);
+      };
       const onLeave = () => options.onPreviewHide(false);
-      const onFocus = () => options.onPreviewOpen(anchor, { kind: "page", db: options.selectedDb, path: internalPath }, false);
+      const onFocus = () => options.onPreviewOpen(anchor, request, false);
       const onBlur = () => options.onPreviewHide(false);
       anchor.addEventListener("click", onClick);
       anchor.addEventListener("mouseenter", onEnter);

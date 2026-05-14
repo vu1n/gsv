@@ -22,7 +22,7 @@ export function InboxPane(props: Props) {
           <p>Preview staged notes and compile them into canonical pages when they are ready.</p>
         </div>
         <div class="wiki-pane-actions">
-          <button type="button" onClick={() => void props.onCompileSelectedInbox()} disabled={props.mutating || !props.selectedInboxPath}>Compile into page</button>
+          <button type="button" onClick={() => void props.onCompileSelectedInbox()} disabled={props.mutating || !props.selectedInboxPath} title="Compile inbox note into a page" aria-label="Compile inbox note into a page">Compile</button>
         </div>
       </div>
       {props.state.selectedNote ? (

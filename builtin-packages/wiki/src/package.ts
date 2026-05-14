@@ -8,8 +8,8 @@ export default definePackage({
     window: {
       width: 1220,
       height: 820,
-      minWidth: 920,
-      minHeight: 620,
+      minWidth: 360,
+      minHeight: 480,
     },
     capabilities: {
       kernel: [
