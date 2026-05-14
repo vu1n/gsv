@@ -4,7 +4,7 @@ export default definePackage({
   meta: {
     displayName: "Wiki",
     description: "Knowledge databases, pages, inbox review, and guided wiki-building workflows.",
-    icon: "ui/wiki-icon.svg",
+    icon: "icon.svg",
     window: {
       width: 1220,
       height: 820,

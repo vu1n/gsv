@@ -4,6 +4,7 @@ export default definePackage({
   meta: {
     displayName: "Chat",
     description: "Conversational workspace with agents.",
+    icon: "icon.svg",
     window: {
       width: 1080,
       height: 760,

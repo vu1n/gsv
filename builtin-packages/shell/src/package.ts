@@ -4,6 +4,7 @@ export default definePackage({
   meta: {
     displayName: "Shell",
     description: "Interactive command shell for nodes.",
+    icon: "icon.svg",
     window: {
       width: 1080,
       height: 760,
