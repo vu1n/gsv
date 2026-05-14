@@ -1,25 +1,37 @@
 import type { WikiMode } from "../../types";
-
-const WIKI_MODES: WikiMode[] = ["browse", "edit", "build", "ingest", "inbox"];
+import type { WikiDb } from "../../types";
+import { WikiIcon } from "../ui/wiki-icon";
 
 type Props = {
   mode: WikiMode;
-  onChangeMode(mode: WikiMode): void;
+  activeDb: WikiDb | undefined;
+  selectedDb: string;
+  selectedPath: string;
+  currentTitle: string;
+  pageCount: number;
+  inboxCount: number;
 };
 
-export function WikiHeader({ mode, onChangeMode }: Props) {
+export function WikiHeader(props: Props) {
+  const scope = props.activeDb?.title || props.selectedDb || "No database";
+  const detail = props.selectedPath || labelForMode(props.mode);
+
   return (
     <header class="wiki-header">
-      <div class="wiki-header-copy">
-        <h1>Wiki</h1>
-        <p>Browse knowledge, edit canonical pages, build from source directories, and review inbox material.</p>
+      <div class="wiki-app-title">
+        <span class="wiki-app-mark"><WikiIcon name="book" /></span>
+        <div>
+          <h1>Wiki</h1>
+          <p>{scope}</p>
+        </div>
       </div>
-      <div class="wiki-mode-tabs">
-        {WIKI_MODES.map((tab) => (
-          <button key={tab} type="button" class={`wiki-mode-tab${mode === tab ? " is-active" : ""}`} onClick={() => onChangeMode(tab)}>
-            {labelForMode(tab)}
-          </button>
-        ))}
+      <div class="wiki-header-context">
+        <span>{props.currentTitle || labelForMode(props.mode)}</span>
+        <code title={detail}>{detail}</code>
+      </div>
+      <div class="wiki-header-counts" aria-label="Wiki counts">
+        <span title={`${props.pageCount} pages`}>{props.pageCount} pages</span>
+        <span title={`${props.inboxCount} inbox notes`}>{props.inboxCount} inbox</span>
       </div>
     </header>
   );

@@ -6,15 +6,31 @@ type WikiHeading = {
 
 type Props = {
   pageHeadings: WikiHeading[];
-  onEditCurrentPage(): void;
-  onBuildFromDirectory(): void;
-  onStageSource(): void;
-  onReviewInbox(): void;
+  currentTitle: string;
+  selectedDb: string;
+  selectedPath: string;
 };
 
 export function WikiInspector(props: Props) {
   return (
     <aside class="wiki-inspector">
+      <section class="wiki-inspector-section">
+        <h2>Page</h2>
+        <dl class="wiki-meta-list">
+          <div>
+            <dt>Title</dt>
+            <dd title={props.currentTitle || undefined}>{props.currentTitle || "No page selected"}</dd>
+          </div>
+          <div>
+            <dt>Database</dt>
+            <dd title={props.selectedDb || undefined}>{props.selectedDb || "None"}</dd>
+          </div>
+          <div>
+            <dt>Path</dt>
+            <dd title={props.selectedPath || undefined}>{props.selectedPath || "None"}</dd>
+          </div>
+        </dl>
+      </section>
       {props.pageHeadings.length > 0 ? (
         <section class="wiki-inspector-section">
           <h2>Outline</h2>
@@ -25,38 +41,6 @@ export function WikiInspector(props: Props) {
           </div>
         </section>
       ) : null}
-      <section class="wiki-inspector-section">
-        <h2>Quick actions</h2>
-        <div class="wiki-action-stack">
-          <button type="button" onClick={props.onEditCurrentPage} title="Edit current page" aria-label="Edit current page">Edit</button>
-          <button type="button" onClick={props.onBuildFromDirectory} title="Build from directory" aria-label="Build from directory">Build</button>
-          <button type="button" onClick={props.onStageSource} title="Stage source" aria-label="Stage source">Stage</button>
-          <button type="button" onClick={props.onReviewInbox} title="Review inbox" aria-label="Review inbox">Inbox</button>
-        </div>
-      </section>
     </aside>
-  );
-}
-
-export function WikiCompactTools(props: Props) {
-  return (
-    <div class="wiki-compact-tools" role="toolbar" aria-label="Wiki quick tools">
-      <div class="wiki-compact-action-row">
-        <button type="button" onClick={props.onEditCurrentPage} title="Edit current page" aria-label="Edit current page">Edit</button>
-        <button type="button" onClick={props.onBuildFromDirectory} title="Build from directory" aria-label="Build from directory">Build</button>
-        <button type="button" onClick={props.onStageSource} title="Stage source" aria-label="Stage source">Stage</button>
-        <button type="button" onClick={props.onReviewInbox} title="Review inbox" aria-label="Review inbox">Inbox</button>
-      </div>
-      {props.pageHeadings.length > 0 ? (
-        <details class="wiki-compact-outline">
-          <summary>Outline</summary>
-          <div class="wiki-outline-list">
-            {props.pageHeadings.map((heading) => (
-              <a key={heading.id} href={`#${heading.id}`} class={`wiki-outline-row level-${heading.level}`}>{heading.text}</a>
-            ))}
-          </div>
-        </details>
-      ) : null}
-    </div>
   );
 }

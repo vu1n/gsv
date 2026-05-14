@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "preact/hooks";
 import { WikiHeader } from "./components/header/wiki-header";
-import { WikiCompactTools, WikiInspector } from "./components/navigation/wiki-inspector";
+import { WikiInspector } from "./components/navigation/wiki-inspector";
 import { WikiRail } from "./components/navigation/wiki-rail";
 import { BrowsePane } from "./components/panes/browse-pane";
 import { BuildPane } from "./components/panes/build-pane";
@@ -289,11 +289,20 @@ export function App({ backend }: { backend: WikiBackend }) {
 
   return (
     <div class="wiki-shell">
-      <WikiHeader mode={mode} onChangeMode={changeMode} />
+      <WikiHeader
+        mode={mode}
+        activeDb={activeDb}
+        selectedDb={selectedDb}
+        selectedPath={state.selectedPath}
+        currentTitle={currentTitle}
+        pageCount={state.pages.length}
+        inboxCount={state.inbox.length}
+      />
 
       <div class="wiki-layout">
         <WikiRail
           mode={mode}
+          onChangeMode={changeMode}
           state={state}
           route={route}
           selectedDb={selectedDb}
@@ -315,14 +324,6 @@ export function App({ backend }: { backend: WikiBackend }) {
         />
 
         <main class="wiki-main">
-          <WikiCompactTools
-            pageHeadings={pageHeadings}
-            onEditCurrentPage={() => setMode("edit")}
-            onBuildFromDirectory={() => setMode("build")}
-            onStageSource={() => setMode("ingest")}
-            onReviewInbox={() => setMode("inbox")}
-          />
-
           {loading ? <div class="wiki-empty">Loading wiki…</div> : null}
           {!loading && error ? <div class="wiki-status is-error">{error}</div> : null}
           {!loading && !error && notice ? <div class="wiki-status is-info">{notice}</div> : null}
@@ -417,10 +418,9 @@ export function App({ backend }: { backend: WikiBackend }) {
 
         <WikiInspector
           pageHeadings={pageHeadings}
-          onEditCurrentPage={() => setMode("edit")}
-          onBuildFromDirectory={() => setMode("build")}
-          onStageSource={() => setMode("ingest")}
-          onReviewInbox={() => setMode("inbox")}
+          currentTitle={currentTitle}
+          selectedDb={selectedDb}
+          selectedPath={state.selectedPath}
         />
       </div>
 
