@@ -1,8 +1,6 @@
 import type { KnowledgeDoc, KnowledgeSourceRef, KnowledgeWriteArgs } from "./knowledge-types";
 import { deriveTitle } from "./knowledge-paths";
 
-const encoder = new TextEncoder();
-
 export function createEmptyDoc(path: string): KnowledgeDoc {
   return {
     frontmatter: {},
@@ -469,18 +467,4 @@ export function dedupeKeepOrder(values: string[]): string[] {
     out.push(value);
   }
   return out;
-}
-
-export function compactExcerpt(doc: KnowledgeDoc, maxBytes: number): string {
-  const parts: string[] = [];
-  if (doc.summary.length > 0) parts.push(doc.summary.join(" "));
-  if (doc.facts.length > 0) parts.push(...doc.facts.map((fact) => `- ${fact}`));
-  if (doc.preferences.length > 0) parts.push(...doc.preferences.map((pref) => `- ${pref}`));
-  if (parts.length === 0) parts.push("- No structured summary available.");
-
-  let excerpt = parts.join("\n").trim();
-  while (encoder.encode(excerpt).length > maxBytes && excerpt.length > 32) {
-    excerpt = `${excerpt.slice(0, Math.max(32, Math.floor(excerpt.length * 0.8))).trim()}...`;
-  }
-  return excerpt;
 }

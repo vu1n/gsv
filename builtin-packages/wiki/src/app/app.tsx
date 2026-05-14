@@ -29,8 +29,6 @@ const EMPTY_STATE: WikiWorkspaceState = {
   selectedNote: null,
   searchQuery: "",
   searchMatches: null,
-  queryText: "",
-  queryResult: null,
   errorText: "",
 };
 
@@ -43,10 +41,12 @@ export function App({ backend }: { backend: WikiBackend }) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [searchDraft, setSearchDraft] = useState(route.q || "");
-  const [askDraft, setAskDraft] = useState(route.ask || "");
   const [editorPath, setEditorPath] = useState("");
   const [editorMarkdown, setEditorMarkdown] = useState("");
   const [newPageTitle, setNewPageTitle] = useState("");
+  const [newDatabaseOpen, setNewDatabaseOpen] = useState(false);
+  const [newDatabaseTitle, setNewDatabaseTitle] = useState("");
+  const [newDatabaseId, setNewDatabaseId] = useState("");
   const [buildTargetMode, setBuildTargetMode] = useState<"gsv" | "custom">("gsv");
   const [buildTargetCustom, setBuildTargetCustom] = useState("");
   const [buildSourcePath, setBuildSourcePath] = useState("");
@@ -81,8 +81,7 @@ export function App({ backend }: { backend: WikiBackend }) {
 
   useEffect(() => {
     setSearchDraft(route.q || "");
-    setAskDraft(route.ask || "");
-  }, [route.q, route.ask]);
+  }, [route.q]);
 
   useEffect(() => {
     if (state.selectedNote) {
@@ -104,6 +103,12 @@ export function App({ backend }: { backend: WikiBackend }) {
       setBuildDbId(slugifyDbId(buildDbTitle));
     }
   }, [buildDestinationMode, buildDbTitle]);
+
+  useEffect(() => {
+    if (newDatabaseOpen && newDatabaseTitle && !newDatabaseId) {
+      setNewDatabaseId(slugifyDbId(newDatabaseTitle));
+    }
+  }, [newDatabaseOpen, newDatabaseTitle, newDatabaseId]);
 
   const currentTitle = state.selectedNote ? extractTitle(state.selectedNote.markdown || "", state.selectedPath || "Untitled") : "";
   const pageHeadings = useMemo(() => state.selectedNote ? extractHeadings(state.selectedNote.markdown || "") : [], [state.selectedNote]);
@@ -187,11 +192,22 @@ export function App({ backend }: { backend: WikiBackend }) {
     void refresh(nextRoute);
   }
 
-  function applyAsk(event: Event): void {
+  async function createDatabaseFlow(event: Event): Promise<void> {
     event.preventDefault();
-    const nextRoute = { ...route, ask: askDraft.trim() || undefined };
-    setRoute(nextRoute);
-    void refresh(nextRoute);
+    const dbTitle = newDatabaseTitle.trim();
+    const dbId = (newDatabaseId.trim() || slugifyDbId(dbTitle)).trim();
+    if (!dbId) {
+      setError("Name the database before creating it.");
+      return;
+    }
+    setMode("browse");
+    await runMutation(async () => {
+      const result = await backend.createDatabase({ dbId, dbTitle: dbTitle || undefined });
+      setNewDatabaseOpen(false);
+      setNewDatabaseTitle("");
+      setNewDatabaseId("");
+      return result;
+    });
   }
 
   async function saveCurrentPage(): Promise<void> {
@@ -311,16 +327,20 @@ export function App({ backend }: { backend: WikiBackend }) {
           selectedInboxPath={selectedInboxPath}
           mutating={mutating}
           searchDraft={searchDraft}
-          askDraft={askDraft}
+          newDatabaseOpen={newDatabaseOpen}
+          newDatabaseTitle={newDatabaseTitle}
+          newDatabaseId={newDatabaseId}
           onOpenDb={openDb}
           onOpenPage={openPage}
           onOpenInboxNote={openInboxNote}
           onCompileSelectedInbox={compileSelectedInbox}
           onNewPage={() => setMode("edit")}
           onSearchDraftChange={setSearchDraft}
-          onAskDraftChange={setAskDraft}
           onApplySearch={applySearch}
-          onApplyAsk={applyAsk}
+          onToggleCreateDatabase={() => setNewDatabaseOpen((open) => !open)}
+          onCreateDatabase={createDatabaseFlow}
+          onNewDatabaseTitleChange={setNewDatabaseTitle}
+          onNewDatabaseIdChange={setNewDatabaseId}
         />
 
         <main class="wiki-main">

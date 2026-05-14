@@ -1,5 +1,4 @@
 import { ArticleView } from "../../article-view";
-import { displayTitleFromPath } from "../../domain/wiki-model";
 import type { WikiPreviewRequest, WikiWorkspaceState } from "../../types";
 
 type Props = {
@@ -20,22 +19,6 @@ export function BrowsePane(props: Props) {
           <p title={props.state.selectedPath || undefined}>{props.state.selectedPath || "Choose a page from navigation."}</p>
         </div>
       </div>
-      {props.state.queryResult ? (
-        <div class="wiki-query-result">
-          <h3>Answer</h3>
-          <p>{props.state.queryResult.brief || "No synthesized answer was available."}</p>
-          {props.state.queryResult.refs.length > 0 ? (
-            <div class="wiki-ref-list">
-              {props.state.queryResult.refs.map((ref) => (
-                <button key={ref.path} type="button" class="wiki-ref-row" onClick={() => props.onOpenPage(ref.path)}>
-                  <strong title={ref.title || displayTitleFromPath(ref.path)}>{ref.title || displayTitleFromPath(ref.path)}</strong>
-                  <span title={ref.path}>{ref.path}</span>
-                </button>
-              ))}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
       <ArticleView
         markdown={props.state.selectedNote?.markdown || ""}
         articleTitle={props.currentTitle || "Untitled"}

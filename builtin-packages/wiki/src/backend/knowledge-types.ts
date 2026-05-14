@@ -51,7 +51,6 @@ export type KnowledgeIngestArgs = {
 };
 export type KnowledgeListArgs = { prefix?: string; recursive?: boolean; limit?: number };
 export type KnowledgeMergeArgs = { sourcePath: string; targetPath: string; mode?: "prefer-target" | "prefer-source" | "union"; keepSource?: boolean };
-export type KnowledgeQueryArgs = { query: string; prefixes?: string[]; limit?: number; maxBytes?: number };
 export type KnowledgeReadArgs = { path: string };
 export type KnowledgeSearchArgs = { query: string; prefix?: string; limit?: number };
 

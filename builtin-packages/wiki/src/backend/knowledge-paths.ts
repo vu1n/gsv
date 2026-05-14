@@ -1,8 +1,6 @@
 export const KNOWLEDGE_ROOT = "knowledge";
 export const DIR_MARKER = ".dir";
 export const DEFAULT_LIMIT = 100;
-export const DEFAULT_QUERY_LIMIT = 5;
-export const DEFAULT_QUERY_MAX_BYTES = 4096;
 
 export function normalizeKnowledgePath(input: string): string {
   const trimmed = input.trim().replace(/^\/+/, "").replace(/\/+$/, "");

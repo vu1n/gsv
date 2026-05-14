@@ -4,7 +4,6 @@ export type WikiRoute = {
   db?: string;
   path?: string;
   q?: string;
-  ask?: string;
 };
 
 export function readMode(): WikiMode {
@@ -22,7 +21,6 @@ export function readRoute(): WikiRoute {
     db: read("db"),
     path: read("path"),
     q: read("q"),
-    ask: read("ask"),
   };
 }
 
@@ -32,7 +30,7 @@ export function writeLocation(mode: WikiMode, route: WikiRoute): void {
   writeParam(url, "db", route.db);
   writeParam(url, "path", route.path);
   writeParam(url, "q", route.q);
-  writeParam(url, "ask", route.ask);
+  url.searchParams.delete("ask");
   window.history.replaceState({}, "", `${url.pathname}${url.search}`);
 }
 
@@ -42,7 +40,7 @@ export function buildWikiHref(mode: WikiMode, route: WikiRoute): string {
   writeParam(url, "db", route.db);
   writeParam(url, "path", route.path);
   writeParam(url, "q", route.q);
-  writeParam(url, "ask", route.ask);
+  url.searchParams.delete("ask");
   return `${url.pathname}${url.search}`;
 }
 

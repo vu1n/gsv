@@ -15,16 +15,20 @@ type Props = {
   selectedInboxPath: string;
   mutating: boolean;
   searchDraft: string;
-  askDraft: string;
+  newDatabaseOpen: boolean;
+  newDatabaseTitle: string;
+  newDatabaseId: string;
   onOpenDb(db: string): void;
   onOpenPage(path: string): void;
   onOpenInboxNote(path: string): void;
   onCompileSelectedInbox(): Promise<void> | void;
   onNewPage(): void;
   onSearchDraftChange(value: string): void;
-  onAskDraftChange(value: string): void;
   onApplySearch(event: Event): void;
-  onApplyAsk(event: Event): void;
+  onToggleCreateDatabase(): void;
+  onCreateDatabase(event: Event): void;
+  onNewDatabaseTitleChange(value: string): void;
+  onNewDatabaseIdChange(value: string): void;
 };
 
 const MODES: Array<{ id: WikiMode; label: string; icon: WikiIconName; description: string }> = [
@@ -61,16 +65,49 @@ export function WikiRail(props: Props) {
       </section>
 
       <section class="wiki-nav-block">
-        <label class="wiki-sidebar-field">
+        <div class="wiki-nav-heading">
           <span>Database</span>
+          <button
+            type="button"
+            class="wiki-inline-icon-button"
+            onClick={props.onToggleCreateDatabase}
+            title={props.newDatabaseOpen ? "Close database creator" : "Create database"}
+            aria-label={props.newDatabaseOpen ? "Close database creator" : "Create database"}
+            aria-expanded={props.newDatabaseOpen}
+          >
+            <WikiIcon name="database" />
+          </button>
+        </div>
+        <label class="wiki-sidebar-field">
           <select
             value={props.selectedDb}
             onChange={(event) => props.onOpenDb((event.currentTarget as HTMLSelectElement).value)}
+            aria-label="Database"
           >
             <option value="">Select database</option>
             {props.state.dbs.map((db) => <option key={db.id} value={db.id}>{db.title || db.id}</option>)}
           </select>
         </label>
+        {props.newDatabaseOpen ? (
+          <form class="wiki-new-db-form" onSubmit={props.onCreateDatabase}>
+            <input
+              value={props.newDatabaseTitle}
+              onInput={(event) => props.onNewDatabaseTitleChange((event.currentTarget as HTMLInputElement).value)}
+              placeholder="Database title"
+              aria-label="Database title"
+            />
+            <input
+              value={props.newDatabaseId}
+              onInput={(event) => props.onNewDatabaseIdChange((event.currentTarget as HTMLInputElement).value)}
+              placeholder="database-id"
+              aria-label="Database id"
+            />
+            <div class="wiki-sidebar-action-row">
+              <button type="submit" disabled={props.mutating}>Create</button>
+              <button type="button" onClick={props.onToggleCreateDatabase}>Cancel</button>
+            </div>
+          </form>
+        ) : null}
         {props.selectedDb ? (
           <a
             class="wiki-current-context"
@@ -88,15 +125,18 @@ export function WikiRail(props: Props) {
       {(props.mode === "browse" || props.mode === "edit") ? (
         <section class="wiki-nav-block">
           <div class="wiki-nav-heading">
-            <span>Find</span>
+            <span>Search</span>
           </div>
           <form class="wiki-sidebar-search" onSubmit={props.onApplySearch}>
-            <input value={props.searchDraft} onInput={(event) => props.onSearchDraftChange((event.currentTarget as HTMLInputElement).value)} placeholder="Search pages" type="search" />
-            <button type="submit" title="Search pages" aria-label="Search pages"><WikiIcon name="search" /></button>
-          </form>
-          <form class="wiki-sidebar-search" onSubmit={props.onApplyAsk}>
-            <input value={props.askDraft} onInput={(event) => props.onAskDraftChange((event.currentTarget as HTMLInputElement).value)} placeholder="Ask the wiki" />
-            <button type="submit" title="Ask the wiki" aria-label="Ask the wiki"><WikiIcon name="spark" /></button>
+            <input
+              value={props.searchDraft}
+              onInput={(event) => props.onSearchDraftChange((event.currentTarget as HTMLInputElement).value)}
+              placeholder="Find matching pages"
+              type="search"
+              title="Find matching pages and snippets"
+              aria-label="Find matching pages"
+            />
+            <button type="submit" title="Find matching pages" aria-label="Find matching pages"><WikiIcon name="search" /></button>
           </form>
         </section>
       ) : null}

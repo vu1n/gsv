@@ -220,7 +220,6 @@ summary:focus-visible {
 
 .wiki-nav-block,
 .wiki-inspector-section,
-.wiki-query-result,
 .wiki-status {
   display: grid;
   gap: 10px;
@@ -303,6 +302,7 @@ summary:focus-visible {
 
 .wiki-sidebar-field select,
 .wiki-sidebar-search input,
+.wiki-new-db-form input,
 .wiki-form-grid input,
 .wiki-workflow input,
 .wiki-workflow select,
@@ -352,6 +352,37 @@ summary:focus-visible {
   gap: 6px;
 }
 
+.wiki-new-db-form {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--wiki-line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.wiki-sidebar-action-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.wiki-sidebar-action-row button {
+  min-height: 34px;
+  border: 1px solid var(--wiki-line-strong);
+  border-radius: 7px;
+  background: #ffffff;
+  color: var(--wiki-text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.wiki-sidebar-action-row button[type="submit"] {
+  border-color: var(--wiki-accent-blue);
+  background: var(--wiki-accent-blue);
+  color: #ffffff;
+}
+
 .wiki-sidebar-search button,
 .wiki-inline-icon-button {
   display: inline-grid;
@@ -370,8 +401,7 @@ summary:focus-visible {
 }
 
 .wiki-entry-list,
-.wiki-outline-list,
-.wiki-ref-list {
+.wiki-outline-list {
   display: grid;
   gap: 3px;
   min-width: 0;
@@ -433,14 +463,12 @@ summary:focus-visible {
 }
 
 .wiki-pane-head h2,
-.wiki-query-result h3,
 .wiki-inspector-section h2 {
   margin: 0;
   font-size: 16px;
 }
 
-.wiki-pane-head p,
-.wiki-query-result p {
+.wiki-pane-head p {
   margin: 5px 0 0;
   color: var(--wiki-muted);
   line-height: 1.45;
@@ -464,8 +492,7 @@ summary:focus-visible {
 .wiki-inline-actions button,
 .wiki-toggle-group button,
 .preview-open,
-.preview-close,
-.wiki-ref-row {
+.preview-close {
   min-height: 38px;
   border: 1px solid var(--wiki-line-strong);
   border-radius: 7px;
@@ -531,7 +558,6 @@ summary:focus-visible {
   font-family: "JetBrains Mono", "SFMono-Regular", monospace;
 }
 
-.wiki-query-result,
 .wiki-status {
   max-width: 78ch;
   padding: 12px;
@@ -548,24 +574,6 @@ summary:focus-visible {
 
 .wiki-status.is-info {
   background: var(--wiki-info-bg);
-}
-
-.wiki-ref-row {
-  display: grid;
-  gap: 2px;
-  width: 100%;
-  text-align: left;
-}
-
-.wiki-ref-row strong,
-.wiki-ref-row span {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.wiki-ref-row span {
-  color: var(--wiki-muted);
-  font-size: 12px;
 }
 
 .article-body {

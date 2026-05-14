@@ -5,7 +5,6 @@ import type {
 } from "@gsv/protocol/syscalls/repositories";
 import {
   applyKnowledgePatch,
-  compactExcerpt,
   createEmptyDoc,
   dedupeSourceRefs,
   extractSummaryText,
@@ -15,8 +14,6 @@ import {
 } from "./knowledge-doc";
 import {
   DEFAULT_LIMIT,
-  DEFAULT_QUERY_LIMIT,
-  DEFAULT_QUERY_MAX_BYTES,
   DIR_MARKER,
   KNOWLEDGE_ROOT,
   basename,
@@ -44,7 +41,6 @@ import type {
   KnowledgeListArgs,
   KnowledgeMergeArgs,
   KnowledgePromoteArgs,
-  KnowledgeQueryArgs,
   KnowledgeReadArgs,
   KnowledgeSearchArgs,
   KnowledgeWriteArgs,
@@ -61,15 +57,12 @@ export type {
   KnowledgeListArgs,
   KnowledgeMergeArgs,
   KnowledgePromoteArgs,
-  KnowledgeQueryArgs,
   KnowledgeReadArgs,
   KnowledgeSearchArgs,
   KnowledgeSourceRef,
   KnowledgeWriteArgs,
   WikiKernelClient,
 } from "./knowledge-types";
-
-const encoder = new TextEncoder();
 
 export class WikiKnowledgeStore {
   private homeRepo: string | null = null;
@@ -234,49 +227,6 @@ export class WikiKnowledgeStore {
     const prefix = normalizeKnowledgePath(args.prefix ?? "");
     const limit = clampLimit(args.limit, DEFAULT_LIMIT);
     return { matches: await this.collectSearchMatches(args.query, prefix, limit) };
-  }
-
-  async query(args: KnowledgeQueryArgs) {
-    const limit = clampLimit(args.limit, DEFAULT_QUERY_LIMIT);
-    const maxBytes = Math.max(256, args.maxBytes ?? DEFAULT_QUERY_MAX_BYTES);
-    const prefixes = (args.prefixes ?? []).map((prefix) => normalizeKnowledgePath(prefix));
-    const searchPrefixes = prefixes.length > 0 ? prefixes : [""];
-
-    const collected: SearchMatch[] = [];
-    for (const prefix of searchPrefixes) {
-      for (const match of await this.collectSearchMatches(args.query, prefix, limit)) {
-        if (!collected.some((existing) => existing.path === match.path)) {
-          collected.push(match);
-        }
-      }
-    }
-    collected.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
-    const topMatches = collected.slice(0, limit);
-    const refs = topMatches.map((match) => ({ path: match.path, title: match.title }));
-
-    let remaining = maxBytes;
-    const lines = ["## Relevant knowledge"];
-    for (const match of topMatches) {
-      const note = await this.read({ path: match.path });
-      if (!note.exists || !note.markdown) {
-        continue;
-      }
-      const doc = parseKnowledgeDoc(note.markdown, match.path);
-      const excerpt = compactExcerpt(doc, remaining);
-      if (!excerpt) {
-        continue;
-      }
-      const heading = `### ${doc.title} (${match.path})`;
-      lines.push(heading, excerpt);
-      remaining -= encoder.encode(`${heading}\n${excerpt}\n`).length;
-      if (remaining <= 0) {
-        break;
-      }
-    }
-    if (lines.length === 1) {
-      lines.push("- No relevant knowledge found.");
-    }
-    return { brief: `${lines.join("\n\n")}\n`, refs };
   }
 
   async merge(args: KnowledgeMergeArgs) {
