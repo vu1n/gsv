@@ -1,12 +1,6 @@
+import DOMPurify from "dompurify";
+import { parse as parseMarkdown } from "marked";
 import type { WikiPreviewPayload, WikiPreviewRequest } from "./types";
-
-type MarkedGlobal = {
-  parse(markdown: string, options?: Record<string, unknown>): string;
-};
-
-type DomPurifyGlobal = {
-  sanitize(html: string): string;
-};
 
 type RenderOptions = {
   markdown: string;
@@ -166,24 +160,9 @@ function resolveInternalPath(rawHref: string, selectedDb: string, selectedPath: 
   return null;
 }
 
-function getMarked(): MarkedGlobal | null {
-  const value = (window as typeof window & { marked?: MarkedGlobal }).marked;
-  return value && typeof value.parse === "function" ? value : null;
-}
-
-function getPurifier(): DomPurifyGlobal | null {
-  const value = (window as typeof window & { DOMPurify?: DomPurifyGlobal }).DOMPurify;
-  return value && typeof value.sanitize === "function" ? value : null;
-}
-
 function renderMarkdownHtml(markdown: string): string {
-  const markedApi = getMarked();
-  const purifier = getPurifier();
-  if (!markedApi || !purifier) {
-    return `<pre><code>${escapeHtml(markdown)}</code></pre>`;
-  }
-  const parsed = markedApi.parse(markdown, { async: false, breaks: true, gfm: true });
-  return purifier.sanitize(typeof parsed === "string" ? parsed : String(parsed));
+  const parsed = parseMarkdown(markdown, { async: false, breaks: true, gfm: true });
+  return DOMPurify.sanitize(typeof parsed === "string" ? parsed : String(parsed));
 }
 
 
