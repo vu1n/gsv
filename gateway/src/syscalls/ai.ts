@@ -7,6 +7,15 @@
  */
 
 import type { ToolDefinition } from "./index";
+import type {
+  AiTranscriptionCreateArgs,
+  AiTranscriptionCreateResult,
+} from "@gsv/protocol/syscalls/ai";
+
+export type {
+  AiTranscriptionCreateArgs,
+  AiTranscriptionCreateResult,
+} from "@gsv/protocol/syscalls/ai";
 
 export type SystemAiContextProfile =
   | "init"
@@ -18,7 +27,11 @@ export type SystemAiContextProfile =
 
 export type PackageAiContextProfile = `${string}#${string}`;
 
-export type AiContextProfile = SystemAiContextProfile | PackageAiContextProfile;
+export type UserAiContextProfile = string;
+
+export type AiContextProfile = SystemAiContextProfile | PackageAiContextProfile | UserAiContextProfile;
+
+const USER_PROFILE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
 
 export function isSystemAiContextProfile(value: unknown): value is SystemAiContextProfile {
   return value === "init"
@@ -38,8 +51,20 @@ export function isPackageAiContextProfile(value: unknown): value is PackageAiCon
   return separator > 0 && separator < trimmed.length - 1;
 }
 
+export function isUserAiContextProfile(value: unknown): value is UserAiContextProfile {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const trimmed = value.trim();
+  return USER_PROFILE_PATTERN.test(trimmed)
+    && !isSystemAiContextProfile(trimmed)
+    && !isPackageAiContextProfile(trimmed);
+}
+
 export function isAiContextProfile(value: unknown): value is AiContextProfile {
-  return isSystemAiContextProfile(value) || isPackageAiContextProfile(value);
+  return isSystemAiContextProfile(value)
+    || isPackageAiContextProfile(value)
+    || isUserAiContextProfile(value);
 }
 
 // --- ai.tools ---
@@ -74,6 +99,11 @@ export type AiConfigArgs = {
   profile?: AiContextProfile;
 };
 
+export type ContextFile = {
+  name: string;
+  text: string;
+};
+
 export type AiConfigResult = {
   profile?: AiContextProfile;
   provider: string;
@@ -83,14 +113,8 @@ export type AiConfigResult = {
   maxTokens: number;
   contextWindowTokens: number | null;
   contextWindowSource: "model" | "config" | "unknown";
-  systemContextFiles?: Array<{
-    name: string;
-    text: string;
-  }>;
-  profileContextFiles?: Array<{
-    name: string;
-    text: string;
-  }>;
+  systemContextFiles?: ContextFile[];
+  profileContextFiles?: ContextFile[];
   skillIndex?: AiSkillIndexEntry[];
   profileApprovalPolicy?: string | null;
   maxContextBytes: number;

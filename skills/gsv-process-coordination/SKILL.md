@@ -11,8 +11,8 @@ Processes are durable agent instances. They are not single chat sessions.
 
 Use:
 
-- init process for ongoing user-level continuity
-- task processes for bounded work
+- init/personal process for ongoing user-level continuity, routing, and context stewardship
+- task processes for bounded delegated work
 - review processes for package/code review
 - cron processes for scheduled background work
 - app processes for app-owned runtime tasks
@@ -44,6 +44,8 @@ Host CLI shape:
 
 ```bash
 gsv proc spawn --label "docs audit" --prompt "Review the docs for stale commands."
+gsv proc spawn --profile personal --prompt "Help me decide what to automate next."
+gsv proc spawn --profile research --prompt "Audit this week's notes."
 ```
 
 When spawning from inside GSV, include enough assignment context for the child to start without reconstructing the parent conversation. Put durable handoff state in workspace files when it must outlive the process.

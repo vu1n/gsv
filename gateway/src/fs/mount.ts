@@ -22,9 +22,12 @@ export interface MountBackend {
   appendFile(path: string, content: FileContent, options?: { encoding?: BufferEncoding } | BufferEncoding): Promise<void>;
   exists(path: string): Promise<boolean>;
   stat(path: string): Promise<ExtendedMountStat>;
+  lstat?(path: string): Promise<ExtendedMountStat>;
   mkdir(path: string, options?: MkdirOptions): Promise<void>;
   readdir(path: string): Promise<string[]>;
   rm(path: string, options?: RmOptions): Promise<void>;
+  symlink?(target: string, linkPath: string): Promise<void>;
+  readlink?(path: string): Promise<string>;
   search?(path: string, query: string, include?: string): Promise<FsSearchBackendResult>;
   chmod?(path: string, mode: number): Promise<void>;
   chown?(path: string, uid?: number, gid?: number): Promise<void>;

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { KernelContext } from "./context";
-import { handleAiTools } from "./ai";
+import { handleAiTools, handleAiTranscriptionCreate } from "./ai";
+import { DEFAULT_AUDIO_TRANSCRIPTION_MODEL } from "../inference/transcription";
 
 function makeContext(connectionState: string): KernelContext {
   return {
@@ -80,5 +81,94 @@ describe("handleAiTools", () => {
     expect(result.tools.some((tool) => tool.name.startsWith("MCP_"))).toBe(false);
     expect(result.mcpServers).toEqual([]);
     expect(ctx.mcp.listTools).not.toHaveBeenCalled();
+  });
+});
+
+describe("handleAiTranscriptionCreate", () => {
+  function makeTranscriptionContext(options: {
+    config?: Record<string, string>;
+    response?: unknown;
+  } = {}): KernelContext {
+    const config = options.config ?? {};
+    return {
+      identity: {
+        role: "user",
+        process: {
+          uid: 1000,
+          gid: 1000,
+          gids: [1000],
+          username: "sam",
+          home: "/home/sam",
+          cwd: "/home/sam",
+          workspaceId: null,
+        },
+        capabilities: ["*"],
+      },
+      config: {
+        get: vi.fn((key: string) => config[key] ?? null),
+      },
+      env: {
+        AI: {
+          run: vi.fn(async () => options.response ?? ({
+            text: "turn on the office lights",
+            transcription_info: { duration: 1.25, language: "en" },
+          })),
+        },
+      },
+    } as unknown as KernelContext;
+  }
+
+  it("transcribes audio through the shared Workers AI path", async () => {
+    const ctx = makeTranscriptionContext();
+
+    const result = await handleAiTranscriptionCreate({
+      audio: {
+        data: "data:audio/webm;base64,AQID",
+        mimeType: "audio/webm",
+      },
+      prompt: "short command",
+    }, ctx);
+
+    expect(result.text).toBe("turn on the office lights");
+    expect(result.duration).toBe(1.25);
+    expect(result.language).toBe("en");
+    expect(result.model).toBe(DEFAULT_AUDIO_TRANSCRIPTION_MODEL);
+    expect(ctx.env.AI.run).toHaveBeenCalledWith(
+      DEFAULT_AUDIO_TRANSCRIPTION_MODEL,
+      expect.objectContaining({
+        audio: "AQID",
+        task: "transcribe",
+        initial_prompt: "short command",
+        vad_filter: true,
+        condition_on_previous_text: false,
+      }),
+    );
+  });
+
+  it("uses configured transcription model and byte limits", async () => {
+    const ctx = makeTranscriptionContext({
+      config: {
+        "config/ai/transcription/model": "@cf/openai/whisper-tiny-en",
+        "config/ai/transcription/max_bytes": "2",
+      },
+    });
+
+    await expect(handleAiTranscriptionCreate({
+      audio: {
+        data: "AQID",
+        mimeType: "audio/ogg",
+      },
+    }, ctx)).rejects.toThrow("exceeds transcription limit");
+  });
+
+  it("rejects non-audio payloads", async () => {
+    const ctx = makeTranscriptionContext();
+
+    await expect(handleAiTranscriptionCreate({
+      audio: {
+        data: "AQID",
+        mimeType: "text/plain",
+      },
+    }, ctx)).rejects.toThrow("audio MIME type");
   });
 });

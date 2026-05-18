@@ -612,7 +612,7 @@ function normalizeScheduleTarget(target: ScheduleTarget): ScheduleTarget {
 
   if (target.kind === "process.spawn") {
     const prompt = normalizeRequiredText(target.prompt, "process.spawn prompt");
-    const profile = target.profile ?? "cron";
+    const profile = target.profile === "personal" ? "init" : target.profile ?? "cron";
     if (!isAiContextProfile(profile)) {
       throw new Error(`Invalid process profile: ${String(profile)}`);
     }

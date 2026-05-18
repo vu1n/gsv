@@ -1,6 +1,19 @@
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 
 import type { ProcMediaInput } from "@gsv/protocol/syscalls/proc";
+import {
+  DEFAULT_AUDIO_TRANSCRIPTION_MODEL,
+  DEFAULT_MAX_AUDIO_TRANSCRIPTION_BYTES,
+  normalizeBase64Data,
+  transcribeAudioWithWorkersAi,
+  type AudioTranscriptionBinding,
+} from "../inference/transcription";
+
+export {
+  DEFAULT_AUDIO_TRANSCRIPTION_MODEL,
+  DEFAULT_MAX_AUDIO_TRANSCRIPTION_BYTES,
+  type AudioTranscriptionBinding,
+} from "../inference/transcription";
 
 export type StoredProcessMedia = {
   type: ProcMediaInput["type"];
@@ -13,18 +26,12 @@ export type StoredProcessMedia = {
   transcription?: string;
 };
 
-export type AudioTranscriptionBinding = {
-  run(model: string, input: Record<string, unknown>): Promise<unknown>;
-};
-
 export type StoreIncomingProcessMediaOptions = {
   ai?: AudioTranscriptionBinding;
   audioTranscriptionModel?: string;
   maxTranscriptionBytes?: number;
 };
 
-export const DEFAULT_AUDIO_TRANSCRIPTION_MODEL = "@cf/openai/whisper-large-v3-turbo";
-export const DEFAULT_MAX_AUDIO_TRANSCRIPTION_BYTES = 25 * 1024 * 1024;
 
 export function processMediaPrefix(uid: number, pid: string): string {
   return `var/media/${uid}/${pid}/`;
@@ -71,7 +78,7 @@ export async function storeIncomingProcessMedia(
     }
 
     if (shouldTranscribeAudio(item, next, bytes, options)) {
-      const result = await transcribeAudio(options.ai, base64!, options.audioTranscriptionModel);
+      const result = await transcribeIncomingAudio(options.ai, base64!, options.audioTranscriptionModel);
       if (result) {
         next.transcription = result.text;
         if (next.duration === undefined && typeof result.duration === "number") {
@@ -225,54 +232,23 @@ function shouldTranscribeAudio(
   return bytes.byteLength <= maxBytes;
 }
 
-async function transcribeAudio(
+async function transcribeIncomingAudio(
   ai: AudioTranscriptionBinding | undefined,
   base64: string,
   model = DEFAULT_AUDIO_TRANSCRIPTION_MODEL,
 ): Promise<{ text: string; duration?: number } | null> {
-  if (!ai) {
-    return null;
-  }
-
   try {
-    const response = await ai.run(model, {
-      audio: base64,
-      task: "transcribe",
-      vad_filter: true,
-      condition_on_previous_text: false,
+    return await transcribeAudioWithWorkersAi(ai, {
+      data: base64,
+      model,
+      mode: "transcribe",
+      vadFilter: true,
+      conditionOnPreviousText: false,
     });
-    return normalizeTranscriptionResponse(response);
   } catch (error) {
     console.warn("[ProcessMedia] audio transcription failed:", error);
     return null;
   }
-}
-
-function normalizeTranscriptionResponse(value: unknown): { text: string; duration?: number } | null {
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-
-  const record = value as Record<string, unknown>;
-  const text = typeof record.text === "string" ? record.text.trim() : "";
-  if (!text) {
-    return null;
-  }
-
-  const info = record.transcription_info && typeof record.transcription_info === "object"
-    ? record.transcription_info as Record<string, unknown>
-    : null;
-  const duration = typeof info?.duration === "number" && Number.isFinite(info.duration)
-    ? info.duration
-    : undefined;
-
-  return duration === undefined ? { text } : { text, duration };
-}
-
-function normalizeBase64Data(base64: string): string {
-  return base64.includes(",")
-    ? base64.slice(base64.indexOf(",") + 1)
-    : base64;
 }
 
 function base64ToUint8Array(base64: string): Uint8Array {

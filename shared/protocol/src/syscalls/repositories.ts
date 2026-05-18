@@ -185,6 +185,11 @@ export type RepoApplyOp =
       contentBase64?: string;
     }
   | {
+      type: "symlink";
+      path: string;
+      target: string;
+    }
+  | {
       type: "delete";
       path: string;
       recursive?: boolean;

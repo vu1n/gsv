@@ -512,6 +512,10 @@ pub(crate) enum ProcAction {
 
     /// Spawn a child process
     Spawn {
+        /// Process profile to spawn (defaults to task; use personal for your init agent)
+        #[arg(long)]
+        profile: Option<String>,
+
         /// Optional process label
         #[arg(long)]
         label: Option<String>,

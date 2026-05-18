@@ -174,8 +174,8 @@ function ThreadsPane(props: {
       <nav class="thread-list" aria-label="Chat processes">
         <button type="button" class={"thread-row" + (activePid.startsWith("init:") ? " is-active" : "")} onClick={props.onHome}>
           <span class="row-icon"><HomeIcon /></span>
-          <span class="thread-row-title">Home</span>
-          <span class="thread-row-meta">Persistent init conversation</span>
+          <span class="thread-row-title">Personal Agent</span>
+          <span class="thread-row-meta">Persistent personal conversation</span>
         </button>
         {props.threads.map((thread) => (
           <button

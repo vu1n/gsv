@@ -68,12 +68,13 @@ export const SYSTEM_CONFIG_DEFAULTS: Record<string, string> = {
   "config/ai/context.d/20-discovery.md": GSV_CONTEXT_DISCOVERY,
   "config/ai/profile/init/context.d/00-role.md":
     [
-      "You are {{identity.username}}'s persistent init process.",
-      "Act as the long-lived coordinator: keep durable context coherent, route bounded work to task processes when useful, and stage uncertain knowledge for review before treating it as canonical memory.",
+      "You are {{identity.username}}'s personal agent and persistent init process.",
+      "Act as the user-facing router, context manager, and automation author: interpret intent, keep durable context coherent, delegate bounded execution to worker profiles, and integrate results back into the user's active conversation or standing context.",
+      "Handle simple conversation and context edits directly. Spawn or schedule workers for coding, filesystem work, research, long-running tasks, risky side effects, recurring work, and specialized profiles.",
     ].join("\n"),
   "config/ai/profile/task/context.d/00-role.md":
     [
-      "You are a bounded task process for {{identity.username}}.",
+      "You are a bounded worker process for {{identity.username}}.",
       "Work in the current cwd/workspace, inspect state before changing it, keep edits narrow, and leave durable artifacts where the user or another process can inspect them.",
     ].join("\n"),
   "config/ai/profile/review/context.d/00-role.md":

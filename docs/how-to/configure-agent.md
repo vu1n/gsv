@@ -26,6 +26,14 @@ gsv config set users/1000/ai/max_context_bytes 65536
 Sensitive keys such as `api_key`, `token`, `secret`, and `password` are hidden
 from non-root system config reads.
 
+Voice transcription uses the shared `ai.transcription.create` path. Configure
+it independently from the chat model when needed:
+
+```bash
+gsv config set config/ai/transcription/model @cf/openai/whisper-large-v3-turbo
+gsv config set config/ai/transcription/max_bytes 26214400
+```
+
 ## Edit System and Profile Context
 
 System context applies to every process profile:
@@ -50,6 +58,27 @@ gsv config set config/ai/context.d/50-local-runtime.md \
 
 gsv config set config/ai/profile/task/context.d/50-style.md \
   "Be direct, inspect files before editing, and explain risky changes first."
+```
+
+The user-facing default is the persistent personal agent, implemented by the
+`init` profile and accepted as `personal` by process spawning surfaces. Use
+`task` for bounded delegated workers rather than for the long-lived personal
+front door.
+
+Users can add worker specializations under their home profile directory:
+
+```text
+~/profiles.d/{name}/profile.json
+~/profiles.d/{name}/description.md
+~/profiles.d/{name}/context.d/*.md
+~/profiles.d/{name}/tools/approval
+```
+
+These profiles are filesystem-backed and can carry ordinary files or symbolic
+links. Spawn them directly:
+
+```bash
+gsv proc spawn --profile research --prompt "Audit the week of notes."
 ```
 
 System and profile context can use runtime template variables such as

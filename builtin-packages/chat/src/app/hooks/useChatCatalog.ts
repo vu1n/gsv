@@ -13,7 +13,7 @@ import {
 
 export function useChatCatalog(backend: ChatBackend) {
   const [profiles, setProfiles] = useState<Profile[]>(() => fallbackProfiles());
-  const [draftProfileId, setDraftProfileId] = useState("task");
+  const [draftProfileId, setDraftProfileId] = useState("init");
   const [viewerUsername, setViewerUsername] = useState("You");
   const [threads, setThreads] = useState<WorkspaceEntry[]>([]);
   const [threadsLoading, setThreadsLoading] = useState(false);
@@ -32,9 +32,10 @@ export function useChatCatalog(backend: ChatBackend) {
   );
   const draftProfile = useMemo(() => {
     return conversationProfiles.find((profile) => profile.id === draftProfileId || profile.alias === draftProfileId)
+      ?? conversationProfiles.find((profile) => profile.id === "init")
       ?? newConversationProfiles[0]
       ?? conversationProfiles.find((profile) => profile.id === "task")
-      ?? fallbackProfiles()[1];
+      ?? fallbackProfiles()[0];
   }, [conversationProfiles, draftProfileId, newConversationProfiles]);
 
   const loadViewer = useCallback(async () => {
@@ -101,10 +102,10 @@ export function useChatCatalog(backend: ChatBackend) {
   }, [loadProfiles, loadThreads, loadViewer]);
 
   useEffect(() => {
-    if (newConversationProfiles.length > 0 && !newConversationProfiles.some((profile) => profile.id === draftProfileId)) {
-      setDraftProfileId(newConversationProfiles[0].id);
+    if (conversationProfiles.length > 0 && !conversationProfiles.some((profile) => profile.id === draftProfileId || profile.alias === draftProfileId)) {
+      setDraftProfileId(conversationProfiles.find((profile) => profile.id === "init")?.id ?? conversationProfiles[0].id);
     }
-  }, [draftProfileId, newConversationProfiles]);
+  }, [conversationProfiles, draftProfileId]);
 
   return {
     conversations,
@@ -114,6 +115,7 @@ export function useChatCatalog(backend: ChatBackend) {
     draftProfileId,
     loadConversations,
     loadThreads,
+    conversationProfiles,
     newConversationProfiles,
     setDraftProfileId,
     threads,

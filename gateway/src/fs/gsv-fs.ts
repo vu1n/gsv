@@ -32,6 +32,8 @@ import { isProcessSourceMountPath } from "./backends/process-sources";
 import { isWorkspaceMountPath } from "./backends/workspace";
 import { normalizePath } from "./utils";
 
+const MAX_SYMLINK_DEPTH = 16;
+
 export type ExtendedStat = ExtendedMountStat;
 
 export class GsvFs implements IFileSystem {
@@ -65,22 +67,22 @@ export class GsvFs implements IFileSystem {
   }
 
   async readFile(path: string, options?: { encoding?: BufferEncoding | null } | BufferEncoding): Promise<string> {
-    const p = normalizePath(path);
+    const p = await this.resolveFinalPath(path);
     return this.backendForPath(p).readFile(p, options);
   }
 
   async readFileBuffer(path: string): Promise<Uint8Array> {
-    const p = normalizePath(path);
+    const p = await this.resolveFinalPath(path);
     return this.backendForPath(p).readFileBuffer(p);
   }
 
   async writeFile(path: string, content: FileContent, options?: { encoding?: BufferEncoding } | BufferEncoding): Promise<void> {
-    const p = normalizePath(path);
+    const p = await this.resolveFinalPath(path, { allowMissingFinal: true });
     await this.backendForPath(p).writeFile(p, content, options);
   }
 
   async appendFile(path: string, content: FileContent, options?: { encoding?: BufferEncoding } | BufferEncoding): Promise<void> {
-    const p = normalizePath(path);
+    const p = await this.resolveFinalPath(path, { allowMissingFinal: true });
     await this.backendForPath(p).appendFile(p, content, options);
   }
 
@@ -104,9 +106,9 @@ export class GsvFs implements IFileSystem {
   }
 
   async statExtended(path: string): Promise<ExtendedStat> {
-    const p = normalizePath(path);
+    const normalized = normalizePath(path);
 
-    if (p === "/") {
+    if (normalized === "/") {
       return {
         isFile: false,
         isDirectory: true,
@@ -119,7 +121,7 @@ export class GsvFs implements IFileSystem {
       };
     }
 
-    if (p === "/etc" && this.kernel) {
+    if (normalized === "/etc" && this.kernel) {
       return {
         isFile: false,
         isDirectory: true,
@@ -132,11 +134,22 @@ export class GsvFs implements IFileSystem {
       };
     }
 
+    const p = await this.resolveFinalPath(normalized);
     return this.backendForPath(p).stat(p);
   }
 
   async lstat(path: string): Promise<FsStat> {
-    return this.stat(path);
+    const p = normalizePath(path);
+    const backend = this.backendForPath(p);
+    const ext = backend.lstat ? await backend.lstat(p) : await this.statExtended(p);
+    return {
+      isFile: ext.isFile,
+      isDirectory: ext.isDirectory,
+      isSymbolicLink: ext.isSymbolicLink,
+      mode: ext.mode,
+      size: ext.size,
+      mtime: ext.mtime,
+    };
   }
 
   async mkdir(path: string, options?: MkdirOptions): Promise<void> {
@@ -145,16 +158,17 @@ export class GsvFs implements IFileSystem {
   }
 
   async readdir(path: string): Promise<string[]> {
-    const p = normalizePath(path);
+    const normalized = normalizePath(path);
 
-    if (p === "/") {
+    if (normalized === "/") {
       return this.readdirRoot();
     }
 
-    if (p === "/etc" && this.kernel) {
+    if (normalized === "/etc" && this.kernel) {
       return this.readdirEtc();
     }
 
+    const p = await this.resolveFinalPath(normalized);
     return this.backendForPath(p).readdir(p);
   }
 
@@ -164,7 +178,7 @@ export class GsvFs implements IFileSystem {
     for (const name of names) {
       const childPath = path.endsWith("/") ? path + name : path + "/" + name;
       try {
-        const s = await this.stat(childPath);
+        const s = await this.lstat(childPath);
         results.push({ name, isFile: s.isFile, isDirectory: s.isDirectory, isSymbolicLink: s.isSymbolicLink });
       } catch {
         results.push({ name, isFile: true, isDirectory: false, isSymbolicLink: false });
@@ -179,8 +193,8 @@ export class GsvFs implements IFileSystem {
   }
 
   async cp(src: string, dest: string, _options?: CpOptions): Promise<void> {
-    const sp = normalizePath(src);
-    const dp = normalizePath(dest);
+    const sp = await this.resolveFinalPath(src);
+    const dp = await this.resolveFinalPath(dest, { allowMissingFinal: true });
     const srcStat = await this.stat(sp);
     if (srcStat.isDirectory) {
       throw new Error(`EISDIR: illegal operation on a directory, cp '${sp}'`);
@@ -195,7 +209,7 @@ export class GsvFs implements IFileSystem {
   }
 
   async chmod(path: string, mode: number): Promise<void> {
-    const p = normalizePath(path);
+    const p = await this.resolveFinalPath(path);
     const backend = this.backendForPath(p);
     if (!backend.chmod) {
       throw new Error(`ENOSYS: chmod not supported for '${p}'`);
@@ -204,7 +218,7 @@ export class GsvFs implements IFileSystem {
   }
 
   async chown(path: string, newUid?: number, newGid?: number): Promise<void> {
-    const p = normalizePath(path);
+    const p = await this.resolveFinalPath(path);
     const backend = this.backendForPath(p);
     if (!backend.chown) {
       throw new Error(`ENOSYS: chown not supported for '${p}'`);
@@ -212,24 +226,34 @@ export class GsvFs implements IFileSystem {
     await backend.chown(p, newUid, newGid);
   }
 
-  async symlink(_target: string, _linkPath: string): Promise<void> {
-    throw new Error("ENOSYS: symlinks not supported");
+  async symlink(target: string, linkPath: string): Promise<void> {
+    const p = normalizePath(linkPath);
+    const backend = this.backendForPath(p);
+    if (!backend.symlink) {
+      throw new Error(`ENOSYS: symlinks not supported for '${p}'`);
+    }
+    await backend.symlink(target, p);
   }
 
   async link(_existingPath: string, _newPath: string): Promise<void> {
     throw new Error("ENOSYS: hard links not supported");
   }
 
-  async readlink(_path: string): Promise<string> {
-    throw new Error("ENOSYS: symlinks not supported");
+  async readlink(path: string): Promise<string> {
+    const p = normalizePath(path);
+    const backend = this.backendForPath(p);
+    if (!backend.readlink) {
+      throw new Error(`EINVAL: invalid argument, readlink '${p}'`);
+    }
+    return backend.readlink(p);
   }
 
   async realpath(path: string): Promise<string> {
-    return normalizePath(path);
+    return this.resolveFinalPath(path);
   }
 
   async utimes(path: string, atime: Date, mtime: Date): Promise<void> {
-    const p = normalizePath(path);
+    const p = await this.resolveFinalPath(path);
     const backend = this.backendForPath(p);
     if (!backend.utimes) {
       const exists = await backend.exists(p);
@@ -250,12 +274,65 @@ export class GsvFs implements IFileSystem {
   }
 
   async search(path: string, query: string, include?: string): Promise<FsSearchBackendResult> {
-    const p = normalizePath(path);
+    const p = await this.resolveFinalPath(path);
     const backend = this.backendForPath(p);
     if (!backend.search) {
       throw new Error(`ENOSYS: search is not supported for '${p}'`);
     }
     return backend.search(p, query, include);
+  }
+
+  private async resolveFinalPath(
+    path: string,
+    options?: { allowMissingFinal?: boolean },
+    depth = 0,
+  ): Promise<string> {
+    if (depth > MAX_SYMLINK_DEPTH) {
+      throw new Error(`ELOOP: too many symbolic links, '${path}'`);
+    }
+
+    const parts = normalizePath(path).split("/").filter(Boolean);
+    if (parts.length === 0) {
+      return "/";
+    }
+
+    let current = "/";
+    for (let index = 0; index < parts.length; index += 1) {
+      current = normalizePath(`${current}/${parts[index]}`);
+      const backend = this.backendForPath(current);
+      let stat: ExtendedMountStat;
+      try {
+        stat = backend.lstat ? await backend.lstat(current) : await backend.stat(current);
+      } catch (error) {
+        if (options?.allowMissingFinal) {
+          return normalizePath(`/${parts.join("/")}`);
+        }
+        throw error;
+      }
+
+      if (stat.isSymbolicLink) {
+        if (!backend.readlink) {
+          throw new Error(`EINVAL: invalid symbolic link '${current}'`);
+        }
+        const target = await backend.readlink(current);
+        const resolvedTarget = this.resolveSymlinkTarget(current, target);
+        const rest = parts.slice(index + 1).join("/");
+        return this.resolveFinalPath(
+          rest ? `${resolvedTarget}/${rest}` : resolvedTarget,
+          options,
+          depth + 1,
+        );
+      }
+    }
+    return current;
+  }
+
+  private resolveSymlinkTarget(linkPath: string, target: string): string {
+    if (target.startsWith("/")) {
+      return normalizePath(target);
+    }
+    const parent = linkPath.split("/").slice(0, -1).join("/") || "/";
+    return normalizePath(`${parent}/${target}`);
   }
 
   private backendForPath(path: string): MountBackend {

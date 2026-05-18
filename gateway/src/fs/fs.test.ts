@@ -219,6 +219,20 @@ describe("GsvFs permissions", () => {
     expect(content).toBe("modified");
   });
 
+  it("resolves R2 symbolic links across normal file operations", async () => {
+    await putFile(`${TEST_PREFIX}target.txt`, "linked data", {
+      uid: "1000", gid: "1000", mode: "644",
+    });
+
+    const fs = makeFs(SAM);
+    await fs.symlink(`/${TEST_PREFIX}target.txt`, `/${TEST_PREFIX}link.txt`);
+
+    expect(await fs.readlink(`/${TEST_PREFIX}link.txt`)).toBe(`/${TEST_PREFIX}target.txt`);
+    expect((await fs.lstat(`/${TEST_PREFIX}link.txt`)).isSymbolicLink).toBe(true);
+    expect(await fs.readFile(`/${TEST_PREFIX}link.txt`)).toBe("linked data");
+    expect((await fs.stat(`/${TEST_PREFIX}link.txt`)).isFile).toBe(true);
+  });
+
   it("root can write any file", async () => {
     await putFile(`${TEST_PREFIX}root-edit.txt`, "original", {
       uid: "1000", gid: "1000", mode: "600",

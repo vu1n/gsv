@@ -19,6 +19,11 @@ export type RipgitApplyOp =
       message?: string;
     }
   | {
+      type: "symlink";
+      path: string;
+      target: string;
+    }
+  | {
       type: "delete";
       path: string;
       recursive?: boolean;

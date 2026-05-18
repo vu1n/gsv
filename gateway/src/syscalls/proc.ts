@@ -33,7 +33,7 @@ export type ProcSpawnAssignment = {
 };
 
 export type ProcSpawnArgs = {
-  profile: AiContextProfile;
+  profile?: AiContextProfile;
   label?: string;
   prompt?: string;
   assignment?: ProcSpawnAssignment;
@@ -513,7 +513,7 @@ export type ProcProfileListArgs = Record<string, never>;
 export type ProcProfileListEntry = {
   id: AiContextProfile;
   alias?: string;
-  kind: "system" | "package";
+  kind: "system" | "user" | "package";
   displayName: string;
   description?: string;
   icon?: string;

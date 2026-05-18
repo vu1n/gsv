@@ -85,6 +85,7 @@ export const SCHED_RUN = "sched.run";
 // AI (process bootstrap)
 export const AI_TOOLS = "ai.tools";
 export const AI_CONFIG = "ai.config";
+export const AI_TRANSCRIPTION_CREATE = "ai.transcription.create";
 
 // Adapter transport (external connectors)
 export const ADAPTER_INBOUND = "adapter.inbound";

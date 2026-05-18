@@ -62,7 +62,7 @@ exports it as `GSV_PID`.
 
 ```bash
 gsv proc list [--uid UID]
-gsv proc spawn [--label LABEL] [--prompt TEXT] [--parent PID]
+gsv proc spawn [--profile PROFILE] [--label LABEL] [--prompt TEXT] [--parent PID]
 gsv proc send MESSAGE [--pid PID]
 gsv proc history [--pid PID] [--limit N] [--offset N]
 gsv proc reset [--pid PID]
@@ -74,6 +74,10 @@ Processes are the agent-facing execution model. `spawn` creates a child process;
 `history`, `reset`, and `kill` operate on the selected process or your init
 process when `--pid` is omitted. `--uid` filters process lists and requires root
 when viewing another user.
+
+`spawn` defaults to the bounded `task` worker profile. Use `--profile personal`
+to target the persistent personal agent (`init`), `--profile cron` for
+non-interactive scheduled work, or a user profile from `~/profiles.d/<name>`.
 
 ## Device Commands
 

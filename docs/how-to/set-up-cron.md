@@ -9,6 +9,11 @@ Use Kernel schedules when scheduled work should create or notify a process.
 Use package daemon schedules when a package backend needs to call one of its
 own RPC methods.
 
+Cron is an execution contract, not a separate natural-language interface. Use
+the personal agent (`init`/`personal`) to author or revise recurring intent, then
+run scheduled work through `cron` or another explicit worker profile with a
+stable target, prompt, timezone, overlap policy, and audit history.
+
 ## Add a Kernel Schedule
 
 Kernel schedules have an expression and a typed target.

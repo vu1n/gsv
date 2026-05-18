@@ -52,6 +52,8 @@ The AI runtime resolves per-user values first, then falls back to system default
 | `config/ai/reasoning` | `users/{uid}/ai/reasoning` | `off` | Reasoning mode hint. |
 | `config/ai/max_tokens` | `users/{uid}/ai/max_tokens` | `8192` | Maximum output tokens. |
 | `config/ai/max_context_bytes` | `users/{uid}/ai/max_context_bytes` | `32768` | Prompt context budget before messages. |
+| `config/ai/transcription/model` | `users/{uid}/ai/transcription/model` | `@cf/openai/whisper-large-v3-turbo` | Model used by `ai.transcription.create` and process media transcription. |
+| `config/ai/transcription/max_bytes` | `users/{uid}/ai/transcription/max_bytes` | `26214400` | Maximum audio payload size accepted for transcription. |
 
 ## System and Profile Context
 
@@ -67,7 +69,7 @@ Built-in AI profiles then load role-specific context from:
 config/ai/profile/{profile}/context.d/*.md
 ```
 
-Supported built-in profiles are `init`, `task`, `review`, `cron`, `mcp`, and `app`. Files are sorted lexically, empty files are skipped, and Markdown content is concatenated into the corresponding context section.
+Supported built-in profiles are `init`, `task`, `review`, `cron`, `mcp`, and `app`. `init` is the persistent personal agent and can be addressed as `personal` by spawn surfaces. Files are sorted lexically, empty files are skipped, and Markdown content is concatenated into the corresponding context section.
 
 Use numeric prefixes to make ordering explicit:
 
@@ -78,6 +80,20 @@ config/ai/profile/task/context.d/00-role.md
 ```
 
 System and profile context support runtime template variables such as `profile`, `identity.uid`, `identity.username`, `identity.home`, `identity.cwd`, `identity.workspaceId`, `workspace`, `devices`, `mcpServers`, and `known_paths`.
+
+User-defined worker profiles live under the user's home filesystem:
+
+```text
+~/profiles.d/{name}/profile.json
+~/profiles.d/{name}/description.md
+~/profiles.d/{name}/context.d/*.md
+~/profiles.d/{name}/tools/approval
+```
+
+User profile names use letters, numbers, `.`, `_`, `-`, or `:` and are spawned
+with `gsv proc spawn --profile <name>` or schedule targets. A user profile
+inherits the bounded `task` context and approval policy unless it provides
+additional context files or a profile-local approval policy.
 
 ## Tool Approval Policy
 

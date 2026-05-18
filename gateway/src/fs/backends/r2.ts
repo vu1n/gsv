@@ -28,6 +28,7 @@ export class R2MountBackend implements MountBackend {
     const obj = await this.bucket.get(key);
     if (!obj) throw new Error(`ENOENT: no such file or directory, open '${p}'`);
     if (isDirectoryMarker(obj)) throw new Error(`EISDIR: illegal operation on a directory, read '${p}'`);
+    if (isSymlink(obj)) throw new Error(`EINVAL: invalid argument, read '${p}' is a symbolic link`);
     this.assertMode(obj, READ_BIT, p);
     return obj.text();
   }
@@ -37,6 +38,7 @@ export class R2MountBackend implements MountBackend {
     const key = toKey(p);
     const obj = await this.bucket.get(key);
     if (!obj) throw new Error(`ENOENT: no such file or directory, open '${p}'`);
+    if (isSymlink(obj)) throw new Error(`EINVAL: invalid argument, read '${p}' is a symbolic link`);
     this.assertMode(obj, READ_BIT, p);
     const buf = await obj.arrayBuffer();
     return new Uint8Array(buf);
@@ -89,6 +91,10 @@ export class R2MountBackend implements MountBackend {
   }
 
   async stat(path: string): Promise<ExtendedMountStat> {
+    return this.lstat(path);
+  }
+
+  async lstat(path: string): Promise<ExtendedMountStat> {
     const p = normalizePath(path);
     const key = toKey(p);
     const head = await this.bucket.head(key);
@@ -102,6 +108,18 @@ export class R2MountBackend implements MountBackend {
           isSymbolicLink: false,
           mode: parseOctalMode(head.customMetadata?.mode ?? "755"),
           size: 0,
+          mtime: head.uploaded,
+          uid,
+          gid,
+        };
+      }
+      if (isSymlink(head)) {
+        return {
+          isFile: false,
+          isDirectory: false,
+          isSymbolicLink: true,
+          mode: parseOctalMode(head.customMetadata?.mode ?? "777"),
+          size: head.size,
           mtime: head.uploaded,
           uid,
           gid,
@@ -242,6 +260,33 @@ export class R2MountBackend implements MountBackend {
     if (!options?.force) throw new Error(`ENOENT: no such file or directory, unlink '${p}'`);
   }
 
+  async symlink(target: string, linkPath: string): Promise<void> {
+    const p = normalizePath(linkPath);
+    const key = toKey(p);
+    const existing = await this.bucket.head(key);
+    if (existing) {
+      throw new Error(`EEXIST: file already exists, symlink '${p}'`);
+    }
+
+    await this.bucket.put(key, target, {
+      httpMetadata: { contentType: "text/plain" },
+      customMetadata: {
+        uid: String(this.identity.uid),
+        gid: String(this.identity.gid),
+        mode: "777",
+        symlink: "1",
+      },
+    });
+  }
+
+  async readlink(path: string): Promise<string> {
+    const p = normalizePath(path);
+    const obj = await this.bucket.get(toKey(p));
+    if (!obj) throw new Error(`ENOENT: no such file or directory, readlink '${p}'`);
+    if (!isSymlink(obj)) throw new Error(`EINVAL: invalid argument, readlink '${p}'`);
+    return obj.text();
+  }
+
   async search(path: string, query: string, include?: string): Promise<FsSearchBackendResult> {
     const prefix = normalizePath(path);
     const searchPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
@@ -370,6 +415,10 @@ function toKey(path: string): string {
 
 function isDirectoryMarker(obj: R2Object | R2ObjectBody): boolean {
   return obj.customMetadata?.dirmarker === "1" || obj.key.endsWith("/.dir");
+}
+
+function isSymlink(obj: R2Object | R2ObjectBody): boolean {
+  return obj.customMetadata?.symlink === "1";
 }
 
 function parseOctalMode(mode: string): number {

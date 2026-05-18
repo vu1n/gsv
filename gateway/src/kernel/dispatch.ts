@@ -24,7 +24,7 @@ import {
   handleFsSearch,
 } from "../drivers/native/fs";
 import { handleShellExec } from "../drivers/native/shell";
-import { handleAiTools, handleAiConfig } from "./ai";
+import { handleAiTools, handleAiConfig, handleAiTranscriptionCreate } from "./ai";
 import {
   handleProcList,
   handleProcIpcCall,
@@ -233,7 +233,7 @@ async function dispatchNative(
         data = handleProcList(frame.args, ctx);
         break;
       case "proc.profile.list":
-        data = handleProcProfileList(frame.args, ctx);
+        data = await handleProcProfileList(frame.args, ctx);
         break;
       case "proc.spawn":
         data = await handleProcSpawn(frame.args, ctx);
@@ -348,6 +348,9 @@ async function dispatchNative(
         break;
       case "ai.config":
         data = await handleAiConfig(frame.args, ctx);
+        break;
+      case "ai.transcription.create":
+        data = await handleAiTranscriptionCreate(frame.args, ctx);
         break;
 
       // --- sys.* ---

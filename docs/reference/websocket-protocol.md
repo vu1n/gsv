@@ -221,9 +221,9 @@ The websocket protocol is uniform: every operation is a `req` frame with a sysca
 | `fs.*` | Native on `gsv`, or routed to a driver when `args.target` names a device |
 | `shell.exec` | Native on `gsv`, routed to a driver when `args.target` names a device, or routed by `args.sessionId` for an existing shell session |
 | `proc.*` | Kernel and Process DO control plane |
-| `pkg.*`, `repo.*`, `sys.*`, `sched.*`, `notification.*`, `signal.*` | Kernel-handled |
+| `pkg.*`, `repo.*`, `sys.*`, `sched.*`, `notification.*`, `signal.*`, `ai.transcription.create` | Kernel-handled |
 | `adapter.*` | Service-binding / adapter control path |
-| `ai.*` | Kernel-internal process bootstrap path |
+| `ai.tools`, `ai.config` | Kernel-internal process bootstrap path |
 
 For routed `fs.*` and initial `shell.exec` requests, the gateway strips `args.target` before forwarding the request frame to the driver. Shell continuations use `args.sessionId`; the gateway looks up the session owner and forwards the same `shell.exec` frame to that device.
 

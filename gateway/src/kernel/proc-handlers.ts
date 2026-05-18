@@ -29,6 +29,7 @@ import type {
 import {
   isAiContextProfile,
   isSystemAiContextProfile,
+  isUserAiContextProfile,
   type AiContextProfile,
 } from "../syscalls/ai";
 import { sendFrameToProcess } from "../shared/utils";
@@ -46,13 +47,18 @@ import {
   resolvePackageProfileReference,
   visiblePackageScopesForActor,
 } from "./packages";
+import {
+  listUserAiProfiles,
+  resolveUserAiProfile,
+} from "./user-profiles";
 
 const SYSTEM_PROFILE_ENTRIES: ProcProfileListEntry[] = [
   {
     id: "init",
+    alias: "personal",
     kind: "system",
-    displayName: "Home",
-    description: "The persistent home conversation for the user.",
+    displayName: "Personal Agent",
+    description: "The persistent user-facing agent that routes work, manages context, and coordinates automation.",
     interactive: true,
     startable: true,
     background: false,
@@ -61,8 +67,8 @@ const SYSTEM_PROFILE_ENTRIES: ProcProfileListEntry[] = [
   {
     id: "task",
     kind: "system",
-    displayName: "Task",
-    description: "A focused conversation for new work.",
+    displayName: "Worker",
+    description: "Generic bounded worker profile for delegated execution.",
     interactive: true,
     startable: true,
     background: false,
@@ -139,11 +145,23 @@ export function handleProcList(
   return { processes };
 }
 
-export function handleProcProfileList(
+export async function handleProcProfileList(
   _args: ProcProfileListArgs,
   ctx: KernelContext,
-): ProcProfileListResult {
+): Promise<ProcProfileListResult> {
   const scopes = visiblePackageScopesForActor(ctx.identity?.process);
+  const userProfiles = await listUserAiProfiles(ctx);
+  const userProfileEntries = userProfiles.map((profile): ProcProfileListEntry => ({
+    id: profile.id,
+    kind: "user",
+    displayName: profile.displayName,
+    ...(profile.description ? { description: profile.description } : {}),
+    ...(profile.icon ? { icon: profile.icon } : {}),
+    interactive: profile.interactive,
+    startable: profile.startable,
+    background: profile.background,
+    spawnMode: "new",
+  }));
   const packageProfiles = ctx.packages
     .list({ scopes })
     .filter((record) => record.enabled)
@@ -170,7 +188,7 @@ export function handleProcProfileList(
     });
 
   return {
-    profiles: [...SYSTEM_PROFILE_ENTRIES, ...packageProfiles],
+    profiles: [...SYSTEM_PROFILE_ENTRIES, ...userProfileEntries, ...packageProfiles],
   };
 }
 
@@ -180,7 +198,7 @@ export async function handleProcSpawn(
 ): Promise<ProcSpawnResult> {
   const identity = ctx.identity!;
   const pid = crypto.randomUUID();
-  const profile = args.profile;
+  const profile = normalizeSpawnProfile(args.profile);
 
   if (!isAiContextProfile(profile)) {
     return { ok: false, error: `Invalid process profile: ${String(profile)}` };
@@ -224,7 +242,7 @@ export async function handleProcSpawn(
       cwd: initRecord.cwd,
     };
   }
-  if (!isSystemAiContextProfile(profile)) {
+  if (!isSystemAiContextProfile(profile) && !isUserAiContextProfile(profile)) {
     try {
       const resolved = resolvePackageProfileReference(
         profile,
@@ -239,6 +257,11 @@ export async function handleProcSpawn(
         ok: false,
         error: error instanceof Error ? error.message : String(error),
       };
+    }
+  } else if (isUserAiContextProfile(profile)) {
+    const userProfile = await resolveUserAiProfile(ctx, profile);
+    if (!userProfile) {
+      return { ok: false, error: `Unknown user profile: ${profile}` };
     }
   }
 
@@ -326,6 +349,13 @@ export async function handleProcSpawn(
     workspaceId: materialized.identity.workspaceId,
     cwd: spawnIdentity.cwd,
   };
+}
+
+function normalizeSpawnProfile(profile: ProcSpawnArgs["profile"] | undefined): AiContextProfile {
+  if (profile === "personal") {
+    return "init";
+  }
+  return profile ?? "task";
 }
 
 export async function handleProcIpcSend(

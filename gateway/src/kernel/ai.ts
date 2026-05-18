@@ -17,10 +17,14 @@ import type {
   AiToolsDevice,
   AiConfigArgs,
   AiConfigResult,
+  AiTranscriptionCreateArgs,
+  AiTranscriptionCreateResult,
+  ContextFile,
 } from "../syscalls/ai";
 import {
   isPackageAiContextProfile,
   isSystemAiContextProfile,
+  isUserAiContextProfile,
 } from "../syscalls/ai";
 import type { ToolDefinition, SyscallName } from "../syscalls";
 import { intoSyscallTool, isRoutableSyscall } from "../syscalls";
@@ -33,6 +37,7 @@ import {
   resolvePackageProfileReference,
   visiblePackageScopesForActor,
 } from "./packages";
+import { resolveUserAiProfile } from "./user-profiles";
 
 import { FS_READ_DEFINITION } from "../syscalls/read";
 import { FS_WRITE_DEFINITION } from "../syscalls/write";
@@ -45,6 +50,12 @@ import {
   isWorkersAiProvider,
   resolveWorkersAiModelContextWindow,
 } from "../inference/workers-ai";
+import {
+  DEFAULT_AUDIO_TRANSCRIPTION_MODEL,
+  DEFAULT_MAX_AUDIO_TRANSCRIPTION_BYTES,
+  normalizeBase64Data,
+  transcribeAudioWithWorkersAi,
+} from "../inference/transcription";
 import { collectPromptSkillIndex } from "./skills";
 
 const SYSCALL_TOOLS: Record<string, ToolDefinition> = {
@@ -59,7 +70,7 @@ const SYSCALL_TOOLS: Record<string, ToolDefinition> = {
 
 const CODEMODE_MCP_TYPE_HINT_MAX_CHARS = 12_000;
 
-type ContextFile = { name: string; text: string };
+const PERSONAL_PROFILE_ALIAS = "personal";
 
 export async function handleAiTools(
   ctx: KernelContext,
@@ -115,7 +126,7 @@ export async function handleAiConfig(
 ): Promise<AiConfigResult> {
   const config = ctx.config;
   const uid = ctx.identity?.process.uid ?? 0;
-  const requestedProfile = args.profile ?? "task";
+  const requestedProfile = args.profile === PERSONAL_PROFILE_ALIAS ? "init" : args.profile ?? "task";
 
   const provider =
     config.get(`users/${uid}/ai/provider`) ??
@@ -179,11 +190,34 @@ export async function handleAiConfig(
       .filter((file) => file.text.trim().length > 0)
       .sort((left, right) => left.name.localeCompare(right.name));
     profileApprovalPolicy = resolved.packageProfile.approvalPolicy ?? null;
-  } else {
-    profile = isSystemAiContextProfile(requestedProfile) ? requestedProfile : "task";
+  } else if (isSystemAiContextProfile(requestedProfile)) {
+    profile = requestedProfile;
     profileContextFiles = listConfigContextFiles(config, `config/ai/profile/${profile}/context.d`);
     profileApprovalPolicy =
       config.get(`config/ai/profile/${profile}/tools/approval`) ??
+      null;
+  } else if (isUserAiContextProfile(requestedProfile)) {
+    const userProfile = await resolveUserAiProfile(ctx, requestedProfile);
+    if (!userProfile) {
+      throw new Error(`Unknown user profile: ${requestedProfile}`);
+    }
+    profile = requestedProfile;
+    profileContextFiles = [
+      ...listConfigContextFiles(config, "config/ai/profile/task/context.d"),
+      ...userProfile.contextFiles.map((file) => ({
+        name: `${requestedProfile}/${file.name}`,
+        text: file.text,
+      })),
+    ];
+    profileApprovalPolicy =
+      userProfile.approvalPolicy ??
+      config.get("config/ai/profile/task/tools/approval") ??
+      null;
+  } else {
+    profile = "task";
+    profileContextFiles = listConfigContextFiles(config, "config/ai/profile/task/context.d");
+    profileApprovalPolicy =
+      config.get("config/ai/profile/task/tools/approval") ??
       null;
   }
 
@@ -217,6 +251,57 @@ export async function handleAiConfig(
   };
 }
 
+export async function handleAiTranscriptionCreate(
+  args: AiTranscriptionCreateArgs,
+  ctx: KernelContext,
+): Promise<AiTranscriptionCreateResult> {
+  const uid = ctx.identity?.process.uid ?? 0;
+  const audio = args.audio;
+  if (!audio || typeof audio !== "object") {
+    throw new Error("audio is required");
+  }
+  if (typeof audio.data !== "string" || audio.data.trim().length === 0) {
+    throw new Error("audio.data is required");
+  }
+  if (typeof audio.mimeType !== "string" || !audio.mimeType.trim().toLowerCase().startsWith("audio/")) {
+    throw new Error("audio.mimeType must be an audio MIME type");
+  }
+
+  const base64 = normalizeBase64Data(audio.data.trim());
+  const byteLength = base64DecodedLength(base64);
+  const maxBytes = parsePositiveInt(
+    ctx.config.get(`users/${uid}/ai/transcription/max_bytes`),
+  ) ?? parsePositiveInt(
+    ctx.config.get("config/ai/transcription/max_bytes"),
+  ) ?? DEFAULT_MAX_AUDIO_TRANSCRIPTION_BYTES;
+  if (byteLength <= 0) {
+    throw new Error("audio.data is empty");
+  }
+  if (byteLength > maxBytes) {
+    throw new Error(`audio.data exceeds transcription limit (${maxBytes} bytes)`);
+  }
+
+  const model =
+    ctx.config.get(`users/${uid}/ai/transcription/model`) ??
+    ctx.config.get("config/ai/transcription/model") ??
+    DEFAULT_AUDIO_TRANSCRIPTION_MODEL;
+  const mode = args.mode === "translate" ? "translate" : "transcribe";
+  const result = await transcribeAudioWithWorkersAi(ctx.env.AI, {
+    data: base64,
+    model,
+    mode,
+    language: normalizeOptionalString(args.language),
+    prompt: normalizeOptionalString(args.prompt),
+    vadFilter: true,
+    conditionOnPreviousText: false,
+  });
+  if (!result) {
+    throw new Error("Transcription unavailable");
+  }
+
+  return result;
+}
+
 function listConfigContextFiles(config: KernelContext["config"], prefix: string): ContextFile[] {
   return config
     .list(prefix)
@@ -237,6 +322,19 @@ function parsePositiveInt(value: string | null | undefined): number | null {
     return null;
   }
   return parsed;
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function base64DecodedLength(base64: string): number {
+  const clean = base64.replace(/\s/g, "");
+  if (!clean) {
+    return 0;
+  }
+  const padding = clean.endsWith("==") ? 2 : clean.endsWith("=") ? 1 : 0;
+  return Math.max(0, Math.floor((clean.length * 3) / 4) - padding);
 }
 
 function withCodeModeMcpTypeHints(

@@ -184,6 +184,8 @@ import type {
   AiToolsResult,
   AiConfigArgs,
   AiConfigResult,
+  AiTranscriptionCreateArgs,
+  AiTranscriptionCreateResult,
 } from "./ai";
 import type {
   AdapterConnectArgs,
@@ -327,6 +329,7 @@ export type SyscallDomains = {
   // AI (process bootstrap)
   "ai.tools": { args: AiToolsArgs; result: AiToolsResult };
   "ai.config": { args: AiConfigArgs; result: AiConfigResult };
+  "ai.transcription.create": { args: AiTranscriptionCreateArgs; result: AiTranscriptionCreateResult };
 
   // Adapter transport (external connectors)
   "adapter.connect": { args: AdapterConnectArgs; result: AdapterConnectResult };

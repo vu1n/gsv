@@ -372,6 +372,27 @@ export function renderDesktopShell(): string {
             <button type="button" class="pill topbar-launcher" data-command-launcher aria-label="Open command palette">GSV</button>
           </div>
           <nav class="taskbar-windows" data-taskbar-windows aria-label="Open windows"></nav>
+          <div class="topbar-section topbar-presence">
+            <button
+              type="button"
+              class="presence-toggle"
+              data-presence-toggle
+              data-state="idle"
+              aria-label="Presence"
+              aria-haspopup="dialog"
+              aria-expanded="false"
+              aria-controls="presence-panel"
+            >
+              <span class="topbar-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 3a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"></path>
+                  <path d="M19 10v1a7 7 0 0 1-14 0v-1"></path>
+                  <path d="M12 18v3"></path>
+                  <path d="M8 21h8"></path>
+                </svg>
+              </span>
+            </button>
+          </div>
           <div class="topbar-section topbar-notifications">
             <button
               type="button"
@@ -434,6 +455,15 @@ export function renderDesktopShell(): string {
                   </span>
                   <span class="notification-badge" data-notifications-badge hidden>0</span>
                 </button>
+                <button type="button" class="mobile-home-action presence-toggle" data-presence-toggle data-state="idle" aria-label="Presence" aria-haspopup="dialog" aria-expanded="false" aria-controls="presence-panel">
+                  <span aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M12 3a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"></path>
+                      <path d="M19 10v1a7 7 0 0 1-14 0v-1"></path>
+                      <path d="M12 18v3"></path>
+                    </svg>
+                  </span>
+                </button>
                 <button type="button" class="mobile-home-action" data-mobile-command-launcher aria-label="Search apps and windows">
                   <span aria-hidden="true">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
@@ -450,6 +480,42 @@ export function renderDesktopShell(): string {
         </section>
         <div class="dock-reveal-zone" data-dock-reveal-zone aria-hidden="true"></div>
         <div class="notification-toasts" data-notification-toasts aria-live="polite" aria-atomic="false"></div>
+        <button type="button" class="presence-activity" data-presence-activity aria-live="polite" aria-atomic="false" hidden>
+          <span class="presence-activity-head">
+            <span class="presence-activity-pulse" aria-hidden="true"></span>
+            <span>
+              <strong>Personal Agent</strong>
+              <small data-presence-activity-status>Ready</small>
+            </span>
+          </span>
+          <span class="presence-activity-body" data-presence-activity-body></span>
+        </button>
+        <section class="presence-panel" id="presence-panel" data-presence-panel role="dialog" aria-label="Presence" hidden>
+          <header class="presence-panel-head">
+            <div>
+              <strong data-presence-title>Presence</strong>
+              <span data-presence-status>Paused</span>
+            </div>
+            <button type="button" class="presence-panel-close" data-presence-close aria-label="Close presence">
+              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M18 6 6 18"></path>
+                <path d="m6 6 12 12"></path>
+              </svg>
+            </button>
+          </header>
+          <div class="presence-mode" role="group" aria-label="Presence mode">
+            <button type="button" data-presence-mode="ambient" aria-pressed="true">Ambient</button>
+            <button type="button" data-presence-mode="push" aria-pressed="false">Push</button>
+          </div>
+          <textarea class="presence-transcript" data-presence-transcript rows="4" autocomplete="off" spellcheck="true" aria-label="Message to Personal Agent" placeholder="Ask Personal Agent"></textarea>
+          <div class="presence-interim" data-presence-interim aria-live="polite"></div>
+          <div class="presence-log" data-presence-log hidden></div>
+          <div class="presence-actions">
+            <button type="button" class="presence-primary" data-presence-listen>Start ambient</button>
+            <button type="button" class="presence-secondary" data-presence-send disabled>Send</button>
+            <button type="button" class="presence-secondary" data-presence-clear disabled>Clear</button>
+          </div>
+        </section>
         <section class="command-palette" data-command-palette role="dialog" aria-label="Command palette" hidden>
           <div class="command-palette-panel">
             <input data-command-palette-input type="text" autocomplete="off" placeholder="Search apps and windows" />

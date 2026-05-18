@@ -185,6 +185,37 @@ describe("proc handlers", () => {
     );
   });
 
+  it("defaults host spawns to the bounded task worker profile", async () => {
+    const ctx = {
+      env: {},
+      identity: {
+        process: IDENTITY,
+        capabilities: ["*"],
+      },
+      procs: {
+        get: vi.fn(() => null),
+        spawn: vi.fn(),
+      },
+      workspaces: {
+        get: vi.fn(),
+        touch: vi.fn(),
+      },
+      packages: {
+        resolve: vi.fn(() => null),
+        list: vi.fn(() => []),
+      },
+    } as unknown as KernelContext;
+
+    const result = await handleProcSpawn({}, ctx);
+
+    expect(result).toMatchObject({ ok: true, profile: "task" });
+    expect(ctx.procs.spawn).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Object),
+      expect.objectContaining({ profile: "task" }),
+    );
+  });
+
   it("uses distinct default mount paths for package source and repo mounts", async () => {
     const pkg = makePackage("pkg-a", "Demo Tool", "sam/demo-a", "packages/demo-tool");
     const ctx = {

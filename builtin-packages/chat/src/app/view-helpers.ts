@@ -462,8 +462,8 @@ function setStoredThreadContext(context: ThreadContext | null): ThreadContext | 
 
 function fallbackProfiles(): Profile[] {
   return [
-    { id: "init", displayName: "Home", description: "Persistent home conversation.", kind: "system", interactive: true, startable: true, background: false, spawnMode: "singleton" },
-    { id: "task", displayName: "Task", description: "Focused task conversation.", kind: "system", interactive: true, startable: true, background: false, spawnMode: "new" },
+    { id: "init", alias: "personal", displayName: "Personal Agent", description: "Persistent personal conversation.", kind: "system", interactive: true, startable: true, background: false, spawnMode: "singleton" },
+    { id: "task", displayName: "Worker", description: "Focused delegated worker.", kind: "system", interactive: true, startable: true, background: false, spawnMode: "new" },
     { id: "review", displayName: "Review", description: "Review conversation.", kind: "system", interactive: true, startable: true, background: false, spawnMode: "new" },
     { id: "mcp", displayName: "Master Control", description: "Operational control-plane work.", kind: "system", interactive: true, startable: true, background: false, spawnMode: "new" },
   ];
@@ -471,7 +471,7 @@ function fallbackProfiles(): Profile[] {
 
 function titleForActive(active: ThreadContext, conversation: ConversationRecord | null, threads: WorkspaceEntry[]): string {
   if (active.pid.startsWith("init:")) {
-    return active.conversationId === "default" ? "Home" : active.conversationTitle || conversation?.title || "Home Branch";
+    return active.conversationId === "default" ? "Personal Agent" : active.conversationTitle || conversation?.title || "Personal Branch";
   }
   if (active.conversationId !== "default") {
     return active.conversationTitle || conversation?.title || "Conversation Branch";
@@ -484,16 +484,20 @@ function activeMeta(active: ThreadContext, conversation: ConversationRecord | nu
   if (active.conversationId !== "default") {
     return `${conversation?.title || active.conversationTitle || active.conversationId} - ${active.cwd}`;
   }
-  return active.pid.startsWith("init:") ? "Persistent home conversation" : active.cwd;
+  return active.pid.startsWith("init:") ? "Persistent personal conversation" : active.cwd;
 }
 
 function draftConversationTitle(profile: Profile): string {
-  return !profile || profile.id === "task" ? "New Conversation" : `New ${profile.displayName}`;
+  if (!profile || profile.id === "init") return "Personal Agent";
+  return profile.id === "task" ? "New Worker" : `New ${profile.displayName}`;
 }
 
 function draftConversationMeta(profile: Profile): string {
-  return !profile || profile.id === "task"
-    ? "Send a message to start a task conversation, or open Home."
+  if (!profile || profile.id === "init") {
+    return "Send a message to your Personal Agent.";
+  }
+  return profile.id === "task"
+    ? "Send a message to start a bounded worker."
     : `Send a message to start ${profile.displayName.toLowerCase()}.`;
 }
 

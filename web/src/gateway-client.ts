@@ -81,7 +81,7 @@ export type ProcSendResult =
   | { ok: false; error: string };
 
 export type ProcSpawnArgs = {
-  profile: "init" | "task" | "cron" | "mcp" | "app";
+  profile?: string;
   label?: string;
   prompt?: string;
   parentPid?: string;
@@ -98,7 +98,7 @@ export type ProcSpawnResult =
       ok: true;
       pid: string;
       label?: string;
-      profile: "init" | "task" | "cron" | "mcp" | "app";
+      profile: string;
       workspaceId: string | null;
       cwd: string;
     }
@@ -144,6 +144,7 @@ const LONG_RUNNING_REQUEST_TIMEOUT_MS = 120_000;
 const REQUEST_TIMEOUTS_MS: Record<string, number> = {
   "sys.setup": LONG_RUNNING_REQUEST_TIMEOUT_MS,
   "sys.bootstrap": LONG_RUNNING_REQUEST_TIMEOUT_MS,
+  "ai.transcription.create": LONG_RUNNING_REQUEST_TIMEOUT_MS,
 };
 
 function makeId(): string {
