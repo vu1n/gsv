@@ -1,3 +1,4 @@
+import { normalizeSpeechText } from "@gsv/protocol/speech-text";
 import type { AiSpeechCreateResult, AiTranscriptionCreateResult } from "@gsv/protocol/syscalls/ai";
 import type { GatewayClientLike } from "./gateway-client";
 import {
@@ -837,7 +838,11 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
       setSpeechStatus("Speech unavailable while disconnected");
       return;
     }
-    const chunks = chunkSpeechText(normalized);
+    const speechText = normalizeSpeechText(normalized);
+    if (!speechText) {
+      return;
+    }
+    const chunks = chunkSpeechText(speechText);
     if (chunks.length === 0) {
       return;
     }
