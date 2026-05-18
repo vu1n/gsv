@@ -53,6 +53,12 @@ type SpeechChunk = {
   total: number;
 };
 
+type PendingInterimSpeech = {
+  timer: number;
+  text: string;
+  key: string;
+};
+
 type AudioWindow = Window & {
   webkitAudioContext?: typeof AudioContext;
 };
@@ -69,6 +75,9 @@ const AMBIENT_RMS_THRESHOLD = 0.018;
 const SPEECH_PARAGRAPH_MAX_CHARS = 1400;
 const SPEECH_CHUNK_MAX_CHARS = 1900;
 const SPEECH_PREFETCH_CONCURRENCY = 2;
+const INTERIM_SPEECH_DELAY_MS = 650;
+const INTERIM_SPEECH_MAX_CHARS = 220;
+const INTERIM_SPEECH_COOLDOWN_MS = 7000;
 const RUN_SIGNAL_BUFFER_TTL_MS = 60 * 1000;
 const MAX_BUFFERED_RUN_SIGNALS = 64;
 const PRESENCE_RECORDER_MIME_TYPES = [
@@ -122,8 +131,11 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
   let speechAttempt = 0;
   let speechAudio: HTMLAudioElement | null = null;
   let speechPlaybackCancel: (() => void) | null = null;
+  let lastInterimSpeechKey = "";
+  let lastInterimSpeechAt = 0;
   const activeRuns = new Map<string, PresenceRun>();
   const bufferedRunSignals = new Map<string, BufferedRunSignal[]>();
+  const pendingInterimSpeech = new Map<string, PendingInterimSpeech>();
 
   let pushRecorder: MediaRecorder | null = null;
   let pushStream: MediaStream | null = null;
@@ -800,7 +812,10 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
     }
   }
 
-  async function speakReply(text: string, options?: { force?: boolean }): Promise<void> {
+  async function speakReply(
+    text: string,
+    options?: { force?: boolean; interrupt?: boolean },
+  ): Promise<void> {
     if (!options?.force && !speakReplies) {
       return;
     }
@@ -816,7 +831,12 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
     if (chunks.length === 0) {
       return;
     }
-    cancelSpeechOutput();
+    if (options?.interrupt === false && isSpeechOutputPlaying()) {
+      return;
+    }
+    if (options?.interrupt !== false) {
+      cancelSpeechOutput();
+    }
     const attempt = ++speechAttempt;
 
     try {
@@ -860,6 +880,54 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
       speechAudio = null;
       setSpeechStatus("Speech failed: " + formatError(error));
     }
+  }
+
+  function scheduleInterimSpeech(runId: string, text: string, key: string): void {
+    if (!speakReplies) {
+      return;
+    }
+    const normalized = normalizeInterimSpeechText(text);
+    if (!normalized) {
+      return;
+    }
+    clearPendingInterimSpeech(runId);
+    const timer = window.setTimeout(() => {
+      pendingInterimSpeech.delete(runId);
+      speakInterimStatus(normalized, key);
+    }, INTERIM_SPEECH_DELAY_MS);
+    pendingInterimSpeech.set(runId, { timer, text: normalized, key });
+  }
+
+  function clearPendingInterimSpeech(runId?: string): void {
+    if (runId) {
+      const pending = pendingInterimSpeech.get(runId);
+      if (pending) {
+        window.clearTimeout(pending.timer);
+        pendingInterimSpeech.delete(runId);
+      }
+      return;
+    }
+    for (const pending of pendingInterimSpeech.values()) {
+      window.clearTimeout(pending.timer);
+    }
+    pendingInterimSpeech.clear();
+  }
+
+  function hasPendingInterimSpeech(runId: string): boolean {
+    return pendingInterimSpeech.has(runId);
+  }
+
+  function speakInterimStatus(text: string, key: string): void {
+    if (!speakReplies || !gatewayClient.isConnected()) {
+      return;
+    }
+    const now = Date.now();
+    if (key === lastInterimSpeechKey && now - lastInterimSpeechAt < INTERIM_SPEECH_COOLDOWN_MS) {
+      return;
+    }
+    lastInterimSpeechKey = key;
+    lastInterimSpeechAt = now;
+    void speakReply(text, { interrupt: false });
   }
 
   function requestSpeechChunk(chunk: SpeechChunk, attempt: number): Promise<AiSpeechCreateResult> {
@@ -954,6 +1022,9 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
       updatePresenceLog(run.row, "Responding");
       note = "Personal Agent is responding";
       showPresenceActivity("Responding", run.answer || run.prompt);
+      if (run.answer) {
+        scheduleInterimSpeech(runId, run.answer, `text:${runId}:${run.answer}`);
+      }
       setState(state);
       return;
     }
@@ -966,6 +1037,9 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
       updatePresenceLog(run.row, "Using tools");
       note = toolLabel ? `Personal Agent is using ${toolLabel}` : "Personal Agent is using tools";
       showPresenceActivity("Using tools", toolLabel ? `Using ${toolLabel}` : run.answer || run.prompt);
+      if (!hasPendingInterimSpeech(runId)) {
+        speakInterimStatus(toolLabel ? `Using ${toolLabel}.` : "Using tools.", `tool:${runId}:${toolLabel ?? ""}`);
+      }
       setState(state);
       return;
     }
@@ -988,6 +1062,8 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
       updatePresenceLog(run.row, "Needs approval");
       note = "Personal Agent needs approval";
       showPresenceActivity("Needs approval", run.answer || run.prompt, "needs-approval");
+      clearPendingInterimSpeech(runId);
+      speakInterimStatus("I need approval to continue.", `hil:${runId}`);
       setState(state);
       return;
     }
@@ -996,6 +1072,7 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
       const error = signalPayloadError(payload);
       const aborted = signalPayloadAborted(payload);
       run.answer = signalPayloadText(payload) ?? run.answer;
+      clearPendingInterimSpeech(runId);
       const finalStatus = error ? "Failed" : aborted ? "Stopped" : "Done";
       updatePresenceLog(run.row, finalStatus, error ?? undefined);
       activeRuns.delete(runId);
@@ -1153,6 +1230,7 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
     destroy() {
       destroyed = true;
       clearActivityHideTimer();
+      clearPendingInterimSpeech();
       cancelSpeechOutput();
       cleanupPushRecorder();
       stopAmbient();
@@ -1385,6 +1463,17 @@ function formatClock(timestamp: number): string {
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function normalizeInterimSpeechText(text: string): string {
+  if (text.includes("```") || text.includes("\n|")) {
+    return "";
+  }
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized || normalized.length > INTERIM_SPEECH_MAX_CHARS) {
+    return "";
+  }
+  return /[.!?:;)]$/.test(normalized) ? normalized : `${normalized}.`;
 }
 
 function chunkSpeechText(text: string): SpeechChunk[] {
