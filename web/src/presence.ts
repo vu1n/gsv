@@ -1,5 +1,9 @@
 import type { AiSpeechCreateResult, AiTranscriptionCreateResult } from "@gsv/protocol/syscalls/ai";
 import type { GatewayClientLike } from "./gateway-client";
+import {
+  localSpeechSupported,
+  synthesizeLocalSpeech,
+} from "./local-tts";
 
 type PresenceOptions = {
   rootNode: HTMLElement;
@@ -219,6 +223,9 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
     }
     if (speakTestNode) {
       speakTestNode.disabled = !connected;
+    }
+    if (speechStatusNode && speakReplies && !localSpeechSupported()) {
+      speechStatusNode.textContent = "Local speech unavailable; using gateway voice";
     }
   }
 
@@ -803,6 +810,9 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
       audio.onended = null;
       audio.onerror = null;
       audio.pause();
+      if (audio.src.startsWith("blob:")) {
+        URL.revokeObjectURL(audio.src);
+      }
       audio.removeAttribute("src");
       audio.load();
     }
@@ -930,15 +940,39 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
     void speakReply(text, { interrupt: false });
   }
 
-  function requestSpeechChunk(chunk: SpeechChunk, attempt: number): Promise<AiSpeechCreateResult> {
+  async function requestSpeechChunk(chunk: SpeechChunk, attempt: number): Promise<AiSpeechCreateResult> {
     if (attempt !== speechAttempt) {
-      return Promise.reject(new Error("Speech cancelled"));
+      throw new Error("Speech cancelled");
     }
-    const request = gatewayClient.call<AiSpeechCreateResult>("ai.speech.create", {
+    if (localSpeechSupported()) {
+      try {
+        const audio = await synthesizeLocalSpeech(chunk.text, {
+          onProgress(progress) {
+            if (attempt === speechAttempt) {
+              setSpeechStatus(progress.message);
+            }
+          },
+        });
+        return {
+          audio: {
+            data: URL.createObjectURL(audio),
+            mimeType: audio.type || "audio/wav",
+            size: audio.size,
+          },
+          provider: "local-piper",
+          model: "piper",
+        };
+      } catch (error) {
+        if (attempt !== speechAttempt) {
+          throw error;
+        }
+        setSpeechStatus(`Local speech failed: ${formatError(error)}. Trying gateway voice.`);
+      }
+    }
+
+    return gatewayClient.call<AiSpeechCreateResult>("ai.speech.create", {
       text: chunk.text,
     });
-    void request.catch(() => {});
-    return request;
   }
 
   function playSpeechChunk(
@@ -965,6 +999,9 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
         audio.onerror = null;
         if (speechAudio === audio) {
           speechAudio = null;
+        }
+        if (audio.src.startsWith("blob:")) {
+          URL.revokeObjectURL(audio.src);
         }
         if (speechPlaybackCancel === cancelPlayback) {
           speechPlaybackCancel = null;

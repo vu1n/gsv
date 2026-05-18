@@ -12,6 +12,7 @@
   "dependencies": {
     "@gsv/app-link": "file:../shared/app-link",
     "@gsv/protocol": "file:../shared/protocol",
+    "@mintplex-labs/piper-tts-web": "^1.0.4",
     "dompurify": "^3.3.0",
     "marked": "^16.4.0"
   },
