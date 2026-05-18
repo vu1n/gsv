@@ -507,6 +507,14 @@ export function renderDesktopShell(): string {
             <button type="button" data-presence-mode="ambient" aria-pressed="true">Ambient</button>
             <button type="button" data-presence-mode="push" aria-pressed="false">Push</button>
           </div>
+          <div class="presence-speech-controls">
+            <label class="presence-speech-toggle">
+              <span>Speak replies</span>
+              <input type="checkbox" data-presence-speak />
+            </label>
+            <button type="button" data-presence-speak-test>Test</button>
+          </div>
+          <div class="presence-speech-status" data-presence-speech-status></div>
           <textarea class="presence-transcript" data-presence-transcript rows="4" autocomplete="off" spellcheck="true" aria-label="Message to Personal Agent" placeholder="Ask Personal Agent"></textarea>
           <div class="presence-interim" data-presence-interim aria-live="polite"></div>
           <div class="presence-log" data-presence-log hidden></div>

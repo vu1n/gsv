@@ -1,4 +1,4 @@
-import type { AiTranscriptionCreateResult } from "@gsv/protocol/syscalls/ai";
+import type { AiSpeechCreateResult, AiTranscriptionCreateResult } from "@gsv/protocol/syscalls/ai";
 import type { GatewayClientLike } from "./gateway-client";
 
 type PresenceOptions = {
@@ -41,6 +41,18 @@ type PresenceRun = {
   updatedAt: number;
 };
 
+type BufferedRunSignal = {
+  signal: string;
+  payload: unknown;
+  receivedAt: number;
+};
+
+type SpeechChunk = {
+  text: string;
+  index: number;
+  total: number;
+};
+
 type AudioWindow = Window & {
   webkitAudioContext?: typeof AudioContext;
 };
@@ -54,6 +66,11 @@ const AMBIENT_END_SILENCE_MS = 3000;
 const AMBIENT_MIN_SEGMENT_MS = 450;
 const AMBIENT_MIN_SEGMENT_BYTES = 900;
 const AMBIENT_RMS_THRESHOLD = 0.018;
+const SPEECH_PARAGRAPH_MAX_CHARS = 1400;
+const SPEECH_CHUNK_MAX_CHARS = 1900;
+const SPEECH_PREFETCH_CONCURRENCY = 2;
+const RUN_SIGNAL_BUFFER_TTL_MS = 60 * 1000;
+const MAX_BUFFERED_RUN_SIGNALS = 64;
 const PRESENCE_RECORDER_MIME_TYPES = [
   "audio/webm;codecs=opus",
   "audio/ogg;codecs=opus",
@@ -74,6 +91,9 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
   const transcriptNode = rootNode.querySelector<HTMLTextAreaElement>("[data-presence-transcript]");
   const noteNode = rootNode.querySelector<HTMLElement>("[data-presence-interim]");
   const logNode = rootNode.querySelector<HTMLElement>("[data-presence-log]");
+  const speakNode = rootNode.querySelector<HTMLInputElement>("[data-presence-speak]");
+  const speakTestNode = rootNode.querySelector<HTMLButtonElement>("[data-presence-speak-test]");
+  const speechStatusNode = rootNode.querySelector<HTMLElement>("[data-presence-speech-status]");
   const activityNode = rootNode.querySelector<HTMLButtonElement>("[data-presence-activity]");
   const activityStatusNode = rootNode.querySelector<HTMLElement>("[data-presence-activity-status]");
   const activityBodyNode = rootNode.querySelector<HTMLElement>("[data-presence-activity-body]");
@@ -98,7 +118,12 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
   let lastSentText = "";
   let latestRunId: string | null = null;
   let activityHideTimer: number | null = null;
+  let speakReplies = false;
+  let speechAttempt = 0;
+  let speechAudio: HTMLAudioElement | null = null;
+  let speechPlaybackCancel: (() => void) | null = null;
   const activeRuns = new Map<string, PresenceRun>();
+  const bufferedRunSignals = new Map<string, BufferedRunSignal[]>();
 
   let pushRecorder: MediaRecorder | null = null;
   let pushStream: MediaStream | null = null;
@@ -176,6 +201,13 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
       button.setAttribute("aria-pressed", selected ? "true" : "false");
       button.disabled = (buttonMode === "ambient" && !ambientAvailable) || (next === "recording" || next === "capturing");
     }
+    if (speakNode) {
+      speakNode.checked = speakReplies;
+      speakNode.disabled = !connected;
+    }
+    if (speakTestNode) {
+      speakTestNode.disabled = !connected;
+    }
   }
 
   function listenButtonText(): string {
@@ -190,6 +222,7 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
       setState(canUseBrowserVoiceRecorder() ? "idle" : "unsupported");
       return;
     }
+    cancelSpeechOutput();
     cleanupPushRecorder();
     setPanelOpen(true);
     note = "";
@@ -318,6 +351,7 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
   }
 
   function stopAmbient(): void {
+    cancelSpeechOutput();
     clearAmbientTimer();
     stopAmbientSegment("stop");
     ambientSpeechActive = false;
@@ -350,6 +384,15 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
     const rms = currentRms(ambientAnalyser, ambientSamples);
     const speechNow = rms >= AMBIENT_RMS_THRESHOLD;
 
+    if (isSpeechOutputPlaying()) {
+      ambientSpeechMs = 0;
+      if (!ambientSpeechActive) {
+        note = "Speaking";
+        setState("listening");
+        return;
+      }
+    }
+
     if (speechNow) {
       ambientSpeechMs += AMBIENT_SAMPLE_MS;
       ambientLastVoiceAt = now;
@@ -379,6 +422,7 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
     if (!ambientStream || ambientSegmentRecorder) {
       return;
     }
+    cancelSpeechOutput();
     const recorderOptions: MediaRecorderOptions = { audioBitsPerSecond: VOICE_AUDIO_BITS_PER_SECOND };
     if (ambientMimeType) {
       recorderOptions.mimeType = ambientMimeType;
@@ -476,9 +520,9 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
       }
       const sent = await sendTextToPersonalAgent(text);
       lastSentText = text;
-      updatePresenceLog(logRow, sent.queued ? "Queued" : "Working");
-      trackRun(sent.runId, logRow, text);
       note = sent.queued ? "Queued for Personal Agent" : "Personal Agent is working";
+      updatePresenceLog(logRow, sent.queued ? "Queued" : "Working");
+      trackRun(sent.runId, logRow, text, sent.queued ? "Queued" : "Working");
       if (transcriptInputNode.value.trim() === text) {
         transcriptInputNode.value = "";
       }
@@ -581,17 +625,89 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
     return "Listening for speech";
   }
 
-  function trackRun(runId: string, row: HTMLElement | null, prompt: string): void {
+  function trackRun(
+    runId: string,
+    row: HTMLElement | null,
+    prompt: string,
+    status: PresenceLogStatus = "Working",
+  ): void {
     activeRuns.set(runId, {
       row,
       prompt,
       answer: "",
-      status: "Working",
+      status,
       updatedAt: Date.now(),
     });
     latestRunId = runId;
-    showPresenceActivity("Working", prompt);
-    setState(state);
+    showPresenceActivity(status, prompt);
+    const replayed = replayBufferedRunSignals(runId);
+    if (!replayed && activeRuns.has(runId)) {
+      setState(state);
+    }
+  }
+
+  function bufferRunSignal(runId: string, signal: string, payload: unknown): void {
+    if (!isPresenceRunSignal(signal)) {
+      return;
+    }
+    pruneBufferedRunSignals();
+    const signals = bufferedRunSignals.get(runId) ?? [];
+    signals.push({ signal, payload, receivedAt: Date.now() });
+    bufferedRunSignals.set(runId, signals);
+    trimBufferedRunSignals();
+  }
+
+  function replayBufferedRunSignals(runId: string): boolean {
+    const signals = bufferedRunSignals.get(runId);
+    if (!signals || signals.length === 0) {
+      return false;
+    }
+    bufferedRunSignals.delete(runId);
+    signals
+      .sort((left, right) => left.receivedAt - right.receivedAt)
+      .forEach((entry) => handleRunSignal(entry.signal, entry.payload));
+    return true;
+  }
+
+  function pruneBufferedRunSignals(): void {
+    const cutoff = Date.now() - RUN_SIGNAL_BUFFER_TTL_MS;
+    for (const [runId, signals] of bufferedRunSignals.entries()) {
+      const fresh = signals.filter((entry) => entry.receivedAt >= cutoff);
+      if (fresh.length > 0) {
+        bufferedRunSignals.set(runId, fresh);
+      } else {
+        bufferedRunSignals.delete(runId);
+      }
+    }
+  }
+
+  function trimBufferedRunSignals(): void {
+    let total = 0;
+    for (const signals of bufferedRunSignals.values()) {
+      total += signals.length;
+    }
+    while (total > MAX_BUFFERED_RUN_SIGNALS) {
+      let oldestRunId: string | null = null;
+      let oldestReceivedAt = Number.POSITIVE_INFINITY;
+      for (const [runId, signals] of bufferedRunSignals.entries()) {
+        const first = signals[0];
+        if (first && first.receivedAt < oldestReceivedAt) {
+          oldestReceivedAt = first.receivedAt;
+          oldestRunId = runId;
+        }
+      }
+      if (!oldestRunId) {
+        return;
+      }
+      const signals = bufferedRunSignals.get(oldestRunId) ?? [];
+      signals.shift();
+      total -= 1;
+      if (signals.length > 0) {
+        bufferedRunSignals.set(oldestRunId, signals);
+      } else {
+        bufferedRunSignals.delete(oldestRunId);
+      }
+    }
   }
 
   function clearActivityHideTimer(): void {
@@ -654,6 +770,171 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
     }, activeRuns.size > 0 ? 4500 : 12000);
   }
 
+  function setSpeechStatus(message: string): void {
+    if (speechStatusNode) {
+      speechStatusNode.textContent = message;
+    }
+  }
+
+  function isSpeechOutputPlaying(): boolean {
+    return speechAudio !== null && !speechAudio.paused && !speechAudio.ended;
+  }
+
+  function cancelSpeechOutput(message?: string): void {
+    speechAttempt += 1;
+    const cancelPlayback = speechPlaybackCancel;
+    speechPlaybackCancel = null;
+    const audio = speechAudio;
+    speechAudio = null;
+    if (audio) {
+      audio.onplay = null;
+      audio.onended = null;
+      audio.onerror = null;
+      audio.pause();
+      audio.removeAttribute("src");
+      audio.load();
+    }
+    cancelPlayback?.();
+    if (message) {
+      setSpeechStatus(message);
+    }
+  }
+
+  async function speakReply(text: string, options?: { force?: boolean }): Promise<void> {
+    if (!options?.force && !speakReplies) {
+      return;
+    }
+    const normalized = text.trim();
+    if (!normalized) {
+      return;
+    }
+    if (!gatewayClient.isConnected()) {
+      setSpeechStatus("Speech unavailable while disconnected");
+      return;
+    }
+    const chunks = chunkSpeechText(normalized);
+    if (chunks.length === 0) {
+      return;
+    }
+    cancelSpeechOutput();
+    const attempt = ++speechAttempt;
+
+    try {
+      const pendingSpeech = new Map<number, Promise<AiSpeechCreateResult>>();
+      let nextRequestIndex = 0;
+      const ensurePrefetch = () => {
+        while (
+          nextRequestIndex < chunks.length
+          && pendingSpeech.size < SPEECH_PREFETCH_CONCURRENCY
+        ) {
+          const chunk = chunks[nextRequestIndex];
+          pendingSpeech.set(chunk.index, requestSpeechChunk(chunk, attempt));
+          nextRequestIndex += 1;
+        }
+      };
+      ensurePrefetch();
+      for (let index = 0; index < chunks.length; index += 1) {
+        const chunk = chunks[index];
+        if (attempt !== speechAttempt) {
+          return;
+        }
+        setSpeechStatus(speechChunkStatus("Generating speech", chunk));
+        const result = await pendingSpeech.get(chunk.index);
+        if (attempt !== speechAttempt) {
+          return;
+        }
+        if (!result) {
+          throw new Error("Speech generation was not queued");
+        }
+        pendingSpeech.delete(chunk.index);
+        ensurePrefetch();
+        await playSpeechChunk(result, chunk, attempt);
+      }
+      if (attempt === speechAttempt) {
+        setSpeechStatus(speakReplies ? "Speak replies on" : "Speech off");
+      }
+    } catch (error) {
+      if (attempt !== speechAttempt) {
+        return;
+      }
+      speechAudio = null;
+      setSpeechStatus("Speech failed: " + formatError(error));
+    }
+  }
+
+  function requestSpeechChunk(chunk: SpeechChunk, attempt: number): Promise<AiSpeechCreateResult> {
+    if (attempt !== speechAttempt) {
+      return Promise.reject(new Error("Speech cancelled"));
+    }
+    const request = gatewayClient.call<AiSpeechCreateResult>("ai.speech.create", {
+      text: chunk.text,
+    });
+    void request.catch(() => {});
+    return request;
+  }
+
+  function playSpeechChunk(
+    result: AiSpeechCreateResult,
+    chunk: SpeechChunk,
+    attempt: number,
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (attempt !== speechAttempt) {
+        resolve();
+        return;
+      }
+      if (result.skipped || result.audio.size <= 0 || !result.audio.data) {
+        resolve();
+        return;
+      }
+
+      const audio = new Audio(result.audio.data);
+      let settled = false;
+      let cancelPlayback: (() => void) | null = null;
+      const cleanup = () => {
+        audio.onplay = null;
+        audio.onended = null;
+        audio.onerror = null;
+        if (speechAudio === audio) {
+          speechAudio = null;
+        }
+        if (speechPlaybackCancel === cancelPlayback) {
+          speechPlaybackCancel = null;
+        }
+      };
+      const finish = (error?: Error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      };
+      cancelPlayback = () => finish();
+      speechAudio = audio;
+      speechPlaybackCancel = cancelPlayback;
+      audio.onplay = () => {
+        if (attempt === speechAttempt) {
+          setSpeechStatus(speechChunkStatus("Speaking", chunk));
+        }
+      };
+      audio.onended = () => finish();
+      audio.onerror = () => finish(new Error("Speech playback failed"));
+      setSpeechStatus(speechChunkStatus("Starting speech", chunk));
+      void audio.play().catch((error: unknown) => {
+        finish(error instanceof Error ? error : new Error(String(error)));
+      });
+    });
+  }
+
+  function speechChunkStatus(prefix: string, chunk: SpeechChunk): string {
+    return chunk.total > 1 ? `${prefix} ${chunk.index + 1}/${chunk.total}` : prefix;
+  }
+
   function handleRunSignal(signal: string, payload: unknown): void {
     const runId = runIdFromSignalPayload(payload);
     if (!runId) {
@@ -661,6 +942,7 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
     }
     const run = activeRuns.get(runId);
     if (!run) {
+      bufferRunSignal(runId, signal, payload);
       return;
     }
 
@@ -725,6 +1007,9 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
         error ?? (run.answer || run.prompt),
         finalStatus === "Failed" ? "failed" : finalStatus === "Stopped" ? "stopped" : "done",
       );
+      if (!error && !aborted && run.answer) {
+        void speakReply(run.answer);
+      }
       scheduleActivityAfterCompletion(runId);
       setState(error ? "error" : state);
     }
@@ -745,10 +1030,12 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
       const sent = await sendTextToPersonalAgent(message);
       lastSentText = message;
       transcriptInputNode.value = "";
-      updatePresenceLog(logRow, sent.queued ? "Queued" : "Working");
-      trackRun(sent.runId, logRow, message);
       note = sent.queued ? "Queued for Personal Agent" : "Personal Agent is working";
-      setState(ambientStream ? "listening" : "idle", note);
+      updatePresenceLog(logRow, sent.queued ? "Queued" : "Working");
+      trackRun(sent.runId, logRow, message, sent.queued ? "Queued" : "Working");
+      if (activeRuns.has(sent.runId)) {
+        setState(ambientStream ? "listening" : "idle", note);
+      }
     } catch (error) {
       const errorMessage = formatError(error);
       updatePresenceLog(logRow, "Failed", errorMessage);
@@ -814,6 +1101,18 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
     setPanelOpen(true);
     setState(state);
   };
+  const onSpeakToggle = () => {
+    speakReplies = speakNode?.checked === true;
+    if (!speakReplies) {
+      cancelSpeechOutput("Speech off");
+    } else {
+      void speakReply("Voice replies are on.", { force: true });
+    }
+    setState(state);
+  };
+  const onSpeakTest = () => {
+    void speakReply("This is the Personal Agent voice.", { force: true });
+  };
   const onTranscriptInput = () => setState(state);
 
   closeButton?.addEventListener("click", onClose);
@@ -821,6 +1120,8 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
   sendNode.addEventListener("click", onSend);
   clearNode.addEventListener("click", onClear);
   activityNode?.addEventListener("click", onActivityClick);
+  speakNode?.addEventListener("change", onSpeakToggle);
+  speakTestNode?.addEventListener("click", onSpeakTest);
   transcriptInputNode.addEventListener("input", onTranscriptInput);
   listeners.push(
     () => closeButton?.removeEventListener("click", onClose),
@@ -828,11 +1129,14 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
     () => sendNode.removeEventListener("click", onSend),
     () => clearNode.removeEventListener("click", onClear),
     () => activityNode?.removeEventListener("click", onActivityClick),
+    () => speakNode?.removeEventListener("change", onSpeakToggle),
+    () => speakTestNode?.removeEventListener("click", onSpeakTest),
     () => transcriptInputNode.removeEventListener("input", onTranscriptInput),
     gatewayClient.onSignal(handleRunSignal),
     gatewayClient.onStatus((status) => {
       if (status.state !== "connected") {
         cleanupPushRecorder();
+        cancelSpeechOutput("Speech unavailable while disconnected");
         stopAmbient();
         setState(state === "unsupported" ? "unsupported" : "idle");
         return;
@@ -843,11 +1147,13 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
 
   note = mode === "ambient" ? "Auto-send is on" : "";
   setState(state);
+  setSpeechStatus("Speech off");
 
   return {
     destroy() {
       destroyed = true;
       clearActivityHideTimer();
+      cancelSpeechOutput();
       cleanupPushRecorder();
       stopAmbient();
       for (const remove of listeners) {
@@ -1024,6 +1330,14 @@ function runIdFromSignalPayload(payload: unknown): string | null {
   return typeof payload.runId === "string" && payload.runId.length > 0 ? payload.runId : null;
 }
 
+function isPresenceRunSignal(signal: string): boolean {
+  return signal === "chat.text"
+    || signal === "chat.tool_call"
+    || signal === "chat.tool_result"
+    || signal === "chat.hil"
+    || signal === "chat.complete";
+}
+
 function signalPayloadError(payload: unknown): string | null {
   if (!isRecord(payload) || typeof payload.error !== "string") {
     return null;
@@ -1071,6 +1385,128 @@ function formatClock(timestamp: number): string {
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function chunkSpeechText(text: string): SpeechChunk[] {
+  const chunks: string[] = [];
+  for (const block of speechBlocks(text)) {
+    for (const chunk of splitSpeechBlock(block)) {
+      flushSpeechChunk(chunks, chunk);
+    }
+  }
+  return chunks.map((chunk, index) => ({
+    text: chunk,
+    index,
+    total: chunks.length,
+  }));
+}
+
+function speechBlocks(text: string): string[] {
+  return text
+    .replace(/\r/g, "")
+    .split(/\n{2,}/)
+    .flatMap((block) => splitSpeechMarkdownBlock(block))
+    .map((line) => punctuateSpeechLine(line.trim()))
+    .filter(Boolean);
+}
+
+function splitSpeechMarkdownBlock(block: string): string[] {
+  const trimmed = block.trim();
+  if (!trimmed) {
+    return [];
+  }
+  if (isMarkdownStructuralBlock(trimmed)) {
+    return [trimmed];
+  }
+  return trimmed.split(/\n+/);
+}
+
+function isMarkdownStructuralBlock(block: string): boolean {
+  const lines = block.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length === 0) {
+    return false;
+  }
+  const first = lines[0];
+  if (first.startsWith("```") || first.startsWith("~~~")) {
+    return true;
+  }
+  return lines.length >= 2 && lines.every((line) => line.startsWith("|"));
+}
+
+function punctuateSpeechLine(line: string): string {
+  if (!line) {
+    return "";
+  }
+  if (isMarkdownStructuralBlock(line)) {
+    return line;
+  }
+  const cleaned = line.replace(/^[-*+]\s+/, "").replace(/^\d+[.)]\s+/, "").trim();
+  if (!cleaned) {
+    return "";
+  }
+  return /[.!?:;)]$/.test(cleaned) ? cleaned : `${cleaned}.`;
+}
+
+function splitSpeechSentences(text: string): string[] {
+  return (text.match(/[^.!?]+[.!?]+(?:["')\]]+)?|[^.!?]+$/g) ?? [text])
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function splitSpeechBlock(block: string): string[] {
+  if (isMarkdownStructuralBlock(block)) {
+    return [block];
+  }
+  if (block.length <= SPEECH_PARAGRAPH_MAX_CHARS) {
+    return [block];
+  }
+  const chunks: string[] = [];
+  let current = "";
+  for (const sentence of splitSpeechSentences(block)) {
+    const pieces = sentence.length > SPEECH_CHUNK_MAX_CHARS
+      ? splitLongSpeechPart(sentence)
+      : [sentence];
+    for (const piece of pieces) {
+      const next = current ? `${current} ${piece}` : piece;
+      if (next.length <= SPEECH_CHUNK_MAX_CHARS) {
+        current = next;
+        continue;
+      }
+      flushSpeechChunk(chunks, current);
+      current = piece;
+    }
+  }
+  flushSpeechChunk(chunks, current);
+  return chunks;
+}
+
+function splitLongSpeechPart(text: string): string[] {
+  if (text.length <= SPEECH_CHUNK_MAX_CHARS) {
+    return [text];
+  }
+  const chunks: string[] = [];
+  let current = "";
+  for (const word of text.split(/\s+/)) {
+    if (!word) {
+      continue;
+    }
+    const next = current ? `${current} ${word}` : word;
+    if (next.length <= SPEECH_CHUNK_MAX_CHARS) {
+      current = next;
+      continue;
+    }
+    flushSpeechChunk(chunks, current);
+    current = word;
+  }
+  flushSpeechChunk(chunks, current);
+  return chunks;
+}
+
+function flushSpeechChunk(chunks: string[], value: string): void {
+  const normalized = value.trim();
+  if (normalized) {
+    chunks.push(normalized);
+  }
 }
 
 function truncateActivityText(text: string): string {
