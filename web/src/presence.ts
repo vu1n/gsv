@@ -103,6 +103,7 @@ const AMBIENT_END_SILENCE_MS = 1100;
 const AMBIENT_MIN_SEGMENT_MS = 450;
 const AMBIENT_MIN_SEGMENT_BYTES = 900;
 const AMBIENT_RMS_THRESHOLD = 0.018;
+const SPEECH_FIRST_CHUNK_MIN_CHARS = 80;
 const SPEECH_FIRST_CHUNK_MAX_CHARS = 280;
 const SPEECH_CHUNK_MAX_CHARS = 420;
 const SPEECH_PREFETCH_CONCURRENCY = 3;
@@ -1780,11 +1781,28 @@ function chunkSpeechText(text: string): SpeechChunk[] {
     }
   }
 
-  return chunks.map((chunk, index) => ({
+  const balanced = balanceSpeechChunks(chunks);
+  return balanced.map((chunk, index) => ({
     text: chunk,
     index,
-    total: chunks.length,
+    total: balanced.length,
   }));
+}
+
+function balanceSpeechChunks(chunks: string[]): string[] {
+  if (chunks.length <= 1 || chunks[0].length >= SPEECH_FIRST_CHUNK_MIN_CHARS) {
+    return chunks;
+  }
+
+  const balanced = chunks.slice();
+  while (balanced.length > 1 && balanced[0].length < SPEECH_FIRST_CHUNK_MIN_CHARS) {
+    const merged = `${balanced[0]} ${balanced[1]}`.trim();
+    if (merged.length > SPEECH_FIRST_CHUNK_MAX_CHARS) {
+      break;
+    }
+    balanced.splice(0, 2, merged);
+  }
+  return balanced;
 }
 
 function speechBlocks(text: string): string[] {
