@@ -378,7 +378,7 @@ export function renderDesktopShell(): string {
               class="presence-toggle"
               data-presence-toggle
               data-state="idle"
-              aria-label="Presence"
+              aria-label="Mind"
               aria-haspopup="dialog"
               aria-expanded="false"
               aria-controls="presence-panel"
@@ -391,6 +391,7 @@ export function renderDesktopShell(): string {
                   <path d="M8 21h8"></path>
                 </svg>
               </span>
+              <span class="presence-toggle-label">Mind</span>
             </button>
           </div>
           <div class="topbar-section topbar-notifications">
@@ -455,7 +456,7 @@ export function renderDesktopShell(): string {
                   </span>
                   <span class="notification-badge" data-notifications-badge hidden>0</span>
                 </button>
-                <button type="button" class="mobile-home-action presence-toggle" data-presence-toggle data-state="idle" aria-label="Presence" aria-haspopup="dialog" aria-expanded="false" aria-controls="presence-panel">
+                <button type="button" class="mobile-home-action presence-toggle" data-presence-toggle data-state="idle" aria-label="Mind" aria-haspopup="dialog" aria-expanded="false" aria-controls="presence-panel">
                   <span aria-hidden="true">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
                       <path d="M12 3a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"></path>
@@ -484,42 +485,42 @@ export function renderDesktopShell(): string {
           <span class="presence-activity-head">
             <span class="presence-activity-pulse" aria-hidden="true"></span>
             <span>
-              <strong>Personal Agent</strong>
+              <strong>Mind</strong>
               <small data-presence-activity-status>Ready</small>
             </span>
           </span>
           <span class="presence-activity-body" data-presence-activity-body></span>
         </button>
-        <section class="presence-panel" id="presence-panel" data-presence-panel role="dialog" aria-label="Presence" hidden>
+        <section class="presence-panel" id="presence-panel" data-presence-panel role="dialog" aria-label="Mind" hidden>
           <header class="presence-panel-head">
             <div>
-              <strong data-presence-title>Presence</strong>
+              <strong data-presence-title>Mind</strong>
               <span data-presence-status>Paused</span>
             </div>
-            <button type="button" class="presence-panel-close" data-presence-close aria-label="Close presence">
+            <button type="button" class="presence-panel-close" data-presence-close aria-label="Close Mind">
               <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M18 6 6 18"></path>
                 <path d="m6 6 12 12"></path>
               </svg>
             </button>
           </header>
-          <div class="presence-mode" role="group" aria-label="Presence mode">
+          <div class="presence-mode" role="group" aria-label="Mind input mode">
             <button type="button" data-presence-mode="ambient" aria-pressed="true">Ambient</button>
-            <button type="button" data-presence-mode="push" aria-pressed="false">Push</button>
+            <button type="button" data-presence-mode="push" aria-pressed="false">Manual</button>
           </div>
           <div class="presence-speech-controls">
             <label class="presence-speech-toggle">
-              <span>Speak replies</span>
+              <span>Read replies</span>
               <input type="checkbox" data-presence-speak />
             </label>
-            <button type="button" data-presence-speak-test>Test</button>
+            <button type="button" data-presence-speak-test>Preview voice</button>
           </div>
           <div class="presence-speech-status" data-presence-speech-status></div>
-          <textarea class="presence-transcript" data-presence-transcript rows="4" autocomplete="off" spellcheck="true" aria-label="Message to Personal Agent" placeholder="Ask Personal Agent"></textarea>
+          <textarea class="presence-transcript" data-presence-transcript rows="4" autocomplete="off" spellcheck="true" aria-label="Message to Mind" placeholder="Talk or type to Mind"></textarea>
           <div class="presence-interim" data-presence-interim aria-live="polite"></div>
           <div class="presence-log" data-presence-log hidden></div>
           <div class="presence-actions">
-            <button type="button" class="presence-primary" data-presence-listen>Start ambient</button>
+            <button type="button" class="presence-primary" data-presence-listen>Start listening</button>
             <button type="button" class="presence-secondary" data-presence-send disabled>Send</button>
             <button type="button" class="presence-secondary" data-presence-clear disabled>Clear</button>
           </div>

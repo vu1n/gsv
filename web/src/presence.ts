@@ -211,8 +211,8 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
       stopAmbient();
     }
     mode = nextMode;
-    note = mode === "ambient" ? "Auto-send is on" : "";
-    transcriptInputNode.placeholder = mode === "ambient" ? "Ambient transcripts auto-send. Type here for a manual message." : "Ask Personal Agent";
+    note = mode === "ambient" ? "Mind is ready" : "";
+    transcriptInputNode.placeholder = mode === "ambient" ? "Ambient is on. Type here when you want to send manually." : "Type to Mind";
     setState(canUseBrowserVoiceRecorder() ? "idle" : "unsupported");
   }
 
@@ -224,8 +224,8 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
     const ambientAvailable = canUseAmbientMode();
     statusTextNode.textContent = message ?? statusText(next, connected, activeRuns.size);
     transcriptInputNode.placeholder = mode === "ambient"
-      ? "Ambient transcripts auto-send. Type here for a manual message."
-      : recorderAvailable ? "Ask Personal Agent" : "Type a message to Personal Agent";
+      ? "Ambient is on. Type here when you want to send manually."
+      : recorderAvailable ? "Type to Mind" : "Type a message to Mind";
     if (noteNode) {
       noteNode.textContent = note;
     }
@@ -261,9 +261,9 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
 
   function listenButtonText(): string {
     if (mode === "ambient") {
-      return ambientStream ? "Stop ambient" : "Start ambient";
+      return ambientStream ? "Pause listening" : "Start listening";
     }
-    return state === "recording" ? "Stop" : "Listen";
+    return state === "recording" ? "Stop" : "Record";
   }
 
   async function startPushRecording(): Promise<void> {
@@ -390,8 +390,8 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
       ambientSamples = new Float32Array(ambientAnalyser.fftSize) as Float32Array<ArrayBuffer>;
 
       ambientTimer = window.setInterval(tickAmbientVad, AMBIENT_SAMPLE_MS);
-      note = "Auto-send is on";
-      setState("listening", "Ambient on");
+      note = "Mind is listening";
+      setState("listening", "Listening");
     } catch (error) {
       stopAmbient();
       note = "";
@@ -421,7 +421,7 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
     stream?.getTracks().forEach((track) => track.stop());
     if (state === "listening" || state === "capturing" || state === "transcribing" || state === "sending") {
       note = activeRuns.size > 0 ? ambientIdleNote() : "";
-      setState("idle", activeRuns.size > 0 ? "Agent working" : "Ambient off");
+      setState("idle", activeRuns.size > 0 ? "Mind working" : "Listening paused");
     }
   }
 
@@ -585,7 +585,7 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
       markVoiceTiming(timing, "agent_send_done");
       timing.runId = sent.runId;
       lastSentText = text;
-      note = sent.queued ? "Queued for Personal Agent" : "Personal Agent is working";
+      note = sent.queued ? "Queued for Mind" : "Mind is working";
       updatePresenceLog(logRow, sent.queued ? "Queued" : "Working");
       trackRun(sent.runId, logRow, text, sent.queued ? "Queued" : "Working", timing);
       if (transcriptInputNode.value.trim() === text) {
@@ -631,7 +631,7 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
   async function sendTextToPersonalAgent(message: string): Promise<PresenceSendResult> {
     const spawned = await gatewayClient.spawnProcess({
       profile: "init",
-      label: "Personal Agent",
+      label: "Mind",
       workspace: { mode: "none" },
     });
     if (!spawned.ok) {
@@ -687,9 +687,9 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
       return `Processing ${ambientPendingJobs}`;
     }
     if (activeRuns.size > 0) {
-      return activeRuns.size === 1 ? "Personal Agent is working" : `${activeRuns.size} agent jobs running`;
+      return activeRuns.size === 1 ? "Mind is working" : `${activeRuns.size} Mind jobs running`;
     }
-    return "Listening for speech";
+    return "Mind is listening";
   }
 
   function trackRun(
@@ -1139,7 +1139,7 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
       run.answer = signalPayloadText(payload) ?? run.answer;
       latestRunId = runId;
       updatePresenceLog(run.row, "Responding");
-      note = "Personal Agent is responding";
+      note = "Mind is responding";
       showPresenceActivity("Responding", run.answer || run.prompt);
       if (run.answer) {
         scheduleInterimSpeech(runId, run.answer, `text:${runId}:${run.answer}`);
@@ -1155,7 +1155,7 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
       run.updatedAt = Date.now();
       latestRunId = runId;
       updatePresenceLog(run.row, "Using tools");
-      note = toolLabel ? `Personal Agent is using ${toolLabel}` : "Personal Agent is using tools";
+      note = toolLabel ? `Mind is using ${toolLabel}` : "Mind is using tools";
       showPresenceActivity("Using tools", toolLabel ? `Using ${toolLabel}` : run.answer || run.prompt);
       if (!hasPendingInterimSpeech(runId)) {
         speakInterimStatus(toolLabel ? `Using ${toolLabel}.` : "Using tools.", `tool:${runId}:${toolLabel ?? ""}`);
@@ -1169,7 +1169,7 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
       run.updatedAt = Date.now();
       latestRunId = runId;
       updatePresenceLog(run.row, "Working");
-      note = "Personal Agent is working";
+      note = "Mind is working";
       showPresenceActivity("Working", run.answer || run.prompt);
       setState(state);
       return;
@@ -1181,7 +1181,7 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
       run.updatedAt = Date.now();
       latestRunId = runId;
       updatePresenceLog(run.row, "Needs approval");
-      note = "Personal Agent needs approval";
+      note = "Mind needs approval";
       showPresenceActivity("Needs approval", run.answer || run.prompt, "needs-approval");
       clearPendingInterimSpeech(runId);
       speakInterimStatus("I need approval to continue.", `hil:${runId}`);
@@ -1202,8 +1202,8 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
       updatePresenceLog(run.row, finalStatus, error ?? undefined);
       activeRuns.delete(runId);
       note = error
-        ? `Personal Agent failed: ${error}`
-        : aborted ? "Personal Agent stopped" : activeRuns.size > 0 ? ambientIdleNote() : "Personal Agent finished";
+        ? `Mind failed: ${error}`
+        : aborted ? "Mind stopped" : activeRuns.size > 0 ? ambientIdleNote() : "Mind finished";
       showPresenceActivity(
         finalStatus,
         error ?? (run.answer || run.prompt),
@@ -1228,7 +1228,7 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
       stopPushRecording();
       return;
     }
-    setState("sending", "Sending to Personal Agent");
+    setState("sending", "Sending to Mind");
     const logRow = addPresenceLog(logNode, "Sending", message, Date.now());
     const timing = createVoiceTimingTrace("manual");
     timing.promptChars = message.length;
@@ -1239,7 +1239,7 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
       timing.runId = sent.runId;
       lastSentText = message;
       transcriptInputNode.value = "";
-      note = sent.queued ? "Queued for Personal Agent" : "Personal Agent is working";
+      note = sent.queued ? "Queued for Mind" : "Mind is working";
       updatePresenceLog(logRow, sent.queued ? "Queued" : "Working");
       trackRun(sent.runId, logRow, message, sent.queued ? "Queued" : "Working", timing);
       if (activeRuns.has(sent.runId)) {
@@ -1304,7 +1304,7 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
     transcriptInputNode.value = "";
     note = ambientStream
       ? ambientIdleNote()
-      : activeRuns.size > 0 ? "Personal Agent is working" : mode === "ambient" ? "Auto-send is on" : "";
+      : activeRuns.size > 0 ? "Mind is working" : mode === "ambient" ? "Mind is ready" : "";
     lastSentText = "";
     setState(ambientStream ? "listening" : canUseBrowserVoiceRecorder() ? "idle" : "unsupported");
   };
@@ -1317,12 +1317,12 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
     if (!speakReplies) {
       cancelSpeechOutput("Speech off");
     } else {
-      void speakReply("Voice replies are on.", { force: true });
+      void speakReply("Mind voice is on.", { force: true });
     }
     setState(state);
   };
   const onSpeakTest = () => {
-    void speakReply("This is the Personal Agent voice.", { force: true });
+    void speakReply("This is Mind.", { force: true });
   };
   const onTranscriptInput = () => setState(state);
 
@@ -1356,7 +1356,7 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
     }),
   );
 
-  note = mode === "ambient" ? "Auto-send is on" : "";
+  note = mode === "ambient" ? "Mind is ready" : "";
   setState(state);
   setSpeechStatus("Speech off");
 
@@ -1943,15 +1943,15 @@ function statusText(state: PresenceState, connected: boolean, activeRuns = 0): s
     return "Disconnected";
   }
   if (activeRuns > 0 && (state === "idle" || state === "listening")) {
-    return activeRuns === 1 ? "Agent working" : `${activeRuns} agent jobs`;
+    return activeRuns === 1 ? "Mind working" : `${activeRuns} Mind jobs`;
   }
   switch (state) {
-    case "listening": return "Ambient on";
+    case "listening": return "Listening";
     case "capturing": return "Capturing speech";
     case "recording": return "Recording";
     case "transcribing": return "Transcribing";
     case "sending": return "Sending";
-    case "unsupported": return "Voice unavailable; type instead";
+    case "unsupported": return "Mind unavailable; type instead";
     case "error": return "Needs attention";
     default: return "Paused";
   }
