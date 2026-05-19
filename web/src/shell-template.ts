@@ -497,9 +497,12 @@ export function renderDesktopShell(): string {
         </button>
         <section class="presence-panel" id="presence-panel" data-presence-panel role="dialog" aria-label="Mind" hidden>
           <header class="presence-panel-head">
-            <div>
-              <strong data-presence-title>Mind</strong>
-              <span>GSV</span>
+            <div class="presence-panel-brand">
+              <span class="presence-panel-mark" aria-hidden="true">GSV</span>
+              <span class="presence-panel-copy">
+                <strong data-presence-title>Mind</strong>
+                <span>Ambient interface</span>
+              </span>
             </div>
             <button type="button" class="presence-panel-close" data-presence-close aria-label="Close Mind">
               <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
@@ -515,6 +518,20 @@ export function renderDesktopShell(): string {
               <span class="presence-interim" data-presence-interim></span>
             </div>
           </section>
+          <div class="presence-summary" aria-label="Mind status summary">
+            <span>
+              <strong data-presence-compact-status>Paused</strong>
+              <small>State</small>
+            </span>
+            <span>
+              <strong data-presence-run-count>No jobs</strong>
+              <small>Work</small>
+            </span>
+            <span>
+              <strong data-presence-voice-status>Voice off</strong>
+              <small>Replies</small>
+            </span>
+          </div>
           <div class="presence-actions presence-actions-main">
             <button type="button" class="presence-primary" data-presence-listen>Start listening</button>
           </div>

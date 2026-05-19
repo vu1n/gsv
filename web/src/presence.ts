@@ -132,6 +132,8 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
   const clearButton = rootNode.querySelector<HTMLButtonElement>("[data-presence-clear]");
   const statusNode = rootNode.querySelector<HTMLElement>("[data-presence-status]");
   const compactStatusNodes = Array.from(rootNode.querySelectorAll<HTMLElement>("[data-presence-compact-status]"));
+  const runCountNodes = Array.from(rootNode.querySelectorAll<HTMLElement>("[data-presence-run-count]"));
+  const voiceStatusNodes = Array.from(rootNode.querySelectorAll<HTMLElement>("[data-presence-voice-status]"));
   const transcriptNode = rootNode.querySelector<HTMLTextAreaElement>("[data-presence-transcript]");
   const noteNode = rootNode.querySelector<HTMLElement>("[data-presence-interim]");
   const logNode = rootNode.querySelector<HTMLElement>("[data-presence-log]");
@@ -228,6 +230,14 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
     statusTextNode.textContent = fullStatus;
     for (const compactStatusNode of compactStatusNodes) {
       compactStatusNode.textContent = compactStatus;
+    }
+    for (const runCountNode of runCountNodes) {
+      runCountNode.textContent = activeRuns.size === 0
+        ? "No jobs"
+        : activeRuns.size === 1 ? "1 job" : `${activeRuns.size} jobs`;
+    }
+    for (const voiceStatusNode of voiceStatusNodes) {
+      voiceStatusNode.textContent = speakReplies ? "Voice on" : "Voice off";
     }
     panelNode.dataset.state = next;
     panelNode.dataset.agent = activeRuns.size > 0 ? "active" : "idle";
