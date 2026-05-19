@@ -201,6 +201,10 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
     for (const toggle of toggles) {
       toggle.setAttribute("aria-expanded", open ? "true" : "false");
     }
+    if (activityNode) {
+      activityNode.setAttribute("aria-expanded", open ? "true" : "false");
+      activityNode.classList.toggle("is-expanded", open);
+    }
   }
 
   function setMode(nextMode: PresenceMode): void {
@@ -276,6 +280,9 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
     }
     if (speechStatusNode && speakReplies && !localSpeechSupported()) {
       speechStatusNode.textContent = "Local speech unavailable; using gateway voice";
+    }
+    if (activeRuns.size === 0 && activityHideTimer === null) {
+      renderIdlePresenceActivity();
     }
   }
 
@@ -821,11 +828,18 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
   }
 
   function hidePresenceActivity(): void {
-    if (!activityNode) {
+    renderIdlePresenceActivity();
+  }
+
+  function renderIdlePresenceActivity(): void {
+    if (!activityNode || !activityStatusNode || !activityBodyNode) {
       return;
     }
-    activityNode.hidden = true;
-    delete activityNode.dataset.status;
+    const connected = gatewayClient.isConnected();
+    activityNode.hidden = false;
+    activityNode.dataset.status = presenceActivityTone(state, connected);
+    activityStatusNode.textContent = compactPresenceStatus(state, connected, activeRuns.size);
+    activityBodyNode.textContent = presenceActivityBody(state, connected);
   }
 
   function newestActiveRunId(): string | null {
@@ -860,6 +874,44 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
       activityHideTimer = null;
       renderLatestActiveActivity();
     }, activeRuns.size > 0 ? 4500 : 12000);
+  }
+
+  function presenceActivityTone(current: PresenceState, connected: boolean): string {
+    if (!connected) {
+      return "failed";
+    }
+    if (activeRuns.size > 0) {
+      return "working";
+    }
+    switch (current) {
+      case "listening": return "listening";
+      case "capturing": return "capturing";
+      case "recording": return "recording";
+      case "transcribing": return "transcribing";
+      case "sending": return "working";
+      case "error": return "failed";
+      case "unsupported": return "stopped";
+      default: return "idle";
+    }
+  }
+
+  function presenceActivityBody(current: PresenceState, connected: boolean): string {
+    if (!connected) {
+      return "Gateway disconnected";
+    }
+    if (note) {
+      return note;
+    }
+    switch (current) {
+      case "listening": return "Listening";
+      case "capturing": return "Heard you";
+      case "recording": return "Recording";
+      case "transcribing": return "Transcribing speech";
+      case "sending": return "Sending";
+      case "error": return "Needs attention";
+      case "unsupported": return "Voice unavailable";
+      default: return mode === "ambient" ? "Click to start listening" : "Ready";
+    }
   }
 
   function setSpeechStatus(message: string): void {
@@ -1329,8 +1381,11 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
     setState(ambientStream ? "listening" : canUseBrowserVoiceRecorder() ? "idle" : "unsupported");
   };
   const onActivityClick = () => {
-    setPanelOpen(true);
-    setState(state);
+    const nextOpen = !panelOpen;
+    setPanelOpen(nextOpen);
+    if (nextOpen) {
+      setState(state);
+    }
   };
   const onSpeakToggle = () => {
     speakReplies = speakNode?.checked === true;

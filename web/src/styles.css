@@ -863,19 +863,25 @@ button:disabled {
   right: 22px;
   z-index: 210;
   display: grid;
-  gap: 8px;
-  width: min(390px, calc(100vw - 44px));
-  padding: 12px 13px;
-  border: 1px solid rgba(170, 207, 241, 0.24);
-  border-radius: 8px;
-  background: rgba(7, 14, 30, 0.88);
+  gap: 7px;
+  width: min(330px, calc(100vw - 44px));
+  min-height: 62px;
+  padding: 11px 13px;
+  border: 1px solid rgba(170, 207, 241, 0.2);
+  border-radius: 14px;
+  background: rgba(7, 14, 30, 0.78);
   color: var(--text-main);
   box-shadow:
-    0 18px 38px rgba(2, 8, 20, 0.32),
-    inset 0 1px 0 rgba(255, 255, 255, 0.14);
+    0 18px 42px rgba(2, 8, 20, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
   -webkit-backdrop-filter: blur(14px) saturate(1.05);
   backdrop-filter: blur(14px) saturate(1.05);
   text-align: left;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    transform 140ms ease;
 }
 
 .presence-activity[hidden] {
@@ -897,7 +903,7 @@ button:disabled {
 
 .presence-activity-head strong {
   color: rgba(255, 255, 255, 0.94);
-  font-size: 0.82rem;
+  font-size: 0.8rem;
   font-weight: 720;
   line-height: 1.12;
 }
@@ -948,32 +954,69 @@ button:disabled {
   display: -webkit-box;
   overflow: hidden;
   color: rgba(237, 245, 255, 0.88);
-  font-size: 0.78rem;
-  line-height: 1.38;
+  font-size: 0.76rem;
+  line-height: 1.34;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 5;
+  -webkit-line-clamp: 2;
   white-space: pre-wrap;
+}
+
+.presence-activity:hover,
+.presence-activity:focus-visible,
+.presence-activity.is-expanded {
+  outline: none;
+  border-color: rgba(170, 207, 241, 0.34);
+  background: rgba(7, 14, 30, 0.9);
+  box-shadow:
+    0 22px 48px rgba(2, 8, 20, 0.38),
+    inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  transform: translateY(-1px);
+}
+
+.presence-activity[data-status="idle"] .presence-activity-pulse {
+  background: rgba(219, 236, 251, 0.62);
+  box-shadow: 0 0 0 4px rgba(219, 236, 251, 0.08);
+}
+
+.presence-activity[data-status="listening"] .presence-activity-pulse,
+.presence-activity[data-status="capturing"] .presence-activity-pulse,
+.presence-activity[data-status="recording"] .presence-activity-pulse,
+.presence-activity[data-status="transcribing"] .presence-activity-pulse {
+  background: var(--ok);
+  box-shadow: 0 0 0 4px rgba(92, 210, 168, 0.12);
+}
+
+.presence-activity[data-status="listening"] .presence-activity-pulse,
+.presence-activity[data-status="capturing"] .presence-activity-pulse,
+.presence-activity[data-status="recording"] .presence-activity-pulse,
+.presence-activity[data-status="transcribing"] .presence-activity-pulse {
+  animation: presence-activity-pulse 1.15s ease-in-out infinite;
 }
 
 .presence-panel {
   position: absolute;
-  left: 50%;
-  right: auto;
-  bottom: calc(var(--topbar-height) + 54px);
+  top: 96px;
+  right: 22px;
+  bottom: auto;
+  left: auto;
   z-index: 220;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  width: min(760px, calc(100vw - 44px));
-  max-height: min(78vh, 700px);
-  overflow: visible;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  width: min(370px, calc(100vw - 44px));
+  max-height: calc(100vh - 122px);
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid rgba(170, 207, 241, 0.22);
+  border-radius: 14px;
+  background: rgba(7, 14, 30, 0.88);
   color: #10253d;
-  box-shadow: none;
-  transform: translateX(-50%);
+  box-shadow:
+    0 24px 54px rgba(2, 8, 20, 0.38),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  -webkit-backdrop-filter: blur(16px) saturate(1.06);
+  backdrop-filter: blur(16px) saturate(1.06);
+  transform: none;
 }
 
 .presence-panel[hidden] {
@@ -981,17 +1024,16 @@ button:disabled {
 }
 
 .presence-panel-head {
-  grid-column: 1 / -1;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 14px;
-  background: rgba(7, 14, 30, 0.32);
-  -webkit-backdrop-filter: blur(16px) saturate(1.06);
-  backdrop-filter: blur(16px) saturate(1.06);
+  padding: 2px 2px 4px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 .presence-panel-brand {
@@ -1065,24 +1107,7 @@ button:disabled {
 }
 
 .presence-current {
-  grid-column: 1 / -1;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  place-items: center;
-  gap: 18px;
-  min-height: 190px;
-  padding: 34px 32px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 14px;
-  background:
-    linear-gradient(180deg, rgba(20, 48, 77, 0.92), rgba(11, 27, 48, 0.9)),
-    #14304d;
-  box-shadow:
-    0 34px 96px rgba(2, 8, 20, 0.42),
-    0 0 0 1px rgba(255, 255, 255, 0.07) inset,
-    inset 0 1px 0 rgba(255, 255, 255, 0.14);
-  -webkit-backdrop-filter: blur(18px) saturate(1.08);
-  backdrop-filter: blur(18px) saturate(1.08);
+  display: none;
 }
 
 .presence-current > div {
@@ -1257,17 +1282,16 @@ button:disabled {
 }
 
 .presence-summary {
-  grid-column: 1 / -1;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  gap: 6px;
 }
 
 .presence-summary > span {
   min-width: 0;
   display: grid;
   gap: 3px;
-  padding: 11px 12px;
+  padding: 8px 9px;
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 10px;
   background: rgba(246, 249, 252, 0.16);
@@ -1293,10 +1317,9 @@ button:disabled {
 }
 
 .presence-log {
-  grid-column: 1 / -1;
   display: grid;
   gap: 6px;
-  max-height: 170px;
+  max-height: 148px;
   overflow: auto;
   padding-right: 2px;
 }
@@ -1365,7 +1388,6 @@ button:disabled {
 }
 
 .presence-actions-main {
-  grid-column: 1 / -1;
   grid-template-columns: minmax(0, 1fr);
 }
 
@@ -6735,18 +6757,14 @@ button:disabled {
 
   .presence-panel {
     right: 14px;
-    bottom: max(24px, calc(env(safe-area-inset-bottom) + 18px));
+    top: max(92px, calc(env(safe-area-inset-top) + 92px));
+    bottom: auto;
     left: 14px;
     grid-template-columns: minmax(0, 1fr);
     width: auto;
-    max-height: min(82dvh, 620px);
+    max-height: calc(100dvh - max(116px, calc(env(safe-area-inset-top) + 116px)));
     overflow: auto;
     transform: none;
-  }
-
-  .presence-current {
-    min-height: 160px;
-    padding: 28px 20px;
   }
 
   .presence-summary {

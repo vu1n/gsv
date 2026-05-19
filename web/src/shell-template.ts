@@ -485,7 +485,7 @@ export function renderDesktopShell(): string {
         </section>
         <div class="dock-reveal-zone" data-dock-reveal-zone aria-hidden="true"></div>
         <div class="notification-toasts" data-notification-toasts aria-live="polite" aria-atomic="false"></div>
-        <button type="button" class="presence-activity" data-presence-activity aria-live="polite" aria-atomic="false" hidden>
+        <button type="button" class="presence-activity" data-presence-activity aria-live="polite" aria-atomic="false" aria-controls="presence-panel" aria-expanded="false">
           <span class="presence-activity-head">
             <span class="presence-activity-pulse" aria-hidden="true"></span>
             <span>
