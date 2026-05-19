@@ -44,6 +44,7 @@ type PresenceRun = {
   answer: string;
   status: PresenceLogStatus;
   updatedAt: number;
+  timing?: VoiceTimingTrace;
 };
 
 type BufferedRunSignal = {
@@ -56,6 +57,31 @@ type SpeechChunk = {
   text: string;
   index: number;
   total: number;
+};
+
+type VoiceTimingTrace = {
+  id: string;
+  source: "ambient" | "manual";
+  createdAt: number;
+  marks: Record<string, number>;
+  chunks: VoiceTimingChunk[];
+  runId?: string;
+  promptChars?: number;
+  answerChars?: number;
+  lastChunkEndedAt?: number;
+  logged?: boolean;
+};
+
+type VoiceTimingChunk = {
+  index: number;
+  chars: number;
+  requestStartedAt: number;
+  audioReadyAt?: number;
+  playbackStartedAt?: number;
+  playbackEndedAt?: number;
+  provider?: string;
+  model?: string;
+  gapMs?: number;
 };
 
 type PendingInterimSpeech = {
@@ -468,10 +494,12 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
       const chunks = ambientSegmentChunks.slice();
       const mimeType = recorder.mimeType || ambientMimeType;
       const segmentStartedAt = ambientSegmentStartedAt || Date.now();
+      const segmentStoppedAt = Date.now();
+      const lastVoiceAt = ambientLastVoiceAt || segmentStoppedAt;
       ambientSegmentRecorder = null;
       ambientSegmentChunks = [];
       ambientSegmentStartedAt = 0;
-      void queueAmbientSegment(chunks, mimeType, segmentStartedAt);
+      void queueAmbientSegment(chunks, mimeType, segmentStartedAt, lastVoiceAt, segmentStoppedAt);
     };
     recorder.start(250);
     note = "Capturing speech";
@@ -505,6 +533,8 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
     chunks: Blob[],
     mimeType: string,
     startedAt: number,
+    lastVoiceAt: number,
+    stoppedAt: number,
   ): Promise<void> {
     const durationMs = Date.now() - startedAt;
     if (durationMs < AMBIENT_MIN_SEGMENT_MS || totalBlobSize(chunks) < AMBIENT_MIN_SEGMENT_BYTES) {
@@ -512,15 +542,21 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
       setState("listening");
       return;
     }
-    await processAmbientSegment(chunks, mimeType, startedAt);
+    await processAmbientSegment(chunks, mimeType, startedAt, lastVoiceAt, stoppedAt);
   }
 
   async function processAmbientSegment(
     chunks: Blob[],
     mimeType: string,
     startedAt: number,
+    lastVoiceAt: number,
+    stoppedAt: number,
   ): Promise<void> {
     ambientPendingJobs += 1;
+    const timing = createVoiceTimingTrace("ambient", startedAt);
+    markVoiceTiming(timing, "speech_started", startedAt);
+    markVoiceTiming(timing, "speech_last_voice", lastVoiceAt);
+    markVoiceTiming(timing, "segment_stopped", stoppedAt);
     const blob = new Blob(chunks, { type: mimeType });
     let logRow: HTMLElement | null = null;
     note = "Transcribing speech";
@@ -528,25 +564,33 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
       setState("transcribing");
     }
     try {
+      markVoiceTiming(timing, "transcription_started");
       const result = await transcribeBlob(blob, mimeType, startedAt);
+      markVoiceTiming(timing, "transcription_done");
       const text = result.text.trim();
       if (!text) {
         throw new Error("No speech was transcribed");
       }
+      timing.promptChars = text.length;
       logRow = addPresenceLog(logNode, "Sending", text, startedAt);
       note = "Sending ambient segment";
       if (!ambientSpeechActive) {
         setState("sending");
       }
+      markVoiceTiming(timing, "agent_send_started");
       const sent = await sendTextToPersonalAgent(text);
+      markVoiceTiming(timing, "agent_send_done");
+      timing.runId = sent.runId;
       lastSentText = text;
       note = sent.queued ? "Queued for Personal Agent" : "Personal Agent is working";
       updatePresenceLog(logRow, sent.queued ? "Queued" : "Working");
-      trackRun(sent.runId, logRow, text, sent.queued ? "Queued" : "Working");
+      trackRun(sent.runId, logRow, text, sent.queued ? "Queued" : "Working", timing);
       if (transcriptInputNode.value.trim() === text) {
         transcriptInputNode.value = "";
       }
     } catch (error) {
+      markVoiceTiming(timing, "failed");
+      logVoiceTimingTrace(timing, "failed");
       const message = formatError(error);
       note = "";
       setState("error", "Ambient failed: " + message);
@@ -650,13 +694,18 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
     row: HTMLElement | null,
     prompt: string,
     status: PresenceLogStatus = "Working",
+    timing?: VoiceTimingTrace,
   ): void {
+    if (timing) {
+      timing.runId = runId;
+    }
     activeRuns.set(runId, {
       row,
       prompt,
       answer: "",
       status,
       updatedAt: Date.now(),
+      timing,
     });
     latestRunId = runId;
     showPresenceActivity(status, prompt);
@@ -825,9 +874,10 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
 
   async function speakReply(
     text: string,
-    options?: { force?: boolean; interrupt?: boolean },
+    options?: { force?: boolean; interrupt?: boolean; timing?: VoiceTimingTrace },
   ): Promise<void> {
     if (!options?.force && !speakReplies) {
+      logVoiceTimingTrace(options?.timing, "speech-disabled");
       return;
     }
     const normalized = text.trim();
@@ -840,10 +890,12 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
     }
     const speechText = normalizeSpeechText(normalized);
     if (!speechText) {
+      logVoiceTimingTrace(options?.timing, "speech-empty");
       return;
     }
     const chunks = chunkSpeechText(speechText);
     if (chunks.length === 0) {
+      logVoiceTimingTrace(options?.timing, "speech-empty");
       return;
     }
     if (options?.interrupt === false && isSpeechOutputPlaying()) {
@@ -863,7 +915,7 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
           && pendingSpeech.size < SPEECH_PREFETCH_CONCURRENCY
         ) {
           const chunk = chunks[nextRequestIndex];
-          pendingSpeech.set(chunk.index, requestSpeechChunk(chunk, attempt));
+          pendingSpeech.set(chunk.index, requestSpeechChunk(chunk, attempt, options?.timing));
           nextRequestIndex += 1;
         }
       };
@@ -883,10 +935,11 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
         }
         pendingSpeech.delete(chunk.index);
         ensurePrefetch();
-        await playSpeechChunk(result, chunk, attempt);
+        await playSpeechChunk(result, chunk, attempt, options?.timing);
       }
       if (attempt === speechAttempt) {
         setSpeechStatus(speakReplies ? "Speak replies on" : "Speech off");
+        logVoiceTimingTrace(options?.timing, "speech-complete");
       }
     } catch (error) {
       if (attempt !== speechAttempt) {
@@ -894,6 +947,8 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
       }
       speechAudio = null;
       setSpeechStatus("Speech failed: " + formatError(error));
+      markVoiceTiming(options?.timing, "speech_failed");
+      logVoiceTimingTrace(options?.timing, "speech-failed");
     }
   }
 
@@ -945,10 +1000,16 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
     void speakReply(text, { interrupt: false });
   }
 
-  async function requestSpeechChunk(chunk: SpeechChunk, attempt: number): Promise<AiSpeechCreateResult> {
+  async function requestSpeechChunk(
+    chunk: SpeechChunk,
+    attempt: number,
+    timing?: VoiceTimingTrace,
+  ): Promise<AiSpeechCreateResult> {
     if (attempt !== speechAttempt) {
       throw new Error("Speech cancelled");
     }
+    const requestedAt = Date.now();
+    markVoiceTiming(timing, chunk.index === 0 ? "tts_first_chunk_requested" : "tts_chunk_requested");
     if (localSpeechSupported()) {
       try {
         const audio = await synthesizeLocalSpeech(chunk.text, {
@@ -958,7 +1019,7 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
             }
           },
         });
-        return {
+        const result: AiSpeechCreateResult = {
           audio: {
             data: URL.createObjectURL(audio),
             mimeType: audio.type || "audio/wav",
@@ -967,23 +1028,29 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
           provider: "local-piper",
           model: "piper",
         };
+        recordVoiceTimingChunkReady(timing, chunk, requestedAt, result);
+        return result;
       } catch (error) {
         if (attempt !== speechAttempt) {
           throw error;
         }
+        markVoiceTiming(timing, "tts_local_fallback");
         setSpeechStatus(`Local speech failed: ${formatError(error)}. Trying gateway voice.`);
       }
     }
 
-    return gatewayClient.call<AiSpeechCreateResult>("ai.speech.create", {
+    const result = await gatewayClient.call<AiSpeechCreateResult>("ai.speech.create", {
       text: chunk.text,
     });
+    recordVoiceTimingChunkReady(timing, chunk, requestedAt, result);
+    return result;
   }
 
   function playSpeechChunk(
     result: AiSpeechCreateResult,
     chunk: SpeechChunk,
     attempt: number,
+    timing?: VoiceTimingTrace,
   ): Promise<void> {
     return new Promise((resolve, reject) => {
       if (attempt !== speechAttempt) {
@@ -1029,10 +1096,14 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
       speechPlaybackCancel = cancelPlayback;
       audio.onplay = () => {
         if (attempt === speechAttempt) {
+          recordVoiceTimingChunkPlaybackStart(timing, chunk);
           setSpeechStatus(speechChunkStatus("Speaking", chunk));
         }
       };
-      audio.onended = () => finish();
+      audio.onended = () => {
+        recordVoiceTimingChunkPlaybackEnd(timing, chunk);
+        finish();
+      };
       audio.onerror = () => finish(new Error("Speech playback failed"));
       setSpeechStatus(speechChunkStatus("Starting speech", chunk));
       void audio.play().catch((error: unknown) => {
@@ -1055,8 +1126,10 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
       bufferRunSignal(runId, signal, payload);
       return;
     }
+    markRunActivity(run, signal);
 
     if (signal === "chat.text") {
+      markVoiceTiming(run.timing, "agent_first_text");
       run.status = "Responding";
       run.updatedAt = Date.now();
       run.answer = signalPayloadText(payload) ?? run.answer;
@@ -1073,6 +1146,7 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
 
     if (signal === "chat.tool_call") {
       const toolLabel = signalPayloadToolLabel(payload);
+      markVoiceTiming(run.timing, "agent_first_tool_call");
       run.status = "Using tools";
       run.updatedAt = Date.now();
       latestRunId = runId;
@@ -1098,6 +1172,7 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
     }
 
     if (signal === "chat.hil") {
+      markVoiceTiming(run.timing, "agent_needs_approval");
       run.status = "Needs approval";
       run.updatedAt = Date.now();
       latestRunId = runId;
@@ -1114,6 +1189,10 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
       const error = signalPayloadError(payload);
       const aborted = signalPayloadAborted(payload);
       run.answer = signalPayloadText(payload) ?? run.answer;
+      markVoiceTiming(run.timing, "agent_complete");
+      if (run.timing) {
+        run.timing.answerChars = run.answer.length;
+      }
       clearPendingInterimSpeech(runId);
       const finalStatus = error ? "Failed" : aborted ? "Stopped" : "Done";
       updatePresenceLog(run.row, finalStatus, error ?? undefined);
@@ -1127,7 +1206,9 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
         finalStatus === "Failed" ? "failed" : finalStatus === "Stopped" ? "stopped" : "done",
       );
       if (!error && !aborted && run.answer) {
-        void speakReply(run.answer);
+        void speakReply(run.answer, { timing: run.timing });
+      } else if (run.timing) {
+        logVoiceTimingTrace(run.timing, finalStatus.toLowerCase());
       }
       scheduleActivityAfterCompletion(runId);
       setState(error ? "error" : state);
@@ -1145,17 +1226,24 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
     }
     setState("sending", "Sending to Personal Agent");
     const logRow = addPresenceLog(logNode, "Sending", message, Date.now());
+    const timing = createVoiceTimingTrace("manual");
+    timing.promptChars = message.length;
     try {
+      markVoiceTiming(timing, "agent_send_started");
       const sent = await sendTextToPersonalAgent(message);
+      markVoiceTiming(timing, "agent_send_done");
+      timing.runId = sent.runId;
       lastSentText = message;
       transcriptInputNode.value = "";
       note = sent.queued ? "Queued for Personal Agent" : "Personal Agent is working";
       updatePresenceLog(logRow, sent.queued ? "Queued" : "Working");
-      trackRun(sent.runId, logRow, message, sent.queued ? "Queued" : "Working");
+      trackRun(sent.runId, logRow, message, sent.queued ? "Queued" : "Working", timing);
       if (activeRuns.has(sent.runId)) {
         setState(ambientStream ? "listening" : "idle", note);
       }
     } catch (error) {
+      markVoiceTiming(timing, "failed");
+      logVoiceTimingTrace(timing, "failed");
       const errorMessage = formatError(error);
       updatePresenceLog(logRow, "Failed", errorMessage);
       setState("error", errorMessage);
@@ -1505,6 +1593,164 @@ function formatClock(timestamp: number): string {
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function createVoiceTimingTrace(source: VoiceTimingTrace["source"], createdAt = Date.now()): VoiceTimingTrace {
+  return {
+    id: createTimingId(),
+    source,
+    createdAt,
+    marks: {},
+    chunks: [],
+  };
+}
+
+function markVoiceTiming(timing: VoiceTimingTrace | undefined, mark: string, at = Date.now()): void {
+  if (!timing) {
+    return;
+  }
+  timing.marks[mark] = at;
+}
+
+function markVoiceTimingOnce(timing: VoiceTimingTrace | undefined, mark: string, at = Date.now()): void {
+  if (!timing || timing.marks[mark] !== undefined) {
+    return;
+  }
+  timing.marks[mark] = at;
+}
+
+function markRunActivity(run: PresenceRun, signal: string): void {
+  markVoiceTimingOnce(run.timing, "agent_first_activity");
+  markVoiceTimingOnce(run.timing, `agent_first_${signal.replace(/\W+/g, "_")}`);
+}
+
+function recordVoiceTimingChunkReady(
+  timing: VoiceTimingTrace | undefined,
+  chunk: SpeechChunk,
+  requestedAt: number,
+  result: AiSpeechCreateResult,
+): void {
+  if (!timing) {
+    return;
+  }
+  const entry = ensureVoiceTimingChunk(timing, chunk, requestedAt);
+  entry.audioReadyAt = Date.now();
+  entry.provider = result.provider;
+  entry.model = result.model;
+  if (chunk.index === 0) {
+    markVoiceTiming(timing, "tts_first_audio_ready", entry.audioReadyAt);
+  }
+}
+
+function recordVoiceTimingChunkPlaybackStart(timing: VoiceTimingTrace | undefined, chunk: SpeechChunk): void {
+  if (!timing) {
+    return;
+  }
+  const now = Date.now();
+  const entry = ensureVoiceTimingChunk(timing, chunk, now);
+  entry.playbackStartedAt = now;
+  if (chunk.index === 0) {
+    markVoiceTiming(timing, "tts_first_audio_playing", now);
+  }
+  if (typeof timing.lastChunkEndedAt === "number") {
+    entry.gapMs = Math.max(0, now - timing.lastChunkEndedAt);
+  }
+}
+
+function recordVoiceTimingChunkPlaybackEnd(timing: VoiceTimingTrace | undefined, chunk: SpeechChunk): void {
+  if (!timing) {
+    return;
+  }
+  const now = Date.now();
+  const entry = ensureVoiceTimingChunk(timing, chunk, now);
+  entry.playbackEndedAt = now;
+  timing.lastChunkEndedAt = now;
+  if (chunk.index === chunk.total - 1) {
+    markVoiceTiming(timing, "tts_done", now);
+  }
+}
+
+function logVoiceTimingTrace(timing: VoiceTimingTrace | undefined, reason: string): void {
+  if (!timing || timing.logged) {
+    return;
+  }
+  timing.logged = true;
+  console.debug("[presence voice timing]", voiceTimingSummary(timing, reason));
+}
+
+function ensureVoiceTimingChunk(
+  timing: VoiceTimingTrace,
+  chunk: SpeechChunk,
+  requestedAt: number,
+): VoiceTimingChunk {
+  let entry = timing.chunks.find((candidate) => candidate.index === chunk.index);
+  if (!entry) {
+    entry = {
+      index: chunk.index,
+      chars: chunk.text.length,
+      requestStartedAt: requestedAt,
+    };
+    timing.chunks.push(entry);
+  }
+  entry.requestStartedAt = Math.min(entry.requestStartedAt, requestedAt);
+  return entry;
+}
+
+function voiceTimingSummary(timing: VoiceTimingTrace, reason: string): Record<string, unknown> {
+  const marks = timing.marks;
+  const chunkGaps = timing.chunks
+    .map((chunk) => chunk.gapMs)
+    .filter((gap): gap is number => typeof gap === "number" && Number.isFinite(gap));
+  const chunks = timing.chunks
+    .slice()
+    .sort((left, right) => left.index - right.index)
+    .map((chunk) => ({
+      index: chunk.index,
+      chars: chunk.chars,
+      provider: chunk.provider,
+      model: chunk.model,
+      synthMs: durationMs(chunk.requestStartedAt, chunk.audioReadyAt),
+      gapMs: chunk.gapMs,
+      playbackMs: durationMs(chunk.playbackStartedAt, chunk.playbackEndedAt),
+    }));
+
+  return {
+    id: timing.id,
+    reason,
+    source: timing.source,
+    runId: timing.runId,
+    promptChars: timing.promptChars,
+    answerChars: timing.answerChars,
+    vadSilenceMs: durationMs(marks.speech_last_voice, marks.segment_stopped),
+    lastVoiceToTranscriptionStartMs: durationMs(marks.speech_last_voice, marks.transcription_started),
+    recordingStopToTranscriptionStartMs: durationMs(marks.segment_stopped, marks.transcription_started),
+    transcriptionMs: durationMs(marks.transcription_started, marks.transcription_done),
+    transcriptionToAgentSendMs: durationMs(marks.transcription_done, marks.agent_send_started),
+    agentDispatchMs: durationMs(marks.agent_send_started, marks.agent_send_done),
+    agentWaitFirstActivityMs: durationMs(marks.agent_send_done, marks.agent_first_activity),
+    agentTotalMs: durationMs(marks.agent_send_done, marks.agent_complete),
+    replyToFirstAudioReadyMs: durationMs(marks.agent_complete, marks.tts_first_audio_ready),
+    replyToFirstAudioPlayingMs: durationMs(marks.agent_complete, marks.tts_first_audio_playing),
+    firstChunkSynthesisMs: durationMs(marks.tts_first_chunk_requested, marks.tts_first_audio_ready),
+    speechPlaybackMs: durationMs(marks.tts_first_audio_playing, marks.tts_done),
+    maxSpeechGapMs: chunkGaps.length > 0 ? Math.max(...chunkGaps) : undefined,
+    chunkCount: timing.chunks.length,
+    chunks,
+  };
+}
+
+function durationMs(start: number | undefined, end: number | undefined): number | undefined {
+  if (typeof start !== "number" || typeof end !== "number") {
+    return undefined;
+  }
+  return Math.max(0, Math.round(end - start));
+}
+
+function createTimingId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `voice-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 function normalizeInterimSpeechText(text: string): string {
