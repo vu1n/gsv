@@ -501,7 +501,6 @@ export function renderDesktopShell(): string {
               <span class="presence-panel-mark" aria-hidden="true">GSV</span>
               <span class="presence-panel-copy">
                 <strong data-presence-title>Mind</strong>
-                <span>Ambient interface</span>
               </span>
             </div>
             <button type="button" class="presence-panel-close" data-presence-close aria-label="Close Mind">
@@ -518,26 +517,12 @@ export function renderDesktopShell(): string {
               <span class="presence-interim" data-presence-interim></span>
             </div>
           </section>
-          <div class="presence-summary" aria-label="Mind status summary">
-            <span>
-              <strong data-presence-compact-status>Paused</strong>
-              <small>State</small>
-            </span>
-            <span>
-              <strong data-presence-run-count>No jobs</strong>
-              <small>Work</small>
-            </span>
-            <span>
-              <strong data-presence-voice-status>Voice on</strong>
-              <small>Replies</small>
-            </span>
-          </div>
           <div class="presence-actions presence-actions-main">
-            <button type="button" class="presence-primary" data-presence-listen>Start listening</button>
+            <button type="button" class="presence-primary" data-presence-listen>Listen</button>
           </div>
           <div class="presence-log" data-presence-log hidden></div>
           <details class="presence-section presence-manual">
-            <summary>Manual input</summary>
+            <summary>Manual</summary>
             <div class="presence-mode" role="group" aria-label="Mind input mode">
               <button type="button" data-presence-mode="ambient" aria-pressed="true">Ambient</button>
               <button type="button" data-presence-mode="push" aria-pressed="false">Manual</button>
@@ -549,7 +534,7 @@ export function renderDesktopShell(): string {
             </div>
           </details>
           <details class="presence-section presence-voice">
-            <summary>Voice output</summary>
+            <summary>Voice</summary>
             <div class="presence-speech-controls">
               <label class="presence-speech-toggle">
                 <span>Read replies</span>
