@@ -68,6 +68,7 @@ type VoiceTimingTrace = {
   runId?: string;
   promptChars?: number;
   answerChars?: number;
+  error?: string;
   lastChunkEndedAt?: number;
   logged?: boolean;
 };
@@ -103,8 +104,9 @@ const AMBIENT_END_SILENCE_MS = 1100;
 const AMBIENT_MIN_SEGMENT_MS = 450;
 const AMBIENT_MIN_SEGMENT_BYTES = 900;
 const AMBIENT_RMS_THRESHOLD = 0.018;
-const SPEECH_FIRST_CHUNK_MIN_CHARS = 80;
-const SPEECH_FIRST_CHUNK_MAX_CHARS = 280;
+const SPEECH_FIRST_CHUNK_MIN_CHARS = 48;
+const SPEECH_FIRST_CHUNK_TARGET_CHARS = 90;
+const SPEECH_FIRST_CHUNK_MAX_CHARS = 120;
 const SPEECH_CHUNK_MAX_CHARS = 420;
 const SPEECH_PREFETCH_CONCURRENCY = 3;
 const INTERIM_SPEECH_DELAY_MS = 650;
@@ -590,9 +592,9 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
         transcriptInputNode.value = "";
       }
     } catch (error) {
-      markVoiceTiming(timing, "failed");
-      logVoiceTimingTrace(timing, "failed");
       const message = formatError(error);
+      recordVoiceTimingFailure(timing, message);
+      logVoiceTimingTrace(timing, "failed");
       note = "";
       setState("error", "Ambient failed: " + message);
       if (logRow) {
@@ -947,8 +949,9 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
         return;
       }
       speechAudio = null;
-      setSpeechStatus("Speech failed: " + formatError(error));
-      markVoiceTiming(options?.timing, "speech_failed");
+      const message = formatError(error);
+      setSpeechStatus("Speech failed: " + message);
+      recordVoiceTimingFailure(options?.timing, message, "speech_failed");
       logVoiceTimingTrace(options?.timing, "speech-failed");
     }
   }
@@ -1243,9 +1246,9 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
         setState(ambientStream ? "listening" : "idle", note);
       }
     } catch (error) {
-      markVoiceTiming(timing, "failed");
-      logVoiceTimingTrace(timing, "failed");
       const errorMessage = formatError(error);
+      recordVoiceTimingFailure(timing, errorMessage);
+      logVoiceTimingTrace(timing, "failed");
       updatePresenceLog(logRow, "Failed", errorMessage);
       setState("error", errorMessage);
     }
@@ -1620,6 +1623,18 @@ function markVoiceTimingOnce(timing: VoiceTimingTrace | undefined, mark: string,
   timing.marks[mark] = at;
 }
 
+function recordVoiceTimingFailure(
+  timing: VoiceTimingTrace | undefined,
+  error: string,
+  mark = "failed",
+): void {
+  if (!timing) {
+    return;
+  }
+  timing.error = error;
+  markVoiceTiming(timing, mark);
+}
+
 function markRunActivity(run: PresenceRun, signal: string): void {
   markVoiceTimingOnce(run.timing, "agent_first_activity");
   markVoiceTimingOnce(run.timing, `agent_first_${signal.replace(/\W+/g, "_")}`);
@@ -1720,6 +1735,7 @@ function voiceTimingSummary(timing: VoiceTimingTrace, reason: string): Record<st
     reason,
     source: timing.source,
     runId: timing.runId,
+    error: timing.error,
     promptChars: timing.promptChars,
     answerChars: timing.answerChars,
     vadSilenceMs: durationMs(marks.speech_last_voice, marks.segment_stopped),
@@ -1797,12 +1813,44 @@ function balanceSpeechChunks(chunks: string[]): string[] {
   const balanced = chunks.slice();
   while (balanced.length > 1 && balanced[0].length < SPEECH_FIRST_CHUNK_MIN_CHARS) {
     const merged = `${balanced[0]} ${balanced[1]}`.trim();
-    if (merged.length > SPEECH_FIRST_CHUNK_MAX_CHARS) {
+    if (merged.length <= SPEECH_FIRST_CHUNK_TARGET_CHARS) {
+      balanced.splice(0, 2, merged);
+      continue;
+    }
+
+    const availableChars = SPEECH_FIRST_CHUNK_TARGET_CHARS - balanced[0].length - 1;
+    const [head, tail] = splitSpeechPrefix(balanced[1], availableChars);
+    if (!head) {
       break;
     }
-    balanced.splice(0, 2, merged);
+    balanced[0] = `${balanced[0]} ${head}`.trim();
+    if (tail) {
+      balanced[1] = tail;
+    } else {
+      balanced.splice(1, 1);
+    }
+    break;
   }
   return balanced;
+}
+
+function splitSpeechPrefix(text: string, maxChars: number): [string, string] {
+  if (maxChars <= 0 || text.length <= maxChars) {
+    return [text.trim(), ""];
+  }
+
+  const words = text.split(/\s+/).filter(Boolean);
+  let consumed = 0;
+  let prefix = "";
+  for (const word of words) {
+    const next = prefix ? `${prefix} ${word}` : word;
+    if (next.length > maxChars) {
+      break;
+    }
+    prefix = next;
+    consumed += 1;
+  }
+  return [prefix, words.slice(consumed).join(" ")];
 }
 
 function speechBlocks(text: string): string[] {
