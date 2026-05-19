@@ -244,8 +244,10 @@ describe("handleAiSpeechCreate", () => {
     await handleAiSpeechCreate({
       text: [
         "**Result:**",
+        "Ready ✅",
         "",
         "- [Docs](https://example.com/docs)",
+        "- Launch 🚀 soon",
         "",
         "| Name | State |",
         "| --- | --- |",
@@ -262,8 +264,10 @@ describe("handleAiSpeechCreate", () => {
       expect.objectContaining({
         text: [
           "Result:",
+          "Ready",
           "",
           "Docs",
+          "Launch soon",
           "",
           "Table. Row 1: Name: GSV; State: ready.",
           "",

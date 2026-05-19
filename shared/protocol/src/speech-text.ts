@@ -4,6 +4,8 @@ export type SpeechTextFormat = "plain" | "markdown";
 
 const MAX_SPOKEN_TABLE_ROWS = 6;
 const MAX_SPOKEN_TABLE_COLUMNS = 4;
+const EMOJI_SEQUENCE_PATTERN = /(?:\p{Extended_Pictographic}|\p{Emoji_Presentation})(?:[\u{1F3FB}-\u{1F3FF}]|[\uFE0E\uFE0F])?(?:\u200D(?:\p{Extended_Pictographic}|\p{Emoji_Presentation})(?:[\u{1F3FB}-\u{1F3FF}]|[\uFE0E\uFE0F])?)*/gu;
+const EMOJI_MODIFIER_PATTERN = /[\u{1F1E6}-\u{1F1FF}\u{1F3FB}-\u{1F3FF}\uFE0E\uFE0F\u200D]/gu;
 
 export function normalizeSpeechText(
   input: string,
@@ -162,7 +164,7 @@ function markdownFallbackToSpeechText(value: string): string {
 }
 
 function normalizeSpeechWhitespace(value: string): string {
-  return decodeHtmlEntities(value)
+  return stripEmojiForSpeech(decodeHtmlEntities(value))
     .replace(/\r\n?/g, "\n")
     .split("\n")
     .map((line) => line.replace(/\s+/g, " ").trim())
@@ -171,6 +173,13 @@ function normalizeSpeechWhitespace(value: string): string {
     .replace(/[ \t]+([,.;:!?])/g, "$1")
     .replace(/([.!?]){4,}/g, "$1$1$1")
     .trim();
+}
+
+function stripEmojiForSpeech(value: string): string {
+  return value
+    .replace(/[#*0-9]\uFE0F?\u20E3/gu, " ")
+    .replace(EMOJI_SEQUENCE_PATTERN, " ")
+    .replace(EMOJI_MODIFIER_PATTERN, "");
 }
 
 function decodeHtmlEntities(value: string): string {
