@@ -528,7 +528,7 @@ export function renderDesktopShell(): string {
               <small>Work</small>
             </span>
             <span>
-              <strong data-presence-voice-status>Voice off</strong>
+              <strong data-presence-voice-status>Voice on</strong>
               <small>Replies</small>
             </span>
           </div>
@@ -553,7 +553,7 @@ export function renderDesktopShell(): string {
             <div class="presence-speech-controls">
               <label class="presence-speech-toggle">
                 <span>Read replies</span>
-                <input type="checkbox" data-presence-speak />
+                <input type="checkbox" data-presence-speak checked />
               </label>
               <button type="button" data-presence-speak-test>Preview voice</button>
             </div>

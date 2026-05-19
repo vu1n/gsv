@@ -164,7 +164,7 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
   let lastSentText = "";
   let latestRunId: string | null = null;
   let activityHideTimer: number | null = null;
-  let speakReplies = false;
+  let speakReplies = true;
   let speechAttempt = 0;
   let speechAudio: HTMLAudioElement | null = null;
   let speechPlaybackCancel: (() => void) | null = null;
@@ -1378,7 +1378,7 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
 
   note = mode === "ambient" ? "Mind is ready" : "";
   setState(state);
-  setSpeechStatus("Speech off");
+  setSpeechStatus(localSpeechSupported() ? "Speak replies on" : "Local speech unavailable; using gateway voice");
 
   return {
     destroy() {
