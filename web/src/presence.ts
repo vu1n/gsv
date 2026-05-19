@@ -78,8 +78,8 @@ const AMBIENT_MIN_SEGMENT_MS = 450;
 const AMBIENT_MIN_SEGMENT_BYTES = 900;
 const AMBIENT_RMS_THRESHOLD = 0.018;
 const SPEECH_FIRST_CHUNK_MAX_CHARS = 280;
-const SPEECH_CHUNK_MAX_CHARS = 750;
-const SPEECH_PREFETCH_CONCURRENCY = 2;
+const SPEECH_CHUNK_MAX_CHARS = 420;
+const SPEECH_PREFETCH_CONCURRENCY = 3;
 const INTERIM_SPEECH_DELAY_MS = 650;
 const INTERIM_SPEECH_MAX_CHARS = 220;
 const INTERIM_SPEECH_COOLDOWN_MS = 7000;
@@ -856,7 +856,7 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
 
     try {
       const pendingSpeech = new Map<number, Promise<AiSpeechCreateResult>>();
-      let nextRequestIndex = 1;
+      let nextRequestIndex = 0;
       const ensurePrefetch = () => {
         while (
           nextRequestIndex < chunks.length
@@ -867,7 +867,7 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
           nextRequestIndex += 1;
         }
       };
-      pendingSpeech.set(chunks[0].index, requestSpeechChunk(chunks[0], attempt));
+      ensurePrefetch();
       for (let index = 0; index < chunks.length; index += 1) {
         const chunk = chunks[index];
         if (attempt !== speechAttempt) {
@@ -1520,45 +1520,20 @@ function normalizeInterimSpeechText(text: string): string {
 
 function chunkSpeechText(text: string): SpeechChunk[] {
   const chunks: string[] = [];
-  let current = "";
-
-  const flushCurrent = () => {
-    const normalized = current.trim();
-    current = "";
-    flushSpeechChunk(chunks, normalized);
-  };
-
-  const appendRegularPiece = (piece: string) => {
-    for (const part of splitLongSpeechPart(piece, SPEECH_CHUNK_MAX_CHARS)) {
-      const next = current ? `${current} ${part}` : part;
-      if (next.length <= SPEECH_CHUNK_MAX_CHARS) {
-        current = next;
-        continue;
-      }
-      flushCurrent();
-      current = part;
-    }
-  };
 
   for (const block of speechBlocks(text)) {
     if (isMarkdownStructuralBlock(block)) {
-      flushCurrent();
       flushSpeechChunk(chunks, block);
       continue;
     }
     for (const sentence of splitSpeechSentences(block)) {
-      if (chunks.length === 0 && !current) {
-        const [first, ...rest] = splitLongSpeechPart(sentence, SPEECH_FIRST_CHUNK_MAX_CHARS);
-        flushSpeechChunk(chunks, first);
-        for (const part of rest) {
-          appendRegularPiece(part);
-        }
-        continue;
+      const maxChars = chunks.length === 0 ? SPEECH_FIRST_CHUNK_MAX_CHARS : SPEECH_CHUNK_MAX_CHARS;
+      for (const part of splitLongSpeechPart(sentence, maxChars)) {
+        flushSpeechChunk(chunks, part);
       }
-      appendRegularPiece(sentence);
     }
   }
-  flushCurrent();
+
   return chunks.map((chunk, index) => ({
     text: chunk,
     index,
