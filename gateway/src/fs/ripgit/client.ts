@@ -178,6 +178,7 @@ export type RipgitPackageSnapshotResponse = {
   };
   package_root: string;
   files: Record<string, string>;
+  binary_files?: Record<string, string>;
 };
 
 type RipgitApplyResponse = {

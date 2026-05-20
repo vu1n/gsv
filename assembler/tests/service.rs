@@ -107,6 +107,7 @@ export default definePackage({
         ]
         .into_iter()
         .collect(),
+        binary_files: BTreeMap::new(),
     }
 }
 
@@ -129,9 +130,9 @@ fn service_returns_protocol_response_with_artifact() {
         .iter()
         .find(|module| module.path == "__gsv__/main.ts")
         .expect("wrapper module");
-    assert!(wrapper
-        .content
-        .contains("const BROWSER_ENTRY = \"__gsv_browser__/src/main.js\";"));
+    assert!(wrapper.content.contains(
+        "const BROWSER_ENTRY = \"/public/gsv/packages/__GSV_ARTIFACT_HASH__/browser/src/main.js\";"
+    ));
 }
 
 #[test]

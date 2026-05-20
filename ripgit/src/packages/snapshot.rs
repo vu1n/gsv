@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
 use serde::Deserialize;
 use worker::{Error, Result, SqlStorage, SqlStorageValue};
 
@@ -18,13 +19,14 @@ pub(crate) fn snapshot_package(
     let mut pending_roots = VecDeque::from([normalize_snapshot_root(&analysis.package_root)?]);
     let mut visited_roots = BTreeSet::new();
     let mut files = BTreeMap::new();
+    let mut binary_files = BTreeMap::new();
 
     while let Some(root) = pending_roots.pop_front() {
         if !visited_roots.insert(root.clone()) {
             continue;
         }
 
-        collect_utf8_files_for_root(sql, &analysis.source, &root, &mut files)?;
+        collect_files_for_root(sql, &analysis.source, &root, &mut files, &mut binary_files)?;
         collect_ancestor_config_files(sql, &analysis.source, &root, &mut files)?;
 
         if let Some(package_json) = files.get(&join_snapshot_path(&root, "package.json")) {
@@ -42,6 +44,7 @@ pub(crate) fn snapshot_package(
         source: analysis.source,
         package_root: analysis.package_root,
         files,
+        binary_files,
     })
 }
 
@@ -62,16 +65,17 @@ fn join_snapshot_path(root: &str, child: &str) -> String {
     }
 }
 
-fn collect_utf8_files_for_root(
+fn collect_files_for_root(
     sql: &SqlStorage,
     source: &ResolvedPackageSource,
     root: &str,
     files: &mut BTreeMap<String, String>,
+    binary_files: &mut BTreeMap<String, String>,
 ) -> Result<()> {
     let Some(tree_hash) = resolve_tree_hash_at_commit(sql, &source.resolved_commit, root)? else {
         return Ok(());
     };
-    collect_utf8_files_under_tree(sql, &tree_hash, root, files)
+    collect_files_under_tree(sql, &tree_hash, root, files, binary_files)
 }
 
 fn collect_ancestor_config_files(
@@ -243,11 +247,12 @@ fn resolve_blob_hash_at_commit(
     Ok(None)
 }
 
-fn collect_utf8_files_under_tree(
+fn collect_files_under_tree(
     sql: &SqlStorage,
     tree_hash: &str,
     prefix: &str,
     files: &mut BTreeMap<String, String>,
+    binary_files: &mut BTreeMap<String, String>,
 ) -> Result<()> {
     #[derive(Deserialize)]
     struct TreeRow {
@@ -271,7 +276,7 @@ fn collect_utf8_files_under_tree(
         };
 
         if entry.mode == 0o040000 {
-            collect_utf8_files_under_tree(sql, &entry.entry_hash, &path, files)?;
+            collect_files_under_tree(sql, &entry.entry_hash, &path, files, binary_files)?;
             continue;
         }
 
@@ -281,8 +286,13 @@ fn collect_utf8_files_under_tree(
                 path
             )));
         };
-        if let Ok(text) = String::from_utf8(bytes) {
-            files.insert(path, text);
+        match String::from_utf8(bytes) {
+            Ok(text) => {
+                files.insert(path, text);
+            }
+            Err(error) => {
+                binary_files.insert(path, BASE64_STANDARD.encode(error.into_bytes()));
+            }
         }
     }
 
@@ -297,7 +307,11 @@ struct SnapshotPackageJson {
     dependencies: BTreeMap<String, String>,
     #[serde(default, rename = "devDependencies", alias = "dev_dependencies")]
     dev_dependencies: BTreeMap<String, String>,
-    #[serde(default, rename = "optionalDependencies", alias = "optional_dependencies")]
+    #[serde(
+        default,
+        rename = "optionalDependencies",
+        alias = "optional_dependencies"
+    )]
     optional_dependencies: BTreeMap<String, String>,
 }
 
@@ -360,7 +374,9 @@ fn collect_workspace_package_roots_under_tree(
         let Some(package_name) = package_json.name else {
             continue;
         };
-        roots.entry(package_name).or_insert_with(|| prefix.to_string());
+        roots
+            .entry(package_name)
+            .or_insert_with(|| prefix.to_string());
     }
 
     for entry in rows {

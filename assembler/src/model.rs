@@ -139,6 +139,8 @@ pub struct PackageAssemblyRequest {
     pub target: PackageAssemblyTarget,
     #[serde(default)]
     pub files: BTreeMap<String, String>,
+    #[serde(default)]
+    pub binary_files: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -159,9 +161,27 @@ pub struct PackageAssemblyArtifactModule {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PackageAssemblyPublicFileEncoding {
+    #[serde(rename = "utf-8")]
+    Utf8,
+    Base64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PackageAssemblyPublicFile {
+    pub path: String,
+    pub content_type: String,
+    pub encoding: PackageAssemblyPublicFileEncoding,
+    pub content: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PackageAssemblyArtifact {
     pub main_module: String,
     pub modules: Vec<PackageAssemblyArtifactModule>,
+    #[serde(default)]
+    pub public_files: Vec<PackageAssemblyPublicFile>,
     pub hash: String,
 }
 

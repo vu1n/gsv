@@ -2,6 +2,7 @@ import { DurableObject, RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 import { getAgentByName } from "agents";
 import {
   loadPackageArtifact,
+  packageArtifactPublicBase,
   packageArtifactToWorkerCode,
   type PackageArtifactMetadata,
 } from "./kernel/packages";
@@ -512,6 +513,7 @@ export class AppRunner extends DurableObject<Env> {
         GSV_PACKAGE_NAME: props.packageName,
         GSV_PACKAGE_ID: props.packageId,
         GSV_ROUTE_BASE: props.routeBase,
+        GSV_PACKAGE_PUBLIC_BASE: packageArtifactPublicBase(props.artifact.hash),
       }),
     );
   }

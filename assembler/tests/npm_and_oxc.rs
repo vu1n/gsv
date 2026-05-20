@@ -1,7 +1,7 @@
 use assembler::model::{
-    PackageAssemblyAnalysis, PackageAssemblyRequest, PackageAssemblySource,
-    PackageAssemblyTarget, PackageBrowserDefinition, PackageCapabilityDefinition,
-    PackageDefinition, PackageIdentity, PackageJsonDefinition, PackageMetaDefinition,
+    PackageAssemblyAnalysis, PackageAssemblyRequest, PackageAssemblySource, PackageAssemblyTarget,
+    PackageBrowserDefinition, PackageCapabilityDefinition, PackageDefinition, PackageIdentity,
+    PackageJsonDefinition, PackageMetaDefinition,
 };
 use assembler::npm::{
     install_registry_dependencies, NpmDist, NpmPackument, NpmPackumentVersion, NpmRegistryClient,
@@ -104,6 +104,7 @@ fn base_request(entry_source: &str) -> PackageAssemblyRequest {
         ]
         .into_iter()
         .collect(),
+        binary_files: BTreeMap::new(),
     }
 }
 
@@ -274,7 +275,8 @@ export default worker;"#,
 
 #[test]
 fn browser_resolver_prefers_import_export_over_require_export() {
-    let mut request = base_request(r#"import qrcode from "qrcode-generator"; export default qrcode;"#);
+    let mut request =
+        base_request(r#"import qrcode from "qrcode-generator"; export default qrcode;"#);
     request
         .analysis
         .package_json
@@ -311,9 +313,15 @@ fn browser_resolver_prefers_import_export_over_require_export() {
   }
 }"#,
                 ),
-                ("dist/qrcode.js", br#"module.exports = function qrcode() {};"#),
+                (
+                    "dist/qrcode.js",
+                    br#"module.exports = function qrcode() {};"#,
+                ),
                 ("dist/qrcode.mjs", br#"export default function qrcode() {}"#),
-                ("dist/qrcode.d.ts", br#"declare const qrcode: unknown; export default qrcode;"#),
+                (
+                    "dist/qrcode.d.ts",
+                    br#"declare const qrcode: unknown; export default qrcode;"#,
+                ),
             ]),
         );
 
@@ -326,7 +334,10 @@ fn browser_resolver_prefers_import_export_over_require_export() {
         .resolve_specifier("apps/demo/src/main.tsx", "qrcode-generator")
         .expect("resolve qrcode-generator");
 
-    assert_eq!(resolved.repo_path, "node_modules/qrcode-generator/dist/qrcode.mjs");
+    assert_eq!(
+        resolved.repo_path,
+        "node_modules/qrcode-generator/dist/qrcode.mjs"
+    );
 }
 
 #[test]
@@ -412,7 +423,7 @@ fn semver_range_selects_highest_matching_published_version() {
 }
 
 #[test]
-fn installer_rejects_non_utf8_package_files() {
+fn installer_preserves_non_utf8_package_files() {
     let mut request = base_request(r#"import bin from "bad-pkg"; export default bin;"#);
     request
         .analysis
@@ -442,11 +453,12 @@ fn installer_rejects_non_utf8_package_files() {
     let planned = prepare_request(&request).value.expect("planned request");
     let outcome = install_registry_dependencies(&planned, &client);
 
-    assert!(outcome.value.is_none());
-    assert!(outcome
-        .diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.code == "install.unsupported-package"));
+    let installed = outcome.value.expect("installed dependencies");
+    assert_eq!(
+        installed.files.get_bytes("node_modules/bad-pkg/binary.dat"),
+        Some(&[0xff, 0xfe, 0x00, 0x01][..])
+    );
+    assert!(outcome.diagnostics.is_empty());
 }
 
 #[test]

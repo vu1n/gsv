@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use assembler::artifact::finalize_artifact;
 use assembler::model::{
-    PackageAssemblyAnalysis, PackageAssemblyArtifactModuleKind, PackageAssemblyRequest,
-    PackageAssemblySource, PackageAssemblyTarget, PackageBackendDefinition,
+    PackageAssemblyAnalysis, PackageAssemblyArtifactModuleKind, PackageAssemblyPublicFileEncoding,
+    PackageAssemblyRequest, PackageAssemblySource, PackageAssemblyTarget, PackageBackendDefinition,
     PackageBrowserDefinition, PackageCapabilityDefinition, PackageCommandDefinition,
     PackageDefinition, PackageIdentity, PackageJsonDefinition, PackageMetaDefinition,
 };
@@ -163,6 +163,7 @@ export default definePackage({
         ]
         .into_iter()
         .collect(),
+        binary_files: BTreeMap::new(),
     }
 }
 
@@ -296,15 +297,21 @@ fn builds_runtime_artifact_with_wrapper_and_hash() {
             .map(|module| &module.kind),
         Some(&PackageAssemblyArtifactModuleKind::SourceModule)
     );
-    assert!(modules
+    assert!(!modules
         .keys()
         .any(|path| path.starts_with("__gsv_browser_assets__/")));
+    assert!(artifact
+        .public_files
+        .iter()
+        .any(|file| file.path == "gsv/packages/__GSV_ARTIFACT_HASH__/browser/src/main.js"));
 
     let wrapper = modules.get("__gsv__/main.ts").unwrap().content.as_str();
     let package_definition = modules.get("src/package.ts").unwrap().content.as_str();
     assert!(wrapper.contains("import definition from \"../src/package.ts\";"));
     assert!(wrapper.contains("class GsvPackageAppBackend extends RpcTarget"));
-    assert!(wrapper.contains("const BROWSER_ENTRY = \"__gsv_browser__/src/main.js\";"));
+    assert!(wrapper.contains(
+        "const BROWSER_ENTRY = \"/public/gsv/packages/__GSV_ARTIFACT_HASH__/browser/src/main.js\";"
+    ));
     assert!(wrapper.contains("const APP_SHELL_HTML = \"<!doctype html>"));
     assert!(!package_definition.contains("\"@gsv/package/manifest\""));
     assert!(package_definition.contains("\"../node_modules/@gsv/package/src/manifest.ts\""));
@@ -363,7 +370,9 @@ fn builds_runtime_artifact_for_declarative_backend_and_commands() {
     assert!(wrapper.contains("[\"sync\", __gsv_command_0],"));
     assert!(wrapper.contains("export class GsvCommandEntrypoint extends WorkerEntrypoint"));
     assert!(wrapper.contains("export class GsvAppSignalEntrypoint extends WorkerEntrypoint"));
-    assert!(wrapper.contains("function buildDaemonClient(env, props, daemonOverride, triggerOverride)"));
+    assert!(
+        wrapper.contains("function buildDaemonClient(env, props, daemonOverride, triggerOverride)")
+    );
     assert!(wrapper.contains("function buildStorageClient(env)"));
     assert!(wrapper.contains("function buildAppClient(env, props)"));
     assert!(wrapper.contains("typeof api.packageSqlExec !== \"function\""));
@@ -431,7 +440,9 @@ fn runtime_artifact_emits_icon_asset_module() {
         Some(&PackageAssemblyArtifactModuleKind::Text)
     );
     assert_eq!(
-        modules.get("ui/icon.svg").map(|module| module.content.as_str()),
+        modules
+            .get("ui/icon.svg")
+            .map(|module| module.content.as_str()),
         Some(r#"<svg viewBox="0 0 16 16"></svg>"#)
     );
 }
@@ -622,22 +633,145 @@ render(<App />, root);"#
         .map(|module| (module.path.as_str(), module))
         .collect::<BTreeMap<_, _>>();
     let wrapper = modules.get("__gsv__/main.ts").unwrap().content.as_str();
-    assert!(wrapper.contains("href=\\\"./src/styles.css\\\""));
-    assert!(wrapper.contains("src=\\\"./__gsv_browser__/src/main.js\\\""));
+    assert!(
+        wrapper.contains("href=\\\"/public/gsv/packages/__GSV_ARTIFACT_HASH__/src/styles.css\\\"")
+    );
+    assert!(wrapper
+        .contains("src=\\\"/public/gsv/packages/__GSV_ARTIFACT_HASH__/browser/src/main.js\\\""));
 
-    let browser_assets = modules
+    let browser_assets = artifact
+        .public_files
         .iter()
-        .filter(|(path, _)| path.starts_with("__gsv_browser_assets__/"))
-        .map(|(_, module)| module.content.as_str())
+        .filter(|file| file.path.ends_with(".js"))
+        .map(|file| file.content.as_str())
         .collect::<Vec<_>>();
-    assert!(browser_assets
-        .iter()
-        .any(|content| content.contains("./app/app.js")));
-    assert!(browser_assets
-        .iter()
-        .any(|content| content.contains("../node_modules/preact/dist/preact.module.js")));
     assert!(browser_assets.iter().any(|content| content
-        .contains("../../node_modules/preact/jsx-runtime/dist/jsxRuntime.module.js")));
+        .contains("/public/gsv/packages/__GSV_ARTIFACT_HASH__/browser/src/app/app.js")));
+    assert!(browser_assets
+        .iter()
+        .any(|content| content.contains("/public/lib/npm/preact/10.24.1/dist/preact.module.js")));
+    assert!(browser_assets.iter().any(|content| content
+        .contains("/public/lib/npm/preact/10.24.1/jsx-runtime/dist/jsxRuntime.module.js")));
+}
+
+#[test]
+fn runtime_artifact_emits_browser_wasm_public_files() {
+    let mut request = declarative_request();
+    request
+        .analysis
+        .package_json
+        .dependencies
+        .insert("wasm-lib".to_string(), "1.0.0".to_string());
+    request.files.insert(
+        "apps/demo/src/main.ts".to_string(),
+        r#"import { wasmUrl } from "wasm-lib";
+export default wasmUrl;"#
+            .to_string(),
+    );
+    request.analysis.definition.as_mut().unwrap().browser = Some(PackageBrowserDefinition {
+        entry: "./src/main.ts".to_string(),
+        assets: vec!["./src/styles.css".to_string()],
+    });
+    request.files.remove("apps/demo/src/main.tsx");
+
+    let tarball_url = "https://registry.example/wasm-lib/-/wasm-lib-1.0.0.tgz";
+    let client = MockNpmRegistryClient::default()
+        .with_package("wasm-lib", packument(&[("1.0.0", tarball_url)]))
+        .with_tarball(
+            tarball_url,
+            tarball(&[
+                (
+                    "package.json",
+                    br#"{
+  "name": "wasm-lib",
+  "version": "1.0.0",
+  "type": "module",
+  "exports": "./index.js"
+}"#,
+                ),
+                (
+                    "index.js",
+                    br#"export const wasmUrl = new URL("./module.wasm", import.meta.url);"#,
+                ),
+                ("module.wasm", &[0x00, 0x61, 0x73, 0x6d]),
+            ]),
+        );
+
+    let prepared = prepare_request(&request).value.expect("prepared");
+    let installed = install_registry_dependencies(&prepared, &client)
+        .value
+        .expect("installed");
+    let runtime = build_runtime_assembly(&request.analysis, &installed)
+        .value
+        .expect("runtime");
+    let artifact = finalize_artifact(&request.analysis, &runtime)
+        .value
+        .expect("artifact");
+
+    let wasm = artifact
+        .public_files
+        .iter()
+        .find(|file| file.path == "lib/npm/wasm-lib/1.0.0/module.wasm")
+        .expect("wasm public file");
+    assert_eq!(wasm.content_type, "application/wasm");
+    assert_eq!(wasm.encoding, PackageAssemblyPublicFileEncoding::Base64);
+    assert_eq!(wasm.content, "AGFzbQ==");
+
+    let wasm_lib_js = artifact
+        .public_files
+        .iter()
+        .find(|file| file.path == "lib/npm/wasm-lib/1.0.0/index.js")
+        .expect("wasm lib js");
+    assert!(wasm_lib_js
+        .content
+        .contains("new URL(\"/public/lib/npm/wasm-lib/1.0.0/module.wasm\", import.meta.url)"));
+}
+
+#[test]
+fn runtime_artifact_emits_package_local_binary_public_files() {
+    let mut request = declarative_request();
+    request.files.insert(
+        "apps/demo/src/main.ts".to_string(),
+        r#"export const wasmUrl = new URL("./module.wasm", import.meta.url);"#.to_string(),
+    );
+    request.binary_files.insert(
+        "apps/demo/src/module.wasm".to_string(),
+        "AGFzbQ==".to_string(),
+    );
+    request.analysis.definition.as_mut().unwrap().browser = Some(PackageBrowserDefinition {
+        entry: "./src/main.ts".to_string(),
+        assets: vec!["./src/styles.css".to_string()],
+    });
+    request.files.remove("apps/demo/src/main.tsx");
+
+    let prepared = prepare_request(&request).value.expect("prepared");
+    let installed = install_registry_dependencies(&prepared, &EmptyRegistry)
+        .value
+        .expect("installed");
+    let runtime = build_runtime_assembly(&request.analysis, &installed)
+        .value
+        .expect("runtime");
+    let artifact = finalize_artifact(&request.analysis, &runtime)
+        .value
+        .expect("artifact");
+
+    let wasm = artifact
+        .public_files
+        .iter()
+        .find(|file| file.path == "gsv/packages/__GSV_ARTIFACT_HASH__/browser/src/module.wasm")
+        .expect("local wasm public file");
+    assert_eq!(wasm.content_type, "application/wasm");
+    assert_eq!(wasm.encoding, PackageAssemblyPublicFileEncoding::Base64);
+    assert_eq!(wasm.content, "AGFzbQ==");
+
+    let main = artifact
+        .public_files
+        .iter()
+        .find(|file| file.path == "gsv/packages/__GSV_ARTIFACT_HASH__/browser/src/main.js")
+        .expect("main js");
+    assert!(main.content.contains(
+        "new URL(\"/public/gsv/packages/__GSV_ARTIFACT_HASH__/browser/src/module.wasm\", import.meta.url)"
+    ));
 }
 
 #[test]
@@ -675,22 +809,17 @@ worker.postMessage({ type: "ping" });
         .value
         .expect("artifact");
 
-    let modules = artifact
-        .modules
+    let browser_assets = artifact
+        .public_files
         .iter()
-        .map(|module| (module.path.as_str(), module))
-        .collect::<BTreeMap<_, _>>();
-
-    let browser_assets = modules
-        .iter()
-        .filter(|(path, _)| path.starts_with("__gsv_browser_assets__/"))
-        .map(|(_, module)| module.content.as_str())
+        .filter(|file| file.path.ends_with(".js"))
+        .map(|file| file.content.as_str())
         .collect::<Vec<_>>();
 
     assert!(browser_assets
         .iter()
-        .any(|content| content.contains("new URL(\\\"./worker.js\\\", import.meta.url)")));
+        .any(|content| content.contains("new URL(\"/public/gsv/packages/__GSV_ARTIFACT_HASH__/browser/src/worker.js\", import.meta.url)")));
     assert!(!browser_assets
         .iter()
-        .any(|content| content.contains("new URL(\\\"./worker.ts\\\", import.meta.url)")));
+        .any(|content| content.contains("new URL(\"./worker.ts\", import.meta.url)")));
 }

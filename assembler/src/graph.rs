@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
 use oxc_resolver::ModuleType;
 
 use crate::diagnostics::{has_errors, PackageAssemblyDiagnostic};
@@ -39,7 +40,11 @@ pub fn build_module_graph_for_entry(
     installed: &InstalledAssembly,
     entry_path: &str,
 ) -> StageOutcome<ModuleGraph> {
-    build_module_graph_for_entry_with_resolver(installed, entry_path, OxcResolver::new(installed.files.clone()))
+    build_module_graph_for_entry_with_resolver(
+        installed,
+        entry_path,
+        OxcResolver::new(installed.files.clone()),
+    )
 }
 
 pub fn build_module_graph_for_browser_entry(
@@ -73,18 +78,17 @@ fn build_module_graph_for_entry_with_resolver(
             continue;
         }
 
-        let Some(content) = installed.files.get(&path) else {
-            diagnostics.push(PackageAssemblyDiagnostic::error(
-                "internal.missing-file",
-                format!("Resolved module {path} is missing from the virtual file tree."),
-                path.clone(),
-            ));
-            continue;
-        };
-
         let kind = infer_module_kind(&path, entry.module_type);
         match kind {
             Some(PackageAssemblyArtifactModuleKind::SourceModule) => {
+                let Some(content) = installed.files.get(&path) else {
+                    diagnostics.push(PackageAssemblyDiagnostic::error(
+                        "internal.missing-file",
+                        format!("Resolved module {path} is missing from the virtual file tree."),
+                        path.clone(),
+                    ));
+                    continue;
+                };
                 match transform_module_source_with_oxc(&path, content) {
                     Ok(transformed) => {
                         emitted.insert(
@@ -103,16 +107,6 @@ fn build_module_graph_for_entry_with_resolver(
                                         resolved.module_type,
                                     );
                                     match resolved_kind {
-                                        Some(PackageAssemblyArtifactModuleKind::Data) => {
-                                            diagnostics.push(PackageAssemblyDiagnostic::error(
-                                                "emit.unsupported-module-kind",
-                                                format!(
-                                                    "Resolved module {} has unsupported binary module kind.",
-                                                    resolved.repo_path
-                                                ),
-                                                resolved.repo_path,
-                                            ));
-                                        }
                                         Some(_) => {
                                             queue.push_back(QueueEntry {
                                                 path: resolved.repo_path,
@@ -138,7 +132,33 @@ fn build_module_graph_for_entry_with_resolver(
                     Err(error) => diagnostics.push(error),
                 }
             }
+            Some(PackageAssemblyArtifactModuleKind::Data) => {
+                let Some(bytes) = installed.files.get_bytes(&path) else {
+                    diagnostics.push(PackageAssemblyDiagnostic::error(
+                        "internal.missing-file",
+                        format!("Resolved module {path} is missing from the virtual file tree."),
+                        path.clone(),
+                    ));
+                    continue;
+                };
+                emitted.insert(
+                    path.clone(),
+                    PackageAssemblyArtifactModule {
+                        path: path.clone(),
+                        kind: PackageAssemblyArtifactModuleKind::Data,
+                        content: BASE64_STANDARD.encode(bytes),
+                    },
+                );
+            }
             Some(kind) => {
+                let Some(content) = installed.files.get(&path) else {
+                    diagnostics.push(PackageAssemblyDiagnostic::error(
+                        "emit.unsupported-module-kind",
+                        format!("Module {path} is not UTF-8 text."),
+                        path.clone(),
+                    ));
+                    continue;
+                };
                 emitted.insert(
                     path.clone(),
                     PackageAssemblyArtifactModule {
@@ -190,6 +210,7 @@ fn infer_module_kind(
         "cts" | "cjs" => Some(PackageAssemblyArtifactModuleKind::Commonjs),
         "json" => Some(PackageAssemblyArtifactModuleKind::Json),
         "txt" | "md" | "css" | "html" | "svg" => Some(PackageAssemblyArtifactModuleKind::Text),
+        "wasm" => Some(PackageAssemblyArtifactModuleKind::Data),
         _ => None,
     }
 }

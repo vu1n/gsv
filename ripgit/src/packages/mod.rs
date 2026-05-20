@@ -46,6 +46,8 @@ pub struct PackageSnapshot {
     pub source: ResolvedPackageSource,
     pub package_root: String,
     pub files: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub binary_files: std::collections::BTreeMap<String, String>,
 }
 
 pub(crate) fn resolve_source(

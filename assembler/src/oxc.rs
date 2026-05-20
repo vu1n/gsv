@@ -100,8 +100,8 @@ impl OxcVirtualFileSystem {
             .to_repo_path(path)
             .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
         self.files
-            .get(&repo_path)
-            .map(|content| content.as_bytes().to_vec())
+            .get_bytes(&repo_path)
+            .map(|content| content.to_vec())
             .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))
     }
 
@@ -146,7 +146,12 @@ impl OxcResolver {
                 alias_fields: vec![vec!["browser".into()]],
                 condition_names: match mode {
                     ResolverMode::Generic => {
-                        vec!["browser".into(), "import".into(), "require".into(), "default".into()]
+                        vec![
+                            "browser".into(),
+                            "import".into(),
+                            "require".into(),
+                            "default".into(),
+                        ]
                     }
                     ResolverMode::Browser => {
                         vec!["browser".into(), "import".into(), "default".into()]
@@ -226,7 +231,8 @@ impl OxcResolver {
         let package_type = resolution
             .package_json()
             .and_then(|package_json| package_json.r#type());
-        let inferred_module_type = infer_module_type_from_path(&resolution.full_path(), package_type);
+        let inferred_module_type =
+            infer_module_type_from_path(&resolution.full_path(), package_type);
         Ok(ResolvedModule {
             repo_path,
             module_type: match (resolution.module_type(), inferred_module_type) {
@@ -473,7 +479,7 @@ fn transform_options_for_path(_path: &str) -> TransformOptions {
 
 fn collect_directories(files: &VirtualFileTree) -> BTreeSet<String> {
     let mut directories = BTreeSet::new();
-    for (path, _) in files.iter() {
+    for path in files.paths() {
         let mut current = dirname(path);
         while !current.is_empty() {
             directories.insert(current.clone());

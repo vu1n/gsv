@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
 use serde::Deserialize;
 
 use crate::diagnostics::{has_errors, PackageAssemblyDiagnostic};
@@ -242,7 +243,7 @@ pub fn validate_request(request: &PackageAssemblyRequest) -> StageOutcome<Valida
 
     for asset in browser_asset_specs(definition) {
         let resolved_asset = resolve_from_root(&request.analysis.package_root, asset);
-        if !request.files.contains_key(&resolved_asset) {
+        if !request_contains_file(request, &resolved_asset) {
             diagnostics.push(PackageAssemblyDiagnostic::error(
                 "contract.asset-missing",
                 "browser.assets references a file that is missing from the package snapshot.",
@@ -253,9 +254,15 @@ pub fn validate_request(request: &PackageAssemblyRequest) -> StageOutcome<Valida
         }
     }
 
-    if let Some(icon_path) = definition.meta.icon.as_deref().map(str::trim).filter(|path| !path.is_empty()) {
+    if let Some(icon_path) = definition
+        .meta
+        .icon
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+    {
         let resolved_icon = resolve_from_root(&request.analysis.package_root, icon_path);
-        if !request.files.contains_key(&resolved_icon) {
+        if !request_contains_file(request, &resolved_icon) {
             diagnostics.push(PackageAssemblyDiagnostic::error(
                 "contract.icon-missing",
                 "meta.icon references a file that is missing from the package snapshot.",
@@ -378,6 +385,16 @@ fn validate_module_entry(
 pub fn prepare_sources(validated: &ValidatedRequest) -> StageOutcome<PreparedSources> {
     let mut diagnostics = Vec::new();
     let mut files = VirtualFileTree::new(validated.request.files.clone());
+    for (path, content) in &validated.request.binary_files {
+        match BASE64_STANDARD.decode(content) {
+            Ok(bytes) => files.insert(path, bytes),
+            Err(error) => diagnostics.push(PackageAssemblyDiagnostic::error(
+                "snapshot.binary-file-invalid",
+                format!("Package snapshot binary file {path} is not valid base64: {error}"),
+                path.clone(),
+            )),
+        }
+    }
 
     inject_builtin_sdk_files(&mut files);
 
@@ -636,8 +653,8 @@ fn materialize_workspace_packages(
     workspace_packages: &BTreeMap<String, WorkspacePackage>,
     root_package_name: &str,
 ) {
-    let file_entries: Vec<(String, String)> = files
-        .iter()
+    let file_entries: Vec<(String, crate::virtual_fs::VirtualFileContent)> = files
+        .entries()
         .map(|(path, content)| (path.clone(), content.clone()))
         .collect();
 
@@ -661,6 +678,10 @@ fn materialize_workspace_packages(
             );
         }
     }
+}
+
+fn request_contains_file(request: &PackageAssemblyRequest, path: &str) -> bool {
+    request.files.contains_key(path) || request.binary_files.contains_key(path)
 }
 
 fn is_local_dependency_spec(
