@@ -768,7 +768,14 @@ export default init;"#
                 (
                     "dist/ghostty-web.js",
                     br#"export const wasmUrl = new URL("../ghostty-vt.wasm", import.meta.url);
-export async function init() { return fetch(wasmUrl); }"#,
+export async function init() {
+  await import("./__vite-browser-external-2447137e.js");
+  return fetch(wasmUrl);
+}"#,
+                ),
+                (
+                    "dist/__vite-browser-external-2447137e.js",
+                    br#"export default {};"#,
                 ),
                 ("ghostty-vt.wasm", &[0x00, 0x61, 0x73, 0x6d]),
             ]),
@@ -801,6 +808,13 @@ export async function init() { return fetch(wasmUrl); }"#,
     assert!(ghostty_js.content.contains(
         "new URL(\"/public/lib/npm/ghostty-web/0.4.0/ghostty-vt.wasm\",import.meta.url)"
     ));
+    assert!(ghostty_js.content.contains(
+        "import(\"/public/lib/npm/ghostty-web/0.4.0/dist/__vite-browser-external-2447137e.js\")"
+    ));
+
+    assert!(artifact.public_files.iter().any(|file| {
+        file.path == "lib/npm/ghostty-web/0.4.0/dist/__vite-browser-external-2447137e.js"
+    }));
 }
 
 #[test]

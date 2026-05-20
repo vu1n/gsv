@@ -338,6 +338,7 @@ pub fn collect_module_request_spans_with_oxc(
         })
         .collect::<Vec<_>>();
     spans.extend(collect_import_meta_url_request_spans(source_text));
+    spans.extend(collect_dynamic_import_request_spans(source_text));
     spans.sort_by_key(|span| (span.start, span.end));
     spans.dedup_by(|left, right| {
         left.start == right.start && left.end == right.end && left.specifier == right.specifier
@@ -537,6 +538,11 @@ fn collect_requested_modules(module_record: &ModuleRecord<'_>, source_text: &str
             .into_iter()
             .map(|span| span.specifier),
     );
+    requested.extend(
+        collect_dynamic_import_request_spans(source_text)
+            .into_iter()
+            .map(|span| span.specifier),
+    );
     requested.sort();
     requested.dedup();
     requested
@@ -585,6 +591,52 @@ fn collect_import_meta_url_request_spans(source: &str) -> Vec<ModuleRequestSpan>
         }
         suffix_index += IMPORT_META_URL.len();
         suffix_index = skip_ascii_whitespace(source, suffix_index);
+        if !source[suffix_index..].starts_with(')') {
+            search_from = literal_end + quote.len_utf8();
+            continue;
+        }
+
+        spans.push(ModuleRequestSpan {
+            specifier,
+            start: literal_start,
+            end: literal_end + quote.len_utf8(),
+        });
+        search_from = suffix_index + 1;
+    }
+
+    spans
+}
+
+fn collect_dynamic_import_request_spans(source: &str) -> Vec<ModuleRequestSpan> {
+    let mut spans = Vec::new();
+    let mut search_from = 0usize;
+    const PATTERN: &str = "import(";
+
+    while let Some(relative_match) = source[search_from..].find(PATTERN) {
+        let pattern_start = search_from + relative_match;
+        let mut index = pattern_start + PATTERN.len();
+        index = skip_ascii_whitespace(source, index);
+        let Some(quote) = source[index..].chars().next() else {
+            break;
+        };
+        if quote != '"' && quote != '\'' && quote != '`' {
+            search_from = index.saturating_add(1);
+            continue;
+        }
+
+        let literal_start = index;
+        index += quote.len_utf8();
+        let Some(literal_end) = find_quoted_literal_end(source, index, quote) else {
+            search_from = index;
+            continue;
+        };
+        let specifier = source[index..literal_end].to_string();
+        if quote == '`' && specifier.contains("${") {
+            search_from = literal_end + quote.len_utf8();
+            continue;
+        }
+
+        let suffix_index = skip_ascii_whitespace(source, literal_end + quote.len_utf8());
         if !source[suffix_index..].starts_with(')') {
             search_from = literal_end + quote.len_utf8();
             continue;
