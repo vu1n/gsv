@@ -11,12 +11,15 @@ import type {
   OpenFileOptions,
   OpenFileRange,
   OpenFileResult,
+  WriteFileStreamOptions,
+  WriteFileStreamResult,
 } from "../mount";
 import { inferContentType, isTextContentType, normalizePath } from "../utils";
 
 const READ_BIT = 4;
 const WRITE_BIT = 2;
 const MAX_SEARCH_MATCHES = 500;
+const DEFAULT_STREAM_WRITE_FALLBACK_LIMIT = 16 * 1024 * 1024;
 const TEXT_DECODER = new TextDecoder();
 
 export class R2MountBackend implements MountBackend {
@@ -106,6 +109,34 @@ export class R2MountBackend implements MountBackend {
         mode: existing?.customMetadata?.mode ?? "644",
       },
     });
+  }
+
+  async writeFileStream(
+    path: string,
+    content: ReadableStream<Uint8Array>,
+    options: WriteFileStreamOptions = {},
+  ): Promise<WriteFileStreamResult> {
+    const p = normalizePath(path);
+    const key = toKey(p);
+    const existing = await this.bucket.head(key);
+    if (existing) this.assertMode(existing, WRITE_BIT, p);
+
+    const value = options.expectedSize !== undefined
+      ? content.pipeThrough(new FixedLengthStream(options.expectedSize))
+      : await streamToBytes(content, options.maxFallbackBytes ?? DEFAULT_STREAM_WRITE_FALLBACK_LIMIT);
+    const result = await this.bucket.put(key, value, {
+      httpMetadata: toR2HttpMetadata(p, options),
+      customMetadata: {
+        uid: String(this.identity.uid),
+        gid: String(this.identity.gid),
+        mode: existing?.customMetadata?.mode ?? "644",
+      },
+    });
+
+    return {
+      size: result.size,
+      streamed: options.expectedSize !== undefined,
+    };
   }
 
   async appendFile(path: string, content: FileContent): Promise<void> {
@@ -499,6 +530,44 @@ function conditionalMissStatus(conditions: OpenFileOptions["conditions"] | undef
     return 304;
   }
   return 412;
+}
+
+function toR2HttpMetadata(path: string, options: WriteFileStreamOptions): R2HTTPMetadata {
+  return {
+    contentType: options.contentType ?? inferContentType(path),
+    cacheControl: options.cacheControl,
+    contentDisposition: options.contentDisposition,
+  };
+}
+
+async function streamToBytes(stream: ReadableStream<Uint8Array>, maxBytes: number): Promise<Uint8Array> {
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      size += value.byteLength;
+      if (size > maxBytes) {
+        throw new Error(`EFBIG: stream fallback exceeds ${maxBytes} bytes`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
 }
 
 function normalizeR2Range(range: R2Range, totalSize: number): OpenFileRange | undefined {

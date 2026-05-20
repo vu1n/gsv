@@ -30,6 +30,8 @@ import type {
   FsSearchBackendResult,
   OpenFileOptions,
   OpenFileResult,
+  WriteFileStreamOptions,
+  WriteFileStreamResult,
 } from "./mount";
 import { R2MountBackend } from "./backends/r2";
 import { KernelMountBackend } from "./backends/kernel";
@@ -39,6 +41,7 @@ import { isWorkspaceMountPath } from "./backends/workspace";
 import { normalizePath } from "./utils";
 
 const MAX_SYMLINK_DEPTH = 16;
+const DEFAULT_WRITE_STREAM_FALLBACK_LIMIT = 16 * 1024 * 1024;
 
 export type ExtendedStat = ExtendedMountStat;
 
@@ -116,6 +119,28 @@ export class GsvFs implements IFileSystem {
   async writeFile(path: string, content: FileContent, options?: { encoding?: BufferEncoding } | BufferEncoding): Promise<void> {
     const p = await this.resolveFinalPath(path, { allowMissingFinal: true });
     await this.backendForPath(p).writeFile(p, content, options);
+  }
+
+  async writeFileStream(
+    path: string,
+    content: ReadableStream<Uint8Array>,
+    options: WriteFileStreamOptions = {},
+  ): Promise<WriteFileStreamResult> {
+    const p = await this.resolveFinalPath(path, { allowMissingFinal: true });
+    const backend = this.backendForPath(p);
+    if (backend.writeFileStream) {
+      return backend.writeFileStream(p, content, options);
+    }
+
+    const bytes = await streamToBytes(
+      content,
+      options.maxFallbackBytes ?? DEFAULT_WRITE_STREAM_FALLBACK_LIMIT,
+    );
+    await backend.writeFile(p, bytes);
+    return {
+      size: bytes.byteLength,
+      streamed: false,
+    };
   }
 
   async appendFile(path: string, content: FileContent, options?: { encoding?: BufferEncoding } | BufferEncoding): Promise<void> {
@@ -464,6 +489,36 @@ function bytesToStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
       controller.close();
     },
   });
+}
+
+async function streamToBytes(stream: ReadableStream<Uint8Array>, maxBytes: number): Promise<Uint8Array> {
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      size += value.byteLength;
+      if (size > maxBytes) {
+        throw new Error(`EFBIG: stream fallback exceeds ${maxBytes} bytes`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
 }
 
 function evaluateOpenFileConditions(

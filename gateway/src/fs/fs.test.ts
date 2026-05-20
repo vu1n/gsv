@@ -48,6 +48,15 @@ function makeFs(identity: ProcessIdentity): GsvFs {
   return new GsvFs(env.STORAGE, identity);
 }
 
+function bytesToStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(bytes);
+      controller.close();
+    },
+  });
+}
+
 function makeConfigBackedFs(
   identity: ProcessIdentity,
   initialEntries: Record<string, string>,
@@ -298,6 +307,87 @@ describe("GsvFs write metadata", () => {
     expect(head?.customMetadata?.uid).toBe("1000");
     expect(head?.customMetadata?.gid).toBe("1000");
     expect(head?.customMetadata?.mode).toBe("644");
+  });
+
+  it("streams writes to R2 with supplied HTTP metadata", async () => {
+    const fs = makeFs(SAM);
+    const bytes = new TextEncoder().encode("streamed data");
+
+    const result = await fs.writeFileStream(`/${TEST_PREFIX}stream.txt`, bytesToStream(bytes), {
+      contentType: "text/plain; charset=utf-8",
+      cacheControl: "public, max-age=60",
+      expectedSize: bytes.byteLength,
+    });
+
+    const head = await env.STORAGE.head(`${TEST_PREFIX}stream.txt`);
+    expect(result).toEqual({ size: bytes.byteLength, streamed: true });
+    expect(head?.customMetadata?.uid).toBe("1000");
+    expect(head?.customMetadata?.gid).toBe("1000");
+    expect(head?.customMetadata?.mode).toBe("644");
+    expect(head?.httpMetadata?.contentType).toBe("text/plain; charset=utf-8");
+    expect(head?.httpMetadata?.cacheControl).toBe("public, max-age=60");
+    expect(await fs.readFile(`/${TEST_PREFIX}stream.txt`)).toBe("streamed data");
+  });
+
+  it("streams writes through symlink targets", async () => {
+    const fs = makeFs(SAM);
+    const bytes = new TextEncoder().encode("updated");
+    await fs.writeFile(`/${TEST_PREFIX}target.txt`, "original");
+    await fs.symlink(`/${TEST_PREFIX}target.txt`, `/${TEST_PREFIX}stream-link.txt`);
+
+    const result = await fs.writeFileStream(
+      `/${TEST_PREFIX}stream-link.txt`,
+      bytesToStream(bytes),
+      { expectedSize: bytes.byteLength },
+    );
+
+    expect(result.streamed).toBe(true);
+    expect(await fs.readFile(`/${TEST_PREFIX}target.txt`)).toBe("updated");
+  });
+
+  it("falls back to bounded buffering for unknown-length R2 streams", async () => {
+    const fs = makeFs(SAM);
+
+    const result = await fs.writeFileStream(
+      `/${TEST_PREFIX}unknown-length.txt`,
+      bytesToStream(new TextEncoder().encode("buffered")),
+    );
+
+    expect(result).toEqual({ size: 8, streamed: false });
+    expect(await fs.readFile(`/${TEST_PREFIX}unknown-length.txt`)).toBe("buffered");
+  });
+
+  it("falls back to bounded buffering for non-streaming backends", async () => {
+    const fs = new GsvFs(env.STORAGE, SAM, {
+      procs: null as never,
+      devices: null as never,
+      caps: null as never,
+      config: null as never,
+      workspaces: null as never,
+    });
+
+    const result = await fs.writeFileStream(
+      "/dev/null",
+      bytesToStream(new TextEncoder().encode("discarded")),
+    );
+
+    expect(result).toEqual({ size: 9, streamed: false });
+  });
+
+  it("rejects oversized fallback buffering for non-streaming backends", async () => {
+    const fs = new GsvFs(env.STORAGE, SAM, {
+      procs: null as never,
+      devices: null as never,
+      caps: null as never,
+      config: null as never,
+      workspaces: null as never,
+    });
+
+    await expect(fs.writeFileStream(
+      "/dev/null",
+      bytesToStream(new TextEncoder().encode("too large")),
+      { maxFallbackBytes: 3 },
+    )).rejects.toThrow("EFBIG");
   });
 });
 

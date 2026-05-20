@@ -51,12 +51,30 @@ export type OpenFileResult = {
   writeHttpMetadata?: (headers: Headers) => void;
 };
 
+export type WriteFileStreamOptions = {
+  contentType?: string;
+  cacheControl?: string;
+  contentDisposition?: string;
+  expectedSize?: number;
+  maxFallbackBytes?: number;
+};
+
+export type WriteFileStreamResult = {
+  size: number;
+  streamed: boolean;
+};
+
 export interface MountBackend {
   handles(path: string): boolean;
   readFile(path: string, options?: { encoding?: BufferEncoding | null } | BufferEncoding): Promise<string>;
   readFileBuffer(path: string): Promise<Uint8Array>;
   openFile?(path: string, options?: OpenFileOptions): Promise<OpenFileResult>;
   writeFile(path: string, content: FileContent, options?: { encoding?: BufferEncoding } | BufferEncoding): Promise<void>;
+  writeFileStream?(
+    path: string,
+    content: ReadableStream<Uint8Array>,
+    options?: WriteFileStreamOptions,
+  ): Promise<WriteFileStreamResult>;
   appendFile(path: string, content: FileContent, options?: { encoding?: BufferEncoding } | BufferEncoding): Promise<void>;
   exists(path: string): Promise<boolean>;
   stat(path: string): Promise<ExtendedMountStat>;
