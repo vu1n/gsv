@@ -114,6 +114,8 @@ const INTERIM_SPEECH_MAX_CHARS = 220;
 const INTERIM_SPEECH_COOLDOWN_MS = 7000;
 const RUN_SIGNAL_BUFFER_TTL_MS = 60 * 1000;
 const MAX_BUFFERED_RUN_SIGNALS = 64;
+const PRESENCE_MODE_STORAGE_KEY = "gsv.presence.mode";
+const SPEAK_REPLIES_STORAGE_KEY = "gsv.presence.speakReplies";
 const PRESENCE_RECORDER_MIME_TYPES = [
   "audio/webm;codecs=opus",
   "audio/ogg;codecs=opus",
@@ -154,7 +156,7 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
   const statusTextNode = statusNode;
   const transcriptInputNode = transcriptNode;
 
-  let mode: PresenceMode = canUseAmbientMode() ? "ambient" : "push";
+  let mode: PresenceMode = loadPresenceModePreference();
   let state: PresenceState = canUseBrowserVoiceRecorder() ? "idle" : "unsupported";
   let note = "";
   let panelOpen = false;
@@ -162,7 +164,7 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
   let lastSentText = "";
   let latestRunId: string | null = null;
   let activityHideTimer: number | null = null;
-  let speakReplies = true;
+  let speakReplies = loadSpeakRepliesPreference();
   let speechAttempt = 0;
   let speechAudio: HTMLAudioElement | null = null;
   let speechPlaybackCancel: (() => void) | null = null;
@@ -216,6 +218,7 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
       stopAmbient();
     }
     mode = nextMode;
+    savePresenceModePreference(mode);
     note = mode === "ambient" ? "Mind is ready" : "";
     transcriptInputNode.placeholder = mode === "ambient" ? "Ambient is on. Type here when you want to send manually." : "Type to Mind";
     setState(canUseBrowserVoiceRecorder() ? "idle" : "unsupported");
@@ -1379,6 +1382,7 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
   };
   const onSpeakToggle = () => {
     speakReplies = speakNode?.checked === true;
+    saveSpeakRepliesPreference(speakReplies);
     if (!speakReplies) {
       cancelSpeechOutput("Speech off");
     } else {
@@ -1423,7 +1427,11 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
 
   note = mode === "ambient" ? "Mind is ready" : "";
   setState(state);
-  setSpeechStatus(localSpeechSupported() ? "Speak replies on" : "Local speech unavailable; using gateway voice");
+  setSpeechStatus(
+    speakReplies
+      ? localSpeechSupported() ? "Speak replies on" : "Local speech unavailable; using gateway voice"
+      : "Speech off",
+  );
 
   return {
     destroy() {
@@ -1438,6 +1446,46 @@ export function createPresenceControl(options: PresenceOptions): { destroy(): vo
       }
     },
   };
+}
+
+function loadPresenceModePreference(): PresenceMode {
+  try {
+    const mode = normalizePresenceMode(window.localStorage.getItem(PRESENCE_MODE_STORAGE_KEY));
+    if (mode === "ambient" && !canUseAmbientMode()) {
+      return "push";
+    }
+    return mode ?? defaultPresenceMode();
+  } catch {
+    return defaultPresenceMode();
+  }
+}
+
+function savePresenceModePreference(mode: PresenceMode): void {
+  try {
+    window.localStorage.setItem(PRESENCE_MODE_STORAGE_KEY, mode);
+  } catch {
+    // Ignore unavailable storage; the in-memory state still applies for this session.
+  }
+}
+
+function defaultPresenceMode(): PresenceMode {
+  return canUseAmbientMode() ? "ambient" : "push";
+}
+
+function loadSpeakRepliesPreference(): boolean {
+  try {
+    return window.localStorage.getItem(SPEAK_REPLIES_STORAGE_KEY) !== "false";
+  } catch {
+    return true;
+  }
+}
+
+function saveSpeakRepliesPreference(enabled: boolean): void {
+  try {
+    window.localStorage.setItem(SPEAK_REPLIES_STORAGE_KEY, enabled ? "true" : "false");
+  } catch {
+    // Ignore unavailable storage; the in-memory state still applies for this session.
+  }
 }
 
 function canUseBrowserVoiceRecorder(): boolean {
