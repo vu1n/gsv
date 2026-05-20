@@ -3,6 +3,7 @@
   "version": "0.1.6",
   "type": "module",
   "dependencies": {
-    "@gsv/package": "file:../../shared/package"
+    "@gsv/package": "file:../../shared/package",
+    "ghostty-web": "^0.4.0"
   }
 }

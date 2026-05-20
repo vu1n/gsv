@@ -728,6 +728,82 @@ export default wasmUrl;"#
 }
 
 #[test]
+fn runtime_artifact_emits_registry_browser_wasm_dependency_files() {
+    let mut request = declarative_request();
+    request
+        .analysis
+        .package_json
+        .dependencies
+        .insert("ghostty-web".to_string(), "0.4.0".to_string());
+    request.files.insert(
+        "apps/demo/src/main.ts".to_string(),
+        r#"import { init } from "ghostty-web";
+export default init;"#
+            .to_string(),
+    );
+    request.analysis.definition.as_mut().unwrap().browser = Some(PackageBrowserDefinition {
+        entry: "./src/main.ts".to_string(),
+        assets: vec!["./src/styles.css".to_string()],
+    });
+    request.files.remove("apps/demo/src/main.tsx");
+
+    let tarball_url = "https://registry.example/ghostty-web/-/ghostty-web-0.4.0.tgz";
+    let client = MockNpmRegistryClient::default()
+        .with_package("ghostty-web", packument(&[("0.4.0", tarball_url)]))
+        .with_tarball(
+            tarball_url,
+            tarball(&[
+                (
+                    "package.json",
+                    br#"{
+  "name": "ghostty-web",
+  "version": "0.4.0",
+  "type": "module",
+  "exports": {
+    ".": { "import": "./dist/ghostty-web.js" },
+    "./ghostty-vt.wasm": "./ghostty-vt.wasm"
+  }
+}"#,
+                ),
+                (
+                    "dist/ghostty-web.js",
+                    br#"export const wasmUrl = new URL("../ghostty-vt.wasm", import.meta.url);
+export async function init() { return fetch(wasmUrl); }"#,
+                ),
+                ("ghostty-vt.wasm", &[0x00, 0x61, 0x73, 0x6d]),
+            ]),
+        );
+
+    let prepared = prepare_request(&request).value.expect("prepared");
+    let installed = install_registry_dependencies(&prepared, &client)
+        .value
+        .expect("installed");
+    let runtime = build_runtime_assembly(&request.analysis, &installed)
+        .value
+        .expect("runtime");
+    let artifact = finalize_artifact(&request.analysis, &runtime)
+        .value
+        .expect("artifact");
+
+    let wasm = artifact
+        .public_files
+        .iter()
+        .find(|file| file.path == "lib/npm/ghostty-web/0.4.0/ghostty-vt.wasm")
+        .expect("ghostty wasm public file");
+    assert_eq!(wasm.content_type, "application/wasm");
+    assert_eq!(wasm.encoding, PackageAssemblyPublicFileEncoding::Base64);
+
+    let ghostty_js = artifact
+        .public_files
+        .iter()
+        .find(|file| file.path == "lib/npm/ghostty-web/0.4.0/dist/ghostty-web.js")
+        .expect("ghostty js public file");
+    assert!(ghostty_js.content.contains(
+        "new URL(\"/public/lib/npm/ghostty-web/0.4.0/ghostty-vt.wasm\",import.meta.url)"
+    ));
+}
+
+#[test]
 fn runtime_artifact_emits_package_local_binary_public_files() {
     let mut request = declarative_request();
     request.files.insert(
