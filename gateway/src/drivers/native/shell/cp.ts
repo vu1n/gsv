@@ -1,7 +1,7 @@
 import { defineCommand, type CommandContext, type ExecResult } from "just-bash";
 import type { KernelContext } from "../../../kernel/context";
-import { hasCapability } from "../../../kernel/capabilities";
 import { handleFsCopy, type FsCopyDeviceTransport } from "../fs";
+import { requireCommandCapability } from "./common";
 
 type ShellCopyEndpoint = {
   target: string;
@@ -41,8 +41,8 @@ export function buildCpCommand(
       };
     }
 
-    requireShellCapability(kernelCtx, "fs.read");
-    requireShellCapability(kernelCtx, "fs.write");
+    requireCommandCapability(kernelCtx, "fs.read");
+    requireCommandCapability(kernelCtx, "fs.write");
 
     const source = parseShellCopyEndpoint(operands[0], ctx);
     const destination = parseShellCopyEndpoint(operands[1], ctx);
@@ -84,11 +84,4 @@ function parseShellCopyEndpoint(
     target: "gsv",
     path: ctx.fs.resolvePath(ctx.cwd, spec),
   };
-}
-
-function requireShellCapability(ctx: KernelContext, capability: string): void {
-  const capabilities = ctx.identity?.capabilities ?? [];
-  if (!hasCapability(capabilities, capability)) {
-    throw new Error(`Permission denied: ${capability}`);
-  }
 }
