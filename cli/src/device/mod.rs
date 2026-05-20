@@ -12,7 +12,7 @@ use gsv::logger::{self, NodeLogger};
 use gsv::protocol::{
     ErrorShape, Frame, NodeExecEventParams, RequestFrame, ResponseFrame, SignalFrame,
 };
-use gsv::tools::{all_tools_with_workspace, subscribe_exec_events, Tool};
+use gsv::tools::{all_tools_with_workspace_for_device, subscribe_exec_events, Tool};
 use serde_json::json;
 
 use crate::cli::DeviceServiceAction;
@@ -352,6 +352,7 @@ fn syscall_to_tool_name(call: &str) -> Option<&'static str> {
         "fs.read" => Some("Read"),
         "fs.write" => Some("Write"),
         "fs.edit" => Some("Edit"),
+        "fs.copy" => Some("Copy"),
         "fs.search" => Some("Search"),
         "fs.delete" => Some("Delete"),
         "shell.exec" => Some("Shell"),
@@ -577,8 +578,9 @@ pub(crate) async fn run_node(
     loop {
         logger.info("connect.attempt", json!({ "url": url }));
 
-        let tools_for_handler: Arc<Vec<Box<dyn Tool>>> =
-            Arc::new(all_tools_with_workspace(workspace.clone()));
+        let tools_for_handler: Arc<Vec<Box<dyn Tool>>> = Arc::new(
+            all_tools_with_workspace_for_device(workspace.clone(), node_id.clone()),
+        );
 
         let conn = match tokio::time::timeout(
             CONNECT_TIMEOUT,

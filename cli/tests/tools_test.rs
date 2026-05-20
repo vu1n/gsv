@@ -449,8 +449,8 @@ fn test_all_tools_with_workspace() {
     let workspace = std::env::temp_dir();
     let tools = all_tools_with_workspace(workspace);
 
-    // Should have 6 tools: Shell, Read, Write, Delete, Edit, Search
-    assert_eq!(tools.len(), 6);
+    // Should have 7 tools: Shell, Read, Write, Delete, Edit, Copy, Search
+    assert_eq!(tools.len(), 7);
 
     let names: Vec<_> = tools.iter().map(|t| t.definition().name).collect();
     assert!(names.contains(&"Shell".to_string()));
@@ -458,6 +458,7 @@ fn test_all_tools_with_workspace() {
     assert!(names.contains(&"Write".to_string()));
     assert!(names.contains(&"Delete".to_string()));
     assert!(names.contains(&"Edit".to_string()));
+    assert!(names.contains(&"Copy".to_string()));
     assert!(names.contains(&"Search".to_string()));
 }
 
