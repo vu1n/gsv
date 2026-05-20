@@ -21,6 +21,7 @@ import type { CapabilityStore } from "./capabilities";
 import { isValidCapability } from "./capabilities";
 import type { KernelContext } from "./context";
 import { ensureHomeStorageLayout } from "./home-knowledge";
+import { ensurePublicAssetStorageLayout } from "../public-assets";
 
 export type ConnectOutcome =
   | { ok: true; identity: ConnectionIdentity; result: ConnectResult }
@@ -38,6 +39,7 @@ export function setupRequiredDetails(): { setupMode: true; next: "sys.setup" } {
 export async function ensureKernelBootstrapped(ctx: KernelContext): Promise<void> {
   await ctx.auth.bootstrap();
   ctx.caps.seed();
+  await ensurePublicAssetStorageLayout(ctx.env);
   await ensureHomeStorageLayout(ctx.env, {
     uid: 0,
     gid: 0,

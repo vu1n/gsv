@@ -65,10 +65,14 @@ export function inferContentType(path: string): string {
     md: "text/markdown", json: "application/json", yaml: "application/yaml",
     yml: "application/yaml", xml: "application/xml", toml: "application/toml",
     js: "application/javascript", ts: "application/typescript",
+    cjs: "application/javascript", mjs: "application/javascript",
     html: "text/html", css: "text/css", txt: "text/plain", csv: "text/csv",
     sh: "text/x-shellscript", py: "text/x-python",
     png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
     gif: "image/gif", webp: "image/webp", svg: "image/svg+xml",
+    wasm: "application/wasm", onnx: "application/octet-stream",
+    data: "application/octet-stream", map: "application/json",
+    mp3: "audio/mpeg", wav: "audio/wav", ogg: "audio/ogg",
   };
   return (ext && map[ext]) || "text/plain";
 }

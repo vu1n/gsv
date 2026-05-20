@@ -19,6 +19,11 @@ import {
   loadDefaultCliChannel,
 } from "./downloads/cli";
 import { buildOAuthClientMetadata } from "./oauth-http";
+import {
+  createPublicAssetFileSystem,
+  matchPublicAssetPath,
+  servePublicAssetRequest,
+} from "./public-assets";
 
 export { Kernel } from "./kernel/do";
 export { Process } from "./process/do";
@@ -75,6 +80,11 @@ export default {
           "access-control-allow-origin": "*",
         },
       });
+    }
+
+    const publicAssetMatch = matchPublicAssetPath(url.pathname);
+    if (publicAssetMatch) {
+      return servePublicAssetRequest(request, createPublicAssetFileSystem(env), publicAssetMatch);
     }
 
     const gitMatch = matchGitPath(url);

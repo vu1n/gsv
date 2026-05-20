@@ -24,7 +24,13 @@ import type {
 } from "just-bash";
 import type { ProcessIdentity } from "@gsv/protocol/syscalls/system";
 import type { KernelRefs } from "./refs";
-import type { MountBackend, ExtendedMountStat, FsSearchBackendResult } from "./mount";
+import type {
+  MountBackend,
+  ExtendedMountStat,
+  FsSearchBackendResult,
+  OpenFileOptions,
+  OpenFileResult,
+} from "./mount";
 import { R2MountBackend } from "./backends/r2";
 import { KernelMountBackend } from "./backends/kernel";
 import { isPackageMountPath } from "./backends/packages";
@@ -74,6 +80,37 @@ export class GsvFs implements IFileSystem {
   async readFileBuffer(path: string): Promise<Uint8Array> {
     const p = await this.resolveFinalPath(path);
     return this.backendForPath(p).readFileBuffer(p);
+  }
+
+  async openFile(path: string, options?: OpenFileOptions): Promise<OpenFileResult> {
+    const p = await this.resolveFinalPath(path);
+    const backend = this.backendForPath(p);
+    if (backend.openFile) {
+      return backend.openFile(p, options);
+    }
+    const stat = await backend.stat(p);
+    if (!stat.isFile) {
+      throw new Error(`EISDIR: illegal operation on a directory, open '${p}'`);
+    }
+    const etag = weakStatEtag(stat);
+    const conditionalStatus = evaluateOpenFileConditions(stat, etag, options?.conditions);
+    if (conditionalStatus) {
+      return {
+        size: stat.size,
+        totalSize: stat.size,
+        mtime: stat.mtime,
+        status: conditionalStatus,
+        etag,
+      };
+    }
+    return {
+      body: bytesToStream(await backend.readFileBuffer(p)),
+      size: stat.size,
+      totalSize: stat.size,
+      mtime: stat.mtime,
+      status: 200,
+      etag,
+    };
   }
 
   async writeFile(path: string, content: FileContent, options?: { encoding?: BufferEncoding } | BufferEncoding): Promise<void> {
@@ -418,4 +455,42 @@ export class GsvFs implements IFileSystem {
     entries.add("group");
     return [...entries].sort();
   }
+}
+
+function bytesToStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(bytes);
+      controller.close();
+    },
+  });
+}
+
+function evaluateOpenFileConditions(
+  stat: { size: number; mtime: Date },
+  etag: string,
+  conditions: OpenFileOptions["conditions"] | undefined,
+): 304 | 412 | null {
+  if (!conditions) {
+    return null;
+  }
+
+  if (conditions.etagMatches && conditions.etagMatches !== "*" && conditions.etagMatches !== etag) {
+    return 412;
+  }
+  if (conditions.etagDoesNotMatch && (conditions.etagDoesNotMatch === "*" || conditions.etagDoesNotMatch === etag)) {
+    return 304;
+  }
+  if (conditions.mtimeBefore && stat.mtime.getTime() > conditions.mtimeBefore.getTime()) {
+    return 412;
+  }
+  if (conditions.mtimeAfter && stat.mtime.getTime() <= conditions.mtimeAfter.getTime()) {
+    return 304;
+  }
+
+  return null;
+}
+
+function weakStatEtag(stat: { size: number; mtime: Date }): string {
+  return `W/"${stat.size.toString(16)}-${stat.mtime.getTime().toString(16)}"`;
 }
