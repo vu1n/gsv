@@ -21,3 +21,12 @@ function byteViewToBinaryString(bytes: Uint8Array): string {
 export function encodeBase64Bytes(value: ArrayBuffer | ArrayBufferView): string {
   return btoa(byteViewToBinaryString(toByteView(value)));
 }
+
+export function decodeBase64Bytes(value: string): Uint8Array {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}

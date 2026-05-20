@@ -240,6 +240,88 @@ describe("fs copy", () => {
     expect(result.stderr).toBe("");
     expect(await (await env.STORAGE.get(destinationKey))?.text()).toBe("shell copied");
   });
+
+  it("streams gsv files to a device target", async () => {
+    const sourceKey = "home/sam/copy-test/device-source.txt";
+    await env.STORAGE.delete(sourceKey);
+    await env.STORAGE.put(sourceKey, "to device", {
+      httpMetadata: { contentType: "text/plain; charset=utf-8" },
+      customMetadata: { uid: "1000", gid: "1000", mode: "644" },
+    });
+    const ctx = makeContext() as KernelContext;
+    ctx.devices = {
+      canAccess: vi.fn(() => true),
+      canHandle: vi.fn(() => true),
+    } as never;
+    const writes: Array<{ offset: number; data: string; done?: boolean }> = [];
+
+    const result = await handleFsCopy({
+      source: { target: "gsv", path: "/home/sam/copy-test/device-source.txt" },
+      destination: { target: "rearden", path: "/tmp/device-destination.txt" },
+    }, ctx, {
+      async requestDevice(deviceId, call, args) {
+        expect(deviceId).toBe("rearden");
+        if (call === "fs.transfer.stat") {
+          return { ok: false, error: "not found" };
+        }
+        expect(call).toBe("fs.transfer.write");
+        writes.push(args as { offset: number; data: string; done?: boolean });
+        return { ok: true, path: "/tmp/device-destination.txt", offset: 0, bytesWritten: 0, done: Boolean((args as { done?: boolean }).done) };
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      size: "to device".length,
+      destination: { target: "rearden", path: "/tmp/device-destination.txt" },
+    });
+    const payload = writes
+      .filter((write) => !write.done)
+      .map((write) => atob(write.data))
+      .join("");
+    expect(payload).toBe("to device");
+    expect(writes.at(-1)?.done).toBe(true);
+  });
+
+  it("streams device files to gsv", async () => {
+    const destinationKey = "home/sam/copy-test/from-device.txt";
+    await env.STORAGE.delete(destinationKey);
+    const ctx = makeContext() as KernelContext;
+    ctx.devices = {
+      canAccess: vi.fn(() => true),
+      canHandle: vi.fn(() => true),
+    } as never;
+
+    const result = await handleFsCopy({
+      source: { target: "rearden", path: "/tmp/source.txt" },
+      destination: { target: "gsv", path: "/home/sam/copy-test/from-device.txt" },
+    }, ctx, {
+      async requestDevice(deviceId, call, args) {
+        expect(deviceId).toBe("rearden");
+        if (call === "fs.transfer.stat") {
+          return { ok: true, path: "/tmp/source.txt", size: 11, isFile: true, isDirectory: false, contentType: "text/plain" };
+        }
+        expect(call).toBe("fs.transfer.read");
+        const offset = (args as { offset: number }).offset;
+        const text = "hello world".slice(offset);
+        return {
+          ok: true,
+          path: "/tmp/source.txt",
+          offset,
+          bytesRead: text.length,
+          data: btoa(text),
+          eof: true,
+        };
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      size: 11,
+      source: { target: "rearden", path: "/tmp/source.txt" },
+    });
+    expect(await (await env.STORAGE.get(destinationKey))?.text()).toBe("hello world");
+  });
 });
 
 describe("pkg shell command", () => {

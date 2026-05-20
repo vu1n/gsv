@@ -117,6 +117,7 @@ export type DispatchDeps = {
   shellSessions: ShellSessionStore;
   connections: Map<string, Connection>;
   scheduleExpiry: (id: string, ttlMs: number) => Promise<string>;
+  requestDevice: (deviceId: string, call: string, args: unknown, ttlMs?: number) => Promise<unknown>;
 };
 
 export type DispatchResult =
@@ -189,7 +190,7 @@ export async function dispatch(
     delete raw.target;
   }
 
-  const result = await dispatchNative(frame, ctx);
+  const result = await dispatchNative(frame, ctx, deps);
   return {
     handled: true,
     response: result,
@@ -199,6 +200,7 @@ export async function dispatch(
 async function dispatchNative(
   frame: RequestFrame,
   ctx: KernelContext,
+  deps: DispatchDeps,
 ): Promise<ResponseFrame> {
   const frameId = frame.id;
 
@@ -222,11 +224,11 @@ async function dispatchNative(
         data = await handleFsSearch(frame.args, ctx);
         break;
       case "fs.copy":
-        data = await handleFsCopy(frame.args, ctx);
+        data = await handleFsCopy(frame.args, ctx, { requestDevice: deps.requestDevice });
         break;
 
       case "shell.exec":
-        data = await handleShellExec(frame.args, ctx);
+        data = await handleShellExec(frame.args, ctx, { fsCopyTransport: { requestDevice: deps.requestDevice } });
         break;
 
       case "codemode.run":

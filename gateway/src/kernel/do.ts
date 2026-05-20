@@ -15,6 +15,7 @@ import type {
   SysSetupResult,
 } from "@gsv/protocol/syscalls/system";
 import type { ProcHilRequest } from "../syscalls/proc";
+import type { SyscallName } from "../syscalls";
 import type { PkgPublicListResult } from "@gsv/protocol/syscalls/packages";
 import type {
   AdapterOutboundMessage,
@@ -1227,7 +1228,70 @@ export class Kernel extends Host<Env> {
         );
         return sched.id;
       },
+      requestDevice: this.requestDevice.bind(this),
     };
+  }
+
+  private async requestDevice(
+    deviceId: string,
+    call: string,
+    args: unknown,
+    ttlMs = 60_000,
+  ): Promise<unknown> {
+    const device = this.devices.get(deviceId);
+    if (!device || !device.online) {
+      throw new Error(`Device offline: ${deviceId}`);
+    }
+    if (!this.devices.canHandle(deviceId, call)) {
+      throw new Error(`Device ${deviceId} does not implement ${call}`);
+    }
+
+    const deviceConn = this.findDeviceConnection(deviceId);
+    if (!deviceConn) {
+      throw new Error(`No active connection for device: ${deviceId}`);
+    }
+
+    const id = crypto.randomUUID();
+    const pending = this.createPendingAppResponse(id);
+    const sched = await this.schedule(
+      ttlMs / 1000,
+      "onRouteExpired",
+      id,
+    );
+
+    this.routes.register(
+      id,
+      call as SyscallName,
+      { type: "app", id },
+      deviceId,
+      { ttlMs, scheduleId: sched.id },
+    );
+
+    try {
+      deviceConn.send(JSON.stringify({
+        type: "req",
+        id,
+        call,
+        args,
+      }));
+      const frame = await pending.promise;
+      if (!frame.ok) {
+        throw new Error(frame.error.message);
+      }
+      return frame.data ?? {};
+    } finally {
+      pending.cleanup();
+    }
+  }
+
+  private findDeviceConnection(deviceId: string): Connection<ConnectionState> | null {
+    for (const [, conn] of this.connections) {
+      const state = conn.state;
+      if (state?.identity?.role === "driver" && state.identity.device === deviceId) {
+        return conn;
+      }
+    }
+    return null;
   }
 
   private async scheduleIpcCallTimeout(callId: string, delayMs: number): Promise<string> {

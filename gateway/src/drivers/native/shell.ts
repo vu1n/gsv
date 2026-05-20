@@ -113,10 +113,16 @@ import type { CodeModeRunResult } from "../../syscalls/codemode";
 import type { ProcSpawnArgs, ProcWorkspaceSpec } from "../../syscalls/proc";
 import type { SchedulerAddArgs, ScheduleExpression, ScheduleTarget } from "../../syscalls/scheduler";
 import type { AiContextProfile } from "../../syscalls/ai";
+import type { FsCopyDeviceTransport } from "./fs";
+
+export type NativeShellOptions = {
+  fsCopyTransport?: FsCopyDeviceTransport;
+};
 
 export async function handleShellExec(
   args: ShellExecArgs,
   ctx: KernelContext,
+  options?: NativeShellOptions,
 ): Promise<ShellExecResult> {
   const identity = ctx.identity!.process;
   if (args.sessionId) {
@@ -136,7 +142,7 @@ export async function handleShellExec(
   const cwd = args.cwd
     ? resolveUserPath(args.cwd, identity.home, identity.cwd)
     : identity.cwd;
-  const bash = createBash(ctx, identity, cwd);
+  const bash = createBash(ctx, identity, cwd, options);
 
   const timeoutMs = parseInt(
     ctx.config.get("config/shell/timeout_ms") ?? "30000",
@@ -199,7 +205,7 @@ export async function handleShellExec(
   }
 }
 
-function createBash(ctx: KernelContext, identity: ProcessIdentity, cwd: string): Bash {
+function createBash(ctx: KernelContext, identity: ProcessIdentity, cwd: string, options?: NativeShellOptions): Bash {
   const sourceBackend = createProcessSourceBackend({
     identity,
     storage: ctx.env.STORAGE,
@@ -267,7 +273,7 @@ function createBash(ctx: KernelContext, identity: ProcessIdentity, cwd: string):
       maxLoopIterations: 10_000,
       maxOutputSize: maxOutput,
     },
-    customCommands: buildCustomCommands(fs, identity, ctx),
+    customCommands: buildCustomCommands(fs, identity, ctx, options),
   });
 }
 
@@ -1522,6 +1528,7 @@ function buildCustomCommands(
   fs: GsvFs,
   identity: ProcessIdentity,
   ctx: KernelContext,
+  options?: NativeShellOptions,
 ) {
   const whoami = defineCommand("whoami", async (): Promise<ExecResult> => ({
     stdout: identity.username + "\n",
@@ -1641,7 +1648,7 @@ function buildCustomCommands(
 
   const ls = buildLsCommand(fs, identity, ctx);
   const stat = buildStatCommand(fs, identity, ctx);
-  const cp = buildCpCommand(fs, ctx);
+  const cp = buildCpCommand(ctx, options?.fsCopyTransport);
   const codemode = buildCodeModeCommand(fs, identity, ctx);
   const mcp = buildMcpCommand(ctx);
   const pkg = buildPkgCommand(ctx);

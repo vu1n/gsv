@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::future::Future;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use gsv::config::CliConfig;
@@ -16,6 +16,8 @@ use gsv::tools::{all_tools_with_workspace_for_device, subscribe_exec_events, Too
 use serde_json::json;
 
 use crate::cli::DeviceServiceAction;
+
+mod transfer;
 
 const MAX_NODE_EXEC_EVENT_OUTBOX: usize = 2048;
 
@@ -363,13 +365,18 @@ fn syscall_to_tool_name(call: &str) -> Option<&'static str> {
 async fn handle_driver_request(
     conn: &Arc<Connection>,
     tools: &[Box<dyn Tool>],
+    workspace: &Path,
     req: &RequestFrame,
     logger: &NodeLogger,
 ) {
     let args = req.args.clone().unwrap_or(serde_json::Value::Null);
 
     let call = req.call.as_str();
-    let result = if let Some(tool_name) = syscall_to_tool_name(call) {
+    let result = if let Some(transfer_result) =
+        transfer::handle_transfer_syscall(call, args.clone(), workspace).await
+    {
+        transfer_result
+    } else if let Some(tool_name) = syscall_to_tool_name(call) {
         execute_tool_by_name(tools, tool_name, args).await
     } else {
         Err(format!("unknown syscall: {}", call))
@@ -646,6 +653,7 @@ pub(crate) async fn run_node(
 
         let conn_clone = conn.clone();
         let tools_clone = tools_for_handler.clone();
+        let workspace_clone = workspace.clone();
         let logger_clone = logger.clone();
 
         // In the new OS architecture, the kernel sends req frames directly to
@@ -653,11 +661,12 @@ pub(crate) async fn run_node(
         conn.set_frame_handler(move |frame| {
             let conn = conn_clone.clone();
             let tools = tools_clone.clone();
+            let workspace = workspace_clone.clone();
             let logger = logger_clone.clone();
 
             tokio::spawn(async move {
                 if let Frame::Req(req) = frame {
-                    handle_driver_request(&conn, &tools, &req, &logger).await;
+                    handle_driver_request(&conn, &tools, &workspace, &req, &logger).await;
                 }
             });
         })
