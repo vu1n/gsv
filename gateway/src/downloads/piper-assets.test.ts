@@ -16,6 +16,9 @@ describe("Piper public asset seeding", () => {
         value: unknown,
         options?: { httpMetadata?: { contentType?: string; cacheControl?: string } },
       ) => {
+        if (key !== PIPER_PUBLIC_ASSET_MANIFEST_KEY && value instanceof ReadableStream) {
+          throw new Error("asset writes must have a known length");
+        }
         writes.push({
           key,
           value,
@@ -81,4 +84,3 @@ describe("Piper public asset seeding", () => {
     expect(bucket.put).not.toHaveBeenCalled();
   });
 });
-

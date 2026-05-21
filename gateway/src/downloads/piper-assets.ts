@@ -90,7 +90,7 @@ export async function seedPiperPublicAssets(
       throw new Error(`Failed to seed Piper asset ${asset.sourceUrl}: ${response.status}`);
     }
 
-    await bucket.put(asset.key, response.body ?? await response.arrayBuffer(), {
+    await bucket.put(asset.key, await responseBodyForR2(response), {
       httpMetadata: {
         contentType: response.headers.get("content-type") || asset.contentType,
         cacheControl: "public, max-age=31536000, immutable",
@@ -119,3 +119,19 @@ export async function seedPiperPublicAssets(
   };
 }
 
+async function responseBodyForR2(response: Response): Promise<ReadableStream<Uint8Array> | ArrayBuffer> {
+  const contentLength = parseContentLength(response.headers.get("content-length"));
+  const contentEncoding = response.headers.get("content-encoding")?.trim().toLowerCase();
+  const body = response.body as ReadableStream<Uint8Array> | null;
+  if (body && contentLength !== null && (!contentEncoding || contentEncoding === "identity")) {
+    return body.pipeThrough(new FixedLengthStream(contentLength));
+  }
+  return response.arrayBuffer();
+}
+
+function parseContentLength(value: string | null): number | null {
+  if (!value) return null;
+  const size = Number(value);
+  if (!Number.isSafeInteger(size) || size < 0) return null;
+  return size;
+}
