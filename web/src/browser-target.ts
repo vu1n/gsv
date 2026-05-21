@@ -8,7 +8,18 @@ type BrowserTargetOptions = {
   windowManager: WindowManager;
 };
 
-const TARGET_IMPLEMENTS = ["fs.read", "fs.write", "fs.edit", "fs.delete", "fs.search", "shell.exec"];
+const TARGET_IMPLEMENTS = [
+  "fs.read",
+  "fs.write",
+  "fs.edit",
+  "fs.delete",
+  "fs.search",
+  "fs.copy",
+  "fs.transfer.stat",
+  "fs.transfer.read",
+  "fs.transfer.write",
+  "shell.exec",
+];
 const TARGET_VERSION = "0.1.0";
 
 export function createBrowserTargetProvider({
@@ -16,23 +27,29 @@ export function createBrowserTargetProvider({
   windowManager,
 }: BrowserTargetOptions): () => void {
   let registeredConnectionId: string | null = null;
-  const shell = new BrowserTargetShell(windowManager);
+  const shell = new BrowserTargetShell(windowManager, gatewayClient);
 
   const unregisterRead = gatewayClient.onRequest("fs.read", (frame) => shell.read(frame));
   const unregisterWrite = gatewayClient.onRequest("fs.write", (frame) => shell.write(frame));
   const unregisterEdit = gatewayClient.onRequest("fs.edit", (frame) => shell.edit(frame));
   const unregisterDelete = gatewayClient.onRequest("fs.delete", (frame) => shell.delete(frame));
   const unregisterSearch = gatewayClient.onRequest("fs.search", (frame) => shell.search(frame));
+  const unregisterCopy = gatewayClient.onRequest("fs.copy", (frame) => shell.copy(frame));
+  const unregisterTransferStat = gatewayClient.onRequest("fs.transfer.stat", (frame) => shell.transferStat(frame));
+  const unregisterTransferRead = gatewayClient.onRequest("fs.transfer.read", (frame) => shell.transferRead(frame));
+  const unregisterTransferWrite = gatewayClient.onRequest("fs.transfer.write", (frame) => shell.transferWrite(frame));
   const unregisterShell = gatewayClient.onRequest("shell.exec", (frame) => shell.exec(frame));
   const unregisterStatus = gatewayClient.onStatus((status) => {
     if (status.state !== "connected" || !status.connectionId) {
       registeredConnectionId = null;
+      shell.setTargetId(null);
       return;
     }
     if (registeredConnectionId === status.connectionId) {
       return;
     }
     registeredConnectionId = status.connectionId;
+    shell.setTargetId(`browser:${status.connectionId}`);
     void registerBrowserTarget(gatewayClient).catch((error) => {
       registeredConnectionId = null;
       console.warn("Failed to register browser target", error);
@@ -45,6 +62,10 @@ export function createBrowserTargetProvider({
     unregisterEdit();
     unregisterDelete();
     unregisterSearch();
+    unregisterCopy();
+    unregisterTransferStat();
+    unregisterTransferRead();
+    unregisterTransferWrite();
     unregisterShell();
     unregisterStatus();
   };

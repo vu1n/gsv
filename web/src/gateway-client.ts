@@ -147,6 +147,7 @@ const LONG_RUNNING_REQUEST_TIMEOUT_MS = 120_000;
 const REQUEST_TIMEOUTS_MS: Record<string, number> = {
   "sys.setup": LONG_RUNNING_REQUEST_TIMEOUT_MS,
   "sys.bootstrap": LONG_RUNNING_REQUEST_TIMEOUT_MS,
+  "fs.copy": LONG_RUNNING_REQUEST_TIMEOUT_MS,
   "ai.transcription.create": LONG_RUNNING_REQUEST_TIMEOUT_MS,
   "ai.speech.create": LONG_RUNNING_REQUEST_TIMEOUT_MS,
 };

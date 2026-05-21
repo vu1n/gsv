@@ -3,7 +3,7 @@ import type {
 } from "just-bash/browser";
 import { buildBrowserCommands, toAppSummary } from "./browser-target-commands";
 import { BrowserTargetFileSystem } from "./browser-target-fs";
-import type { GatewayRequestFrame } from "./gateway-client";
+import type { GatewayClientLike, GatewayRequestFrame } from "./gateway-client";
 import type { WindowManager } from "./window-manager";
 
 type FsReadArgs = {
@@ -34,6 +34,35 @@ type FsSearchArgs = {
   include?: unknown;
 };
 
+type FsCopyEndpoint = {
+  target?: string;
+  path?: string;
+};
+
+type FsCopyArgs = {
+  source?: FsCopyEndpoint;
+  destination?: FsCopyEndpoint;
+};
+
+type TransferStatArgs = {
+  path?: unknown;
+};
+
+type TransferReadArgs = {
+  path?: unknown;
+  offset?: unknown;
+  length?: unknown;
+};
+
+type TransferWriteArgs = {
+  path?: unknown;
+  offset?: unknown;
+  data?: unknown;
+  expectedSize?: unknown;
+  contentType?: unknown;
+  done?: unknown;
+};
+
 type ShellExecArgs = {
   input?: unknown;
   cwd?: unknown;
@@ -46,13 +75,22 @@ type BrowserBash = InstanceType<JustBashModule["Bash"]>;
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_SEARCH_MATCHES = 200;
+const MAX_TRANSFER_READ_BYTES = 1024 * 1024;
 
 export class BrowserTargetShell {
   private fs: BrowserTargetFileSystem | null = null;
   private bash: BrowserBash | null = null;
   private ready: Promise<void> | null = null;
+  private targetId: string | null = null;
 
-  constructor(private readonly windowManager: WindowManager) {
+  constructor(
+    private readonly windowManager: WindowManager,
+    private readonly gatewayClient: GatewayClientLike,
+  ) {
+  }
+
+  setTargetId(targetId: string | null): void {
+    this.targetId = targetId;
   }
 
   async read(frame: GatewayRequestFrame): Promise<unknown> {
@@ -215,6 +253,137 @@ export class BrowserTargetShell {
     }
   }
 
+  async copy(frame: GatewayRequestFrame): Promise<unknown> {
+    await this.ensureReady();
+
+    const args = (frame.args ?? {}) as FsCopyArgs;
+    const source = parseCopyEndpoint(args.source, "source");
+    if (!source.ok) {
+      return source;
+    }
+    const destination = parseCopyEndpoint(args.destination, "destination");
+    if (!destination.ok) {
+      return destination;
+    }
+    if (!this.isLocalTarget(source.target) || !this.isLocalTarget(destination.target)) {
+      return {
+        ok: false,
+        error: `Browser fs.copy only accepts local browser endpoints`,
+      };
+    }
+
+    try {
+      const result = await this.copyLocalFile(source.path, destination.path);
+      return {
+        ok: true,
+        source: { target: this.localTargetId(), path: source.path },
+        destination: { target: this.localTargetId(), path: result.destination },
+        size: result.size,
+        contentType: inferContentType(result.destination),
+      };
+    } catch (error) {
+      return failedFs(error);
+    }
+  }
+
+  async transferStat(frame: GatewayRequestFrame): Promise<unknown> {
+    await this.ensureReady();
+    await this.refreshDynamicFiles();
+
+    const args = (frame.args ?? {}) as TransferStatArgs;
+    const path = parsePathArg(args.path, "fs.transfer.stat");
+    if (!path.ok) {
+      return path;
+    }
+
+    try {
+      const stat = await this.getFs().stat(path.path);
+      return {
+        ok: true,
+        path: path.path,
+        size: stat.size,
+        isFile: stat.isFile,
+        isDirectory: stat.isDirectory,
+        contentType: stat.isFile ? inferContentType(path.path) : undefined,
+      };
+    } catch (error) {
+      return failedFs(error);
+    }
+  }
+
+  async transferRead(frame: GatewayRequestFrame): Promise<unknown> {
+    await this.ensureReady();
+    await this.refreshDynamicFiles();
+
+    const args = (frame.args ?? {}) as TransferReadArgs;
+    const path = parsePathArg(args.path, "fs.transfer.read");
+    if (!path.ok) {
+      return path;
+    }
+    const offset = parseNonNegativeInteger(args.offset) ?? 0;
+    const length = Math.min(parseNonNegativeInteger(args.length) ?? MAX_TRANSFER_READ_BYTES, MAX_TRANSFER_READ_BYTES);
+
+    try {
+      const bytes = await this.getFs().readFileBuffer(path.path);
+      const end = Math.min(offset + length, bytes.byteLength);
+      const chunk = offset >= bytes.byteLength ? new Uint8Array() : bytes.subarray(offset, end);
+      return {
+        ok: true,
+        path: path.path,
+        offset,
+        bytesRead: chunk.byteLength,
+        data: encodeBase64Bytes(chunk),
+        eof: end >= bytes.byteLength,
+      };
+    } catch (error) {
+      return failedFs(error);
+    }
+  }
+
+  async transferWrite(frame: GatewayRequestFrame): Promise<unknown> {
+    await this.ensureReady();
+
+    const args = (frame.args ?? {}) as TransferWriteArgs;
+    const path = parsePathArg(args.path, "fs.transfer.write");
+    if (!path.ok) {
+      return path;
+    }
+    const offset = parseNonNegativeInteger(args.offset) ?? 0;
+    const expectedSize = parseNonNegativeInteger(args.expectedSize);
+    if (expectedSize === null) {
+      return { ok: false, error: "fs.transfer.write requires expectedSize" };
+    }
+    if (typeof args.data !== "string") {
+      return { ok: false, error: "fs.transfer.write requires base64 data" };
+    }
+
+    try {
+      const bytes = decodeBase64Bytes(args.data);
+      await this.writeLocalChunk(path.path, offset, bytes);
+
+      if (args.done === true) {
+        const stat = await this.getFs().stat(path.path);
+        if (stat.size !== expectedSize) {
+          return {
+            ok: false,
+            error: `Transfer size mismatch for ${path.path}: expected ${expectedSize}, got ${stat.size}`,
+          };
+        }
+      }
+
+      return {
+        ok: true,
+        path: path.path,
+        offset,
+        bytesWritten: bytes.byteLength,
+        done: args.done === true,
+        contentType: typeof args.contentType === "string" ? args.contentType : inferContentType(path.path),
+      };
+    } catch (error) {
+      return failedFs(error);
+    }
+  }
+
   async exec(frame: GatewayRequestFrame): Promise<unknown> {
     await this.ensureReady();
     await this.refreshDynamicFiles();
@@ -289,7 +458,11 @@ export class BrowserTargetShell {
         uid: 1000,
         gid: 1000,
       },
-      customCommands: buildBrowserCommands(this.windowManager, justBash.defineCommand),
+      customCommands: buildBrowserCommands(
+        this.windowManager,
+        justBash.defineCommand,
+        (args, cwd) => this.runCopyCommand(args, cwd),
+      ),
       executionLimits: {
         maxCommandCount: 10_000,
         maxLoopIterations: 10_000,
@@ -327,7 +500,7 @@ export class BrowserTargetShell {
       "- /apps/<appId>/manifest.json",
       "- /windows/<windowId>/meta.json",
       "",
-      "Shell commands: windows, window, apps, app, dom, js, plus standard just-bash commands.",
+      "Shell commands: windows, window, apps, app, cp, dom, js, plus standard just-bash commands.",
       "",
     ].join("\n"));
   }
@@ -409,6 +582,134 @@ export class BrowserTargetShell {
     await this.getFs().writeFile(path, content);
   }
 
+  private async copyLocalFile(sourcePath: string, destinationPath: string): Promise<{ destination: string; size: number }> {
+    const fs = this.getFs();
+    const sourceStat = await fs.stat(sourcePath);
+    if (!sourceStat.isFile) {
+      throw new Error(`Source is not a file: ${sourcePath}`);
+    }
+
+    let finalDestination = destinationPath;
+    try {
+      const destinationStat = await fs.stat(destinationPath);
+      if (destinationStat.isDirectory) {
+        finalDestination = joinPath(destinationPath, basename(sourcePath));
+      }
+    } catch {
+      // Destination does not exist; copy to the requested path.
+    }
+
+    await fs.cp(sourcePath, finalDestination);
+    return {
+      destination: finalDestination,
+      size: sourceStat.size,
+    };
+  }
+
+  private async writeLocalChunk(path: string, offset: number, bytes: Uint8Array): Promise<void> {
+    const fs = this.getFs();
+    if (offset === 0) {
+      await fs.writeFile(path, bytes);
+      return;
+    }
+
+    const current = await fs.readFileBuffer(path);
+    if (current.byteLength !== offset) {
+      throw new Error(`Unexpected write offset for ${path}: expected ${current.byteLength}, got ${offset}`);
+    }
+    const next = new Uint8Array(current.byteLength + bytes.byteLength);
+    next.set(current, 0);
+    next.set(bytes, current.byteLength);
+    await fs.writeFile(path, next);
+  }
+
+  private async runCopyCommand(args: string[], cwd: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    if (args.includes("--help")) {
+      return { stdout: "cp SOURCE DEST\n", stderr: "", exitCode: 0 };
+    }
+
+    const operands = args.filter((arg) => arg !== "--");
+    const unsupported = operands.find((arg) => arg.startsWith("-"));
+    if (unsupported) {
+      return { stdout: "", stderr: `cp: unsupported option '${unsupported}'\n`, exitCode: 1 };
+    }
+    if (operands.length < 2) {
+      return { stdout: "", stderr: "cp: missing destination file operand\n", exitCode: 1 };
+    }
+    if (operands.length > 2) {
+      return { stdout: "", stderr: "cp: multiple source files are not supported yet\n", exitCode: 1 };
+    }
+
+    try {
+      const source = this.parseShellCopyEndpoint(operands[0], cwd);
+      const destination = this.parseShellCopyEndpoint(operands[1], cwd);
+      if (this.isLocalTarget(source.target) && this.isLocalTarget(destination.target)) {
+        await this.copyLocalFile(source.path, destination.path);
+        return { stdout: "", stderr: "", exitCode: 0 };
+      }
+
+      const result = await this.gatewayClient.call<{ ok: boolean; error?: string }>("fs.copy", {
+        source,
+        destination,
+      });
+      if (!result.ok) {
+        return { stdout: "", stderr: `cp: ${result.error ?? "copy failed"}\n`, exitCode: 1 };
+      }
+      return { stdout: "", stderr: "", exitCode: 0 };
+    } catch (error) {
+      return {
+        stdout: "",
+        stderr: `cp: ${error instanceof Error ? error.message : String(error)}\n`,
+        exitCode: 1,
+      };
+    }
+  }
+
+  private parseShellCopyEndpoint(spec: string, cwd: string): { target: string; path: string } {
+    const bracket = spec.match(/^\[([^\]]+)]:(.*)$/);
+    if (bracket) {
+      const target = bracket[1] || this.localTargetId();
+      const path = bracket[2] || ".";
+      return {
+        target,
+        path: this.isLocalTarget(target) ? this.getFs().resolvePath(cwd, path) : path,
+      };
+    }
+
+    const localTarget = this.localTargetId();
+    const localPrefix = `${localTarget}:`;
+    if (spec.startsWith(localPrefix)) {
+      const path = spec.slice(localPrefix.length) || ".";
+      return {
+        target: localTarget,
+        path: this.getFs().resolvePath(cwd, path),
+      };
+    }
+
+    const match = spec.match(/^([A-Za-z0-9_.-]+):(.*)$/);
+    if (match) {
+      const target = match[1] || "gsv";
+      const path = match[2] || ".";
+      return {
+        target,
+        path: target === "gsv" ? path : path,
+      };
+    }
+
+    return {
+      target: localTarget,
+      path: this.getFs().resolvePath(cwd, spec),
+    };
+  }
+
+  private isLocalTarget(target: string | null | undefined): boolean {
+    return !target || target === "local" || target === this.localTargetId();
+  }
+
+  private localTargetId(): string {
+    return this.targetId ?? "local";
+  }
+
   private async collectFiles(path: string): Promise<string[]> {
     const fs = this.getFs();
     const stat = await fs.stat(path);
@@ -473,6 +774,23 @@ function parsePathArg(value: unknown, syscall: string): { ok: true; path: string
   return { ok: true, path: normalizePath(value) };
 }
 
+function parseCopyEndpoint(
+  value: FsCopyEndpoint | undefined,
+  name: "source" | "destination",
+): { ok: true; target: string | undefined; path: string } | { ok: false; error: string } {
+  if (!value || typeof value !== "object") {
+    return { ok: false, error: `fs.copy requires ${name}` };
+  }
+  if (typeof value.path !== "string" || !value.path.trim()) {
+    return { ok: false, error: `fs.copy requires ${name}.path` };
+  }
+  return {
+    ok: true,
+    target: typeof value.target === "string" && value.target.trim() ? value.target.trim() : undefined,
+    path: normalizePath(value.path),
+  };
+}
+
 function readText(path: string, content: string, offset: number | null, limit: number | null): unknown {
   const allLines = content.split("\n");
   const start = offset ?? 0;
@@ -489,6 +807,25 @@ function readText(path: string, content: string, offset: number | null, limit: n
     lines: selected.length,
     size: new TextEncoder().encode(content).byteLength,
   };
+}
+
+function encodeBase64Bytes(bytes: Uint8Array): string {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.byteLength; offset += chunkSize) {
+    const chunk = bytes.subarray(offset, offset + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
+function decodeBase64Bytes(data: string): Uint8Array {
+  const binary = atob(data);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
 }
 
 function failedFs(error: unknown): unknown {
@@ -603,6 +940,28 @@ function basename(path: string): string {
   const normalized = path.replace(/\/+$/, "");
   const index = normalized.lastIndexOf("/");
   return index >= 0 ? normalized.slice(index + 1) : normalized;
+}
+
+function joinPath(parent: string, child: string): string {
+  return parent.endsWith("/") ? `${parent}${child}` : `${parent}/${child}`;
+}
+
+function inferContentType(path: string): string | undefined {
+  const lower = path.toLowerCase();
+  if (lower.endsWith(".txt") || lower.endsWith(".log")) return "text/plain";
+  if (lower.endsWith(".json")) return "application/json";
+  if (lower.endsWith(".md")) return "text/markdown";
+  if (lower.endsWith(".html") || lower.endsWith(".htm")) return "text/html";
+  if (lower.endsWith(".css")) return "text/css";
+  if (lower.endsWith(".js") || lower.endsWith(".mjs")) return "text/javascript";
+  if (lower.endsWith(".wasm")) return "application/wasm";
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".webp")) return "image/webp";
+  if (lower.endsWith(".gif")) return "image/gif";
+  if (lower.endsWith(".svg")) return "image/svg+xml";
+  if (lower.endsWith(".pdf")) return "application/pdf";
+  return undefined;
 }
 
 function looksBinary(content: string): boolean {

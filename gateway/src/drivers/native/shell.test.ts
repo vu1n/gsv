@@ -241,6 +241,49 @@ describe("fs copy", () => {
     expect(await (await env.STORAGE.get(destinationKey))?.text()).toBe("shell copied");
   });
 
+  it("routes native cp to browser targets with colon ids", async () => {
+    const sourceKey = "home/sam/copy-test/browser-source.txt";
+    await env.STORAGE.delete(sourceKey);
+    await env.STORAGE.put(sourceKey, "to browser", {
+      customMetadata: { uid: "1000", gid: "1000", mode: "644" },
+    });
+    const browserTarget = "browser:conn-123";
+    const ctx = makeContext({ capabilities: ["fs.read", "fs.write"] }) as KernelContext;
+    ctx.devices = {
+      canAccess: vi.fn(() => true),
+      canHandle: vi.fn(() => true),
+      listForUser: vi.fn(() => [{ device_id: browserTarget }]),
+    } as never;
+    const writes: Array<{ offset: number; data: string; done?: boolean }> = [];
+
+    const result = await handleShellExec(
+      { input: `cp /home/sam/copy-test/browser-source.txt ${browserTarget}:/home/browser/browser-destination.txt` },
+      ctx,
+      {
+        fsCopyTransport: {
+          async requestDevice(deviceId, call, args) {
+            expect(deviceId).toBe(browserTarget);
+            if (call === "fs.transfer.stat") {
+              return { ok: false, error: "not found" };
+            }
+            expect(call).toBe("fs.transfer.write");
+            writes.push(args as { offset: number; data: string; done?: boolean });
+            return { ok: true, path: "/home/browser/browser-destination.txt", offset: 0, bytesWritten: 0, done: Boolean((args as { done?: boolean }).done) };
+          },
+        },
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.exitCode).toBe(0);
+    expect(writes.length).toBeGreaterThan(0);
+    const payload = writes
+      .filter((write) => !write.done)
+      .map((write) => atob(write.data))
+      .join("");
+    expect(payload).toBe("to browser");
+  });
+
   it("streams gsv files to a device target", async () => {
     const sourceKey = "home/sam/copy-test/device-source.txt";
     await env.STORAGE.delete(sourceKey);

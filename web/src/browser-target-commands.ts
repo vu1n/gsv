@@ -6,12 +6,14 @@ import type { WindowManager, WindowSummary } from "./window-manager";
 
 type JustBashModule = typeof import("just-bash/browser");
 type CommandResult = { stdout: string; stderr: string; exitCode: number };
+export type BrowserCopyCommandRunner = (args: string[], cwd: string) => Promise<CommandResult>;
 
 export function buildBrowserCommands(
   windowManager: WindowManager,
   defineBrowserCommand: JustBashModule["defineCommand"],
+  copyCommand?: BrowserCopyCommandRunner,
 ): CustomCommand[] {
-  return [
+  const commands: CustomCommand[] = [
     defineBrowserCommand("windows", async (args) => {
       const subcommand = args[0] ?? "list";
       if (subcommand !== "list") {
@@ -52,6 +54,14 @@ export function buildBrowserCommands(
       return handleJsCommand(args, windowManager);
     }),
   ];
+
+  if (copyCommand) {
+    commands.push(defineBrowserCommand("cp", async (args, ctx) => {
+      return copyCommand(args, ctx.cwd);
+    }));
+  }
+
+  return commands;
 }
 
 export function toAppSummary(app: AppManifest): Record<string, unknown> {
