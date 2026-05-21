@@ -91,7 +91,8 @@ pre {
 
 .viewer-status,
 .viewer-error,
-.viewer-directory {
+.viewer-directory,
+.viewer-binary-fallback {
   margin: 24px;
 }
 
@@ -114,6 +115,28 @@ pre {
 
 .viewer-error code {
   color: #7a352c;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+.viewer-binary-fallback {
+  display: grid;
+  gap: 8px;
+  max-width: 560px;
+  padding: 14px;
+  border: 1px solid #d8d8d2;
+  border-radius: 8px;
+  color: #353531;
+  background: #fff;
+}
+
+.viewer-binary-fallback span {
+  color: #66665f;
+  font-size: 13px;
+}
+
+.viewer-binary-fallback code {
+  color: #55554f;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 12px;
 }

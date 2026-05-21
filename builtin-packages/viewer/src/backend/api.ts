@@ -12,6 +12,30 @@ type FsImageContent =
   | { type: "text"; text: string }
   | { type: "image"; data: string; mimeType: string };
 
+type TransferStatResult =
+  | {
+      ok: true;
+      path: string;
+      size: number;
+      isFile: boolean;
+      isDirectory: boolean;
+      contentType?: string;
+    }
+  | { ok: false; error: string };
+
+type TransferReadResult =
+  | {
+      ok: true;
+      path: string;
+      offset: number;
+      bytesRead: number;
+      data: string;
+      eof: boolean;
+    }
+  | { ok: false; error: string };
+
+const TRANSFER_CHUNK_SIZE = 1024 * 1024;
+
 function normalizeTarget(target: string | undefined): string {
   const normalized = String(target ?? "").trim();
   return normalized || "gsv";
@@ -145,6 +169,85 @@ async function readPathWithFallback(kernel: KernelClient, target: string, path: 
   return { path, result };
 }
 
+async function readBinaryArtifact(
+  kernel: KernelClient,
+  target: string,
+  path: string,
+  title: string | undefined,
+): Promise<ViewerArtifact> {
+  const stat = await kernel.request("fs.transfer.stat", withTarget(target, { path })) as TransferStatResult;
+  if (!stat?.ok) {
+    return {
+      ok: false,
+      target,
+      path,
+      title,
+      contentType: inferContentType(path),
+      error: stat?.error || `Unable to stat ${path}`,
+    };
+  }
+
+  if (!stat.isFile) {
+    return {
+      ok: false,
+      target,
+      path: stat.path || path,
+      title,
+      contentType: stat.contentType || inferContentType(path),
+      error: stat.isDirectory ? "Cannot open a directory as binary." : "Artifact is not a regular file.",
+    };
+  }
+
+  const chunks: string[] = [];
+  let offset = 0;
+  while (offset < stat.size) {
+    const result = await kernel.request("fs.transfer.read", withTarget(target, {
+      path: stat.path || path,
+      offset,
+      length: Math.min(TRANSFER_CHUNK_SIZE, stat.size - offset),
+    })) as TransferReadResult;
+    if (!result?.ok) {
+      return {
+        ok: false,
+        target,
+        path: stat.path || path,
+        title,
+        contentType: stat.contentType || inferContentType(path),
+        error: result?.error || `Unable to read ${stat.path || path}`,
+      };
+    }
+    if (result.bytesRead <= 0 && !result.eof) {
+      return {
+        ok: false,
+        target,
+        path: stat.path || path,
+        title,
+        contentType: stat.contentType || inferContentType(path),
+        error: `Read zero bytes before EOF from ${stat.path || path}`,
+      };
+    }
+    if (result.bytesRead > 0) {
+      chunks.push(result.data);
+      offset += result.bytesRead;
+    }
+    if (result.eof) {
+      break;
+    }
+  }
+
+  return {
+    ok: true,
+    kind: "blob",
+    target,
+    path: stat.path || path,
+    title,
+    contentType: stat.contentType || inferContentType(path),
+    size: stat.size,
+    chunks,
+    encoding: "base64",
+  };
+}
+
 export async function loadArtifact(kernel: KernelClient, input: ViewerRoute): Promise<ViewerArtifact> {
   const target = normalizeTarget(input.target);
   const requestedPath = normalizePath(input.path);
@@ -169,14 +272,7 @@ export async function loadArtifact(kernel: KernelClient, input: ViewerRoute): Pr
       if (publicMedia) {
         return publicMedia;
       }
-      return {
-        ok: false,
-        target,
-        path,
-        title,
-        contentType,
-        error: result?.error || `Unable to open ${path}`,
-      };
+      return readBinaryArtifact(kernel, target, path, title);
     }
 
     if (Array.isArray(result.files) && Array.isArray(result.directories)) {
@@ -207,14 +303,7 @@ export async function loadArtifact(kernel: KernelClient, input: ViewerRoute): Pr
     }
 
     if (typeof result.content !== "string") {
-      return {
-        ok: false,
-        target,
-        path: result.path ?? path,
-        title,
-        contentType,
-        error: "Unsupported artifact content.",
-      };
+      return readBinaryArtifact(kernel, target, result.path ?? path, title);
     }
 
     const text = decodeNumberedText(result.content);

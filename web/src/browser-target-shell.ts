@@ -650,7 +650,22 @@ export class BrowserTargetShell {
 
   private async runOpenCommand(args: string[], cwd: string, _stdin: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     if (args.includes("--help")) {
-      return { stdout: "open [--as TYPE] [--title TITLE] PATH\n", stderr: "", exitCode: 0 };
+      return {
+        stdout: [
+          "open [--as TYPE] [--title TITLE] PATH",
+          "",
+          "Open a file in the GSV desktop viewer.",
+          "PATH may be local, gsv:/path, target:/path, or [target-with-colons]:/path.",
+          "",
+          "Examples:",
+          "  open /tmp/report.pdf",
+          "  open rearden:/home/hank/image.png",
+          "  open [browser:abc123]:/tmp/page.html",
+          "",
+        ].join("\n"),
+        stderr: "",
+        exitCode: 0,
+      };
     }
 
     const parsed = parseOpenCommandArgs(args, { allowMissingPath: false });
@@ -665,7 +680,7 @@ export class BrowserTargetShell {
         title: parsed.title,
       });
       if (!windowId) {
-        return { stdout: "", stderr: "open: viewer app is not available\n", exitCode: 1 };
+        return { stdout: "", stderr: "open: viewer app is not available; sync/install the builtin viewer package and reload the web shell\n", exitCode: 1 };
       }
       return {
         stdout: `opened ${endpoint.target}:${endpoint.path} as ${windowId}\n`,
@@ -683,12 +698,23 @@ export class BrowserTargetShell {
 
   private async runViewCommand(args: string[], cwd: string, stdin: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     if (args.includes("--help")) {
-      return { stdout: "view html [--title TITLE] [PATH]\n", stderr: "", exitCode: 0 };
+      return {
+        stdout: [
+          "view PATH",
+          "view html [--title TITLE] [PATH]",
+          "",
+          "view PATH is an alias for open PATH.",
+          "view html opens an HTML file or stdin as a generated preview.",
+          "",
+        ].join("\n"),
+        stderr: "",
+        exitCode: 0,
+      };
     }
 
     const mode = args[0] ?? "";
     if (mode !== "html") {
-      return { stdout: "", stderr: "view: usage: view html [--title TITLE] [PATH]\n", exitCode: 1 };
+      return this.runOpenCommand(args, cwd, stdin);
     }
 
     const parsed = parseOpenCommandArgs(args.slice(1), { allowMissingPath: true });
@@ -712,7 +738,7 @@ export class BrowserTargetShell {
         title: parsed.title || "HTML preview",
       });
       if (!windowId) {
-        return { stdout: "", stderr: "view: viewer app is not available\n", exitCode: 1 };
+        return { stdout: "", stderr: "view: viewer app is not available; sync/install the builtin viewer package and reload the web shell\n", exitCode: 1 };
       }
       return {
         stdout: `opened ${endpoint.target}:${endpoint.path} as ${windowId}\n`,
@@ -743,7 +769,22 @@ export class BrowserTargetShell {
 
   private async runCopyCommand(args: string[], cwd: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     if (args.includes("--help")) {
-      return { stdout: "cp SOURCE DEST\n", stderr: "", exitCode: 0 };
+      return {
+        stdout: [
+          "cp SOURCE DEST",
+          "",
+          "Copy one file locally or across targets.",
+          "Paths may be local, gsv:/path, target:/path, or [target-with-colons]:/path.",
+          "",
+          "Examples:",
+          "  cp rearden:/home/hank/report.pdf /tmp/",
+          "  cp /tmp/report.pdf gsv:/home/hank/report.pdf",
+          "  cp rearden:/home/hank/report.pdf [browser:abc123]:/tmp/report.pdf",
+          "",
+        ].join("\n"),
+        stderr: "",
+        exitCode: 0,
+      };
     }
 
     const operands = args.filter((arg) => arg !== "--");
@@ -801,6 +842,16 @@ export class BrowserTargetShell {
       return {
         target: localTarget,
         path: this.getFs().resolvePath(cwd, path),
+      };
+    }
+
+    const pathSeparator = spec.lastIndexOf(":/");
+    if (pathSeparator > 0) {
+      const target = spec.slice(0, pathSeparator);
+      const path = spec.slice(pathSeparator + 1) || ".";
+      return {
+        target,
+        path: this.isLocalTarget(target) ? this.getFs().resolvePath(cwd, path) : path,
       };
     }
 

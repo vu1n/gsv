@@ -133,9 +133,88 @@ function ArtifactView({ artifact }: { artifact: ViewerArtifact }) {
         </div>
       );
     }
+    return <ErrorView title="Unsupported public artifact" message="No preview available for this content type." detail={artifact.contentType} />;
+  }
+
+  if (artifact.kind === "blob") {
+    return <BlobArtifactView artifact={artifact} />;
   }
 
   return <pre class="viewer-text">{artifact.text}</pre>;
+}
+
+function BlobArtifactView({ artifact }: { artifact: Extract<ViewerArtifact, { kind: "blob" }> }) {
+  const [state, setState] = useState<
+    | { status: "loading" }
+    | { status: "ready"; url: string }
+    | { status: "failed"; error: string }
+  >({ status: "loading" });
+
+  useEffect(() => {
+    let objectUrl = "";
+    try {
+      const parts = artifact.chunks.map(decodeBase64Chunk);
+      const blob = new Blob(parts, { type: artifact.contentType || "application/octet-stream" });
+      objectUrl = URL.createObjectURL(blob);
+      setState({ status: "ready", url: objectUrl });
+    } catch (error) {
+      setState({ status: "failed", error: error instanceof Error ? error.message : String(error) });
+    }
+    return () => {
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [artifact.chunks, artifact.contentType]);
+
+  if (state.status === "loading") {
+    return <StatusText text="Preparing preview..." />;
+  }
+  if (state.status === "failed") {
+    return <ErrorView title="Unable to prepare preview" message={state.error} detail={artifact.contentType} />;
+  }
+
+  if (artifact.contentType === "application/pdf") {
+    return <iframe class="viewer-html-frame" title={artifact.title || basename(artifact.path) || "PDF"} src={state.url} />;
+  }
+  if (artifact.contentType.startsWith("image/")) {
+    return (
+      <div class="viewer-image-wrap">
+        <img src={state.url} alt={artifact.title || artifact.path} />
+      </div>
+    );
+  }
+  if (artifact.contentType.startsWith("video/")) {
+    return (
+      <div class="viewer-media-wrap">
+        <video controls src={state.url} />
+      </div>
+    );
+  }
+  if (artifact.contentType.startsWith("audio/")) {
+    return (
+      <div class="viewer-audio-wrap">
+        <audio controls src={state.url} />
+      </div>
+    );
+  }
+
+  return (
+    <div class="viewer-binary-fallback">
+      <strong>No preview available</strong>
+      <span>{formatBytes(artifact.size)} binary file</span>
+      <code>{artifact.contentType}</code>
+    </div>
+  );
+}
+
+function decodeBase64Chunk(data: string): Uint8Array {
+  const binary = atob(data);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
 }
 
 function StatusText({ text }: { text: string }) {
@@ -190,4 +269,19 @@ function parentPath(path: string): string {
     return "/";
   }
   return clean.slice(0, index);
+}
+
+function formatBytes(size: number): string {
+  if (!Number.isFinite(size) || size < 0) {
+    return "";
+  }
+  const units = ["B", "KiB", "MiB", "GiB"];
+  let value = size;
+  let unit = units[0];
+  for (let index = 0; index < units.length - 1 && value >= 1024; index += 1) {
+    value /= 1024;
+    unit = units[index + 1];
+  }
+  const digits = value >= 10 || unit === "B" ? 0 : 1;
+  return `${value.toFixed(digits)} ${unit}`;
 }

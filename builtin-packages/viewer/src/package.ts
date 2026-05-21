@@ -12,7 +12,7 @@ export default definePackage({
       minHeight: 320,
     },
     capabilities: {
-      kernel: ["fs.read"],
+      kernel: ["fs.read", "fs.transfer.stat", "fs.transfer.read"],
     },
   },
   browser: {

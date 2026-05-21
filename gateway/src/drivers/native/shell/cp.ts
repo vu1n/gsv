@@ -14,7 +14,21 @@ export function buildCpCommand(
 ) {
   return defineCommand("cp", async (args, ctx): Promise<ExecResult> => {
     if (args.includes("--help")) {
-      return { stdout: "cp SOURCE DEST\n", stderr: "", exitCode: 0 };
+      return {
+        stdout: [
+          "cp SOURCE DEST",
+          "",
+          "Copy one file locally or across targets.",
+          "Paths may be local, gsv:/path, target:/path, or [target-with-colons]:/path.",
+          "",
+          "Examples:",
+          "  cp rearden:/home/hank/report.pdf /tmp/report.pdf",
+          "  cp /tmp/report.pdf [browser:abc123]:/tmp/report.pdf",
+          "",
+        ].join("\n"),
+        stderr: "",
+        exitCode: 0,
+      };
     }
 
     const operands = args.filter((arg) => arg !== "--");

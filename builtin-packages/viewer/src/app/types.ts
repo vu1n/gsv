@@ -48,6 +48,17 @@ export type ViewerArtifact =
       url: string;
     }
   | {
+      ok: true;
+      kind: "blob";
+      target: string;
+      path: string;
+      title?: string;
+      contentType: string;
+      size: number;
+      chunks: string[];
+      encoding: "base64";
+    }
+  | {
       ok: false;
       target: string;
       path: string;

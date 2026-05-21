@@ -23,6 +23,8 @@ import {
   handleFsDelete,
   handleFsSearch,
   handleFsCopy,
+  handleFsTransferStat,
+  handleFsTransferRead,
 } from "../drivers/native/fs";
 import { handleShellExec } from "../drivers/native/shell";
 import { handleAiTools, handleAiConfig, handleAiSpeechCreate, handleAiTranscriptionCreate } from "./ai";
@@ -225,6 +227,12 @@ async function dispatchNative(
         break;
       case "fs.copy":
         data = await handleFsCopy(frame.args, ctx, { requestDevice: deps.requestDevice });
+        break;
+      case "fs.transfer.stat":
+        data = await handleFsTransferStat(frame.args, ctx);
+        break;
+      case "fs.transfer.read":
+        data = await handleFsTransferRead(frame.args, ctx);
         break;
 
       case "shell.exec":

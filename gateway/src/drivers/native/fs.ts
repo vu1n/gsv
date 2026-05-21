@@ -31,10 +31,17 @@ import type {
   FsCopyEndpoint,
   FsCopyResult,
 } from "../../syscalls/copy";
+import type {
+  FsTransferReadArgs,
+  FsTransferReadResult,
+  FsTransferStatArgs,
+  FsTransferStatResult,
+} from "../../syscalls/transfer";
 import { decodeBase64Bytes, encodeBase64Bytes } from "../../shared/base64";
 
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const COPY_CHUNK_SIZE = 512 * 1024;
+const TRANSFER_READ_CHUNK_SIZE = 1024 * 1024;
 
 export type FsCopyDeviceTransport = {
   requestDevice(
@@ -226,6 +233,72 @@ async function readDirectory(fs: GsvFs, path: string): Promise<FsReadResult> {
     return { ok: true, path, files, directories };
   } catch {
     return { ok: false, error: `Not found: ${path}` };
+  }
+}
+
+export async function handleFsTransferStat(
+  args: FsTransferStatArgs,
+  ctx: KernelContext,
+): Promise<FsTransferStatResult> {
+  const fs = makeFs(ctx);
+  const rawPath = typeof args.path === "string" ? args.path.trim() : "";
+  if (!rawPath) {
+    return { ok: false, error: "fs.transfer.stat requires path" };
+  }
+
+  const path = resolve(rawPath, ctx);
+  try {
+    const stat = await fs.stat(path);
+    return {
+      ok: true,
+      path,
+      size: stat.size,
+      isFile: stat.isFile,
+      isDirectory: stat.isDirectory,
+      contentType: stat.isFile ? inferContentType(path) : undefined,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export async function handleFsTransferRead(
+  args: FsTransferReadArgs,
+  ctx: KernelContext,
+): Promise<FsTransferReadResult> {
+  const fs = makeFs(ctx);
+  const rawPath = typeof args.path === "string" ? args.path.trim() : "";
+  if (!rawPath) {
+    return { ok: false, error: "fs.transfer.read requires path" };
+  }
+
+  const offset = normalizeTransferNumber(args.offset, 0);
+  const length = Math.min(
+    normalizeTransferNumber(args.length, TRANSFER_READ_CHUNK_SIZE),
+    TRANSFER_READ_CHUNK_SIZE,
+  );
+  const path = resolve(rawPath, ctx);
+
+  try {
+    const bytes = await fs.readFileBuffer(path);
+    const end = Math.min(offset + length, bytes.byteLength);
+    const chunk = offset >= bytes.byteLength ? new Uint8Array() : bytes.subarray(offset, end);
+    return {
+      ok: true,
+      path,
+      offset,
+      bytesRead: chunk.byteLength,
+      data: encodeBase64Bytes(chunk),
+      eof: end >= bytes.byteLength,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 
@@ -699,6 +772,13 @@ export async function handleFsEdit(
       return { ok: false, error: `File not found: ${p}` };
     return { ok: false, error: msg };
   }
+}
+
+function normalizeTransferNumber(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.max(0, Math.floor(value));
 }
 
 function normalizeCopyEndpoint(
