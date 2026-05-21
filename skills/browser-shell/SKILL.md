@@ -32,7 +32,7 @@ Use window ids from `windows list` for `window`, `dom`, and `js` commands.
 
 ## Open Files and Previews
 
-Use `open` for files that should appear in the desktop viewer:
+Use `open` for files that should appear in a desktop preview window:
 
 ```bash
 open --title "Report" /tmp/report.pdf
@@ -47,7 +47,7 @@ printf '%s\n' '<!doctype html><h1>Hello</h1>' | view html --title "Preview"
 view html --title "Preview" /tmp/preview.html
 ```
 
-If `open` or `view` says the viewer app is unavailable, inspect `apps list`. The web shell may need the builtin viewer package synced and the page reloaded.
+The preview window is internal to the web shell; it is not a package and does not appear in `apps list`.
 
 ## Move Files Between Targets
 

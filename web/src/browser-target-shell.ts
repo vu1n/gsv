@@ -4,6 +4,7 @@ import type {
 import { buildBrowserCommands, toAppSummary } from "./browser-target-commands";
 import { BrowserTargetFileSystem } from "./browser-target-fs";
 import type { GatewayClientLike, GatewayRequestFrame } from "./gateway-client";
+import type { PreviewDirectoryEntry, PreviewWindowContent } from "./preview-window";
 import type { WindowManager } from "./window-manager";
 
 type FsReadArgs = {
@@ -63,6 +64,37 @@ type TransferWriteArgs = {
   done?: unknown;
 };
 
+type TransferStatResult =
+  | {
+      ok: true;
+      path: string;
+      size: number;
+      isFile: boolean;
+      isDirectory: boolean;
+      contentType?: string;
+    }
+  | { ok: false; error?: string };
+
+type TransferReadResult =
+  | {
+      ok: true;
+      path: string;
+      offset: number;
+      bytesRead: number;
+      data: string;
+      eof: boolean;
+    }
+  | { ok: false; error?: string };
+
+type FsReadDirectoryResult =
+  | {
+      ok: true;
+      path?: string;
+      files: string[];
+      directories: string[];
+    }
+  | { ok: false; error?: string };
+
 type ShellExecArgs = {
   input?: unknown;
   cwd?: unknown;
@@ -81,6 +113,7 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_SEARCH_MATCHES = 200;
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const MAX_TRANSFER_READ_BYTES = 1024 * 1024;
+const MAX_PREVIEW_BYTES = 64 * 1024 * 1024;
 
 export class BrowserTargetShell {
   private fs: BrowserTargetFileSystem | null = null;
@@ -654,7 +687,7 @@ export class BrowserTargetShell {
         stdout: [
           "open [--as TYPE] [--title TITLE] PATH",
           "",
-          "Open a file in the GSV desktop viewer.",
+          "Open a file in a GSV desktop preview window.",
           "PATH may be local, gsv:/path, target:/path, or [target-with-colons]:/path.",
           "",
           "Examples:",
@@ -675,15 +708,12 @@ export class BrowserTargetShell {
 
     try {
       const endpoint = this.parseShellEndpoint(parsed.path, cwd);
-      const windowId = this.openViewer(endpoint, {
+      const windowId = await this.openPreview(endpoint, {
         type: parsed.type,
         title: parsed.title,
       });
-      if (!windowId) {
-        return { stdout: "", stderr: "open: viewer app is not available; sync/install the builtin viewer package and reload the web shell\n", exitCode: 1 };
-      }
       return {
-        stdout: `opened ${endpoint.target}:${endpoint.path} as ${windowId}\n`,
+        stdout: `opened ${formatEndpointLabel(endpoint.target, endpoint.path)} as ${windowId}\n`,
         stderr: "",
         exitCode: 0,
       };
@@ -733,15 +763,12 @@ export class BrowserTargetShell {
       }
 
       const endpoint = this.parseShellEndpoint(path, cwd);
-      const windowId = this.openViewer(endpoint, {
+      const windowId = await this.openPreview(endpoint, {
         type: "html",
         title: parsed.title || "HTML preview",
       });
-      if (!windowId) {
-        return { stdout: "", stderr: "view: viewer app is not available; sync/install the builtin viewer package and reload the web shell\n", exitCode: 1 };
-      }
       return {
-        stdout: `opened ${endpoint.target}:${endpoint.path} as ${windowId}\n`,
+        stdout: `opened ${formatEndpointLabel(endpoint.target, endpoint.path)} as ${windowId}\n`,
         stderr: "",
         exitCode: 0,
       };
@@ -754,17 +781,152 @@ export class BrowserTargetShell {
     }
   }
 
-  private openViewer(endpoint: { target: string; path: string }, options: { type?: string; title?: string }): string | null {
-    const params = new URLSearchParams();
-    params.set("target", endpoint.target);
-    params.set("path", endpoint.path);
-    if (options.type) {
-      params.set("type", options.type);
+  private async openPreview(endpoint: { target: string; path: string }, options: { type?: string; title?: string }): Promise<string> {
+    const preview = await this.loadPreview(endpoint, options);
+    return this.windowManager.openPreview(preview);
+  }
+
+  private async loadPreview(endpoint: { target: string; path: string }, options: { type?: string; title?: string }): Promise<PreviewWindowContent> {
+    if (this.isLocalTarget(endpoint.target)) {
+      return this.loadLocalPreview(endpoint.path, {
+        ...options,
+        target: this.localTargetId(),
+      });
     }
-    if (options.title) {
-      params.set("title", options.title);
+    return this.loadRemotePreview(endpoint, options);
+  }
+
+  private async loadLocalPreview(path: string, options: { target: string; type?: string; title?: string }): Promise<PreviewWindowContent> {
+    const fs = this.getFs();
+    const stat = await fs.stat(path);
+    const sourceLabel = formatEndpointLabel(options.target, path);
+    const title = normalizePreviewTitle(options.title, path, sourceLabel);
+
+    if (stat.isDirectory) {
+      const entries = await this.readDirectory(path);
+      return {
+        kind: "directory",
+        title,
+        sourceLabel,
+        target: options.target,
+        path,
+        entries: directoryEntries(entries),
+      };
     }
-    return this.windowManager.openAppById("viewer", `/apps/viewer/?${params.toString()}`, { forceNew: true });
+
+    if (!stat.isFile) {
+      throw new Error(`Not a regular file: ${path}`);
+    }
+    if (stat.size > MAX_PREVIEW_BYTES) {
+      throw new Error(`File too large to preview (${formatSize(stat.size)}, max ${formatSize(MAX_PREVIEW_BYTES)})`);
+    }
+
+    const bytes = await fs.readFileBuffer(path);
+    return previewFromBytes({
+      bytes,
+      contentType: normalizePreviewContentType(options.type, inferContentType(path)),
+      path,
+      size: stat.size,
+      sourceLabel,
+      target: options.target,
+      title,
+      typeHint: options.type,
+    });
+  }
+
+  private async loadRemotePreview(endpoint: { target: string; path: string }, options: { type?: string; title?: string }): Promise<PreviewWindowContent> {
+    const stat = await this.gatewayClient.call<TransferStatResult>("fs.transfer.stat", this.withEndpointTarget(endpoint, { path: endpoint.path }));
+    if (!stat.ok) {
+      throw new Error(stat.error ?? `Unable to stat ${endpoint.target}:${endpoint.path}`);
+    }
+
+    const path = stat.path || endpoint.path;
+    const sourceLabel = formatEndpointLabel(endpoint.target, path);
+    const title = normalizePreviewTitle(options.title, path, sourceLabel);
+
+    if (stat.isDirectory) {
+      return this.loadRemoteDirectory({ target: endpoint.target, path }, title, sourceLabel);
+    }
+    if (!stat.isFile) {
+      throw new Error(`Not a regular file: ${sourceLabel}`);
+    }
+    if (stat.size > MAX_PREVIEW_BYTES) {
+      throw new Error(`File too large to preview (${formatSize(stat.size)}, max ${formatSize(MAX_PREVIEW_BYTES)})`);
+    }
+
+    const bytes = await this.readRemoteBytes({ target: endpoint.target, path }, stat.size);
+    return previewFromBytes({
+      bytes,
+      contentType: normalizePreviewContentType(options.type, stat.contentType || inferContentType(path)),
+      path,
+      size: stat.size,
+      sourceLabel,
+      target: endpoint.target,
+      title,
+      typeHint: options.type,
+    });
+  }
+
+  private async loadRemoteDirectory(endpoint: { target: string; path: string }, title: string, sourceLabel: string): Promise<PreviewWindowContent> {
+    const result = await this.gatewayClient.call<FsReadDirectoryResult>("fs.read", this.withEndpointTarget(endpoint, { path: endpoint.path }));
+    if (!result.ok) {
+      throw new Error(result.error ?? `Unable to read directory ${sourceLabel}`);
+    }
+    if (!Array.isArray(result.files) || !Array.isArray(result.directories)) {
+      throw new Error(`${sourceLabel} is not a directory`);
+    }
+    return {
+      kind: "directory",
+      title,
+      sourceLabel,
+      target: endpoint.target,
+      path: result.path || endpoint.path,
+      entries: directoryEntries({
+        files: result.files,
+        directories: result.directories,
+      }),
+    };
+  }
+
+  private async readRemoteBytes(endpoint: { target: string; path: string }, size: number): Promise<Uint8Array> {
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    let offset = 0;
+
+    while (offset < size) {
+      const result = await this.gatewayClient.call<TransferReadResult>("fs.transfer.read", this.withEndpointTarget(endpoint, {
+        path: endpoint.path,
+        offset,
+        length: Math.min(MAX_TRANSFER_READ_BYTES, size - offset),
+      }));
+      if (!result.ok) {
+        throw new Error(result.error ?? `Unable to read ${endpoint.target}:${endpoint.path}`);
+      }
+      if (result.bytesRead <= 0 && !result.eof) {
+        throw new Error(`Read zero bytes before EOF from ${endpoint.target}:${endpoint.path}`);
+      }
+      if (result.bytesRead > 0) {
+        const chunk = decodeBase64Bytes(result.data);
+        chunks.push(chunk);
+        total += chunk.byteLength;
+        offset += result.bytesRead;
+      }
+      if (result.eof) {
+        break;
+      }
+    }
+
+    const bytes = new Uint8Array(total);
+    let cursor = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, cursor);
+      cursor += chunk.byteLength;
+    }
+    return bytes;
+  }
+
+  private withEndpointTarget(endpoint: { target: string; path: string }, args: Record<string, unknown>): Record<string, unknown> {
+    return endpoint.target === "gsv" ? args : { ...args, target: endpoint.target };
   }
 
   private async runCopyCommand(args: string[], cwd: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
@@ -934,6 +1096,106 @@ export class BrowserTargetShell {
     }
     return this.bash;
   }
+}
+
+function directoryEntries(entries: { files: string[]; directories: string[] }): PreviewDirectoryEntry[] {
+  return [
+    ...entries.directories.map((name) => ({ name, kind: "directory" as const })),
+    ...entries.files.map((name) => ({ name, kind: "file" as const })),
+  ];
+}
+
+function formatEndpointLabel(target: string, path: string): string {
+  return target.includes(":") ? `[${target}]:${path}` : `${target}:${path}`;
+}
+
+function normalizePreviewTitle(title: string | undefined, path: string, sourceLabel: string): string {
+  const normalized = title?.trim();
+  if (normalized) {
+    return normalized;
+  }
+  return basename(path) || sourceLabel || "Preview";
+}
+
+function normalizePreviewContentType(typeHint: string | undefined, detected: string): string {
+  const hint = typeHint?.trim().toLowerCase() ?? "";
+  if (hint === "html") {
+    return "text/html";
+  }
+  if (hint === "text") {
+    return "text/plain";
+  }
+  if (hint.includes("/")) {
+    return hint;
+  }
+  return detected;
+}
+
+function previewFromBytes(input: {
+  bytes: Uint8Array;
+  contentType: string;
+  path: string;
+  size: number;
+  sourceLabel: string;
+  target: string;
+  title: string;
+  typeHint?: string;
+}): PreviewWindowContent {
+  const forcedKind = input.typeHint?.trim().toLowerCase() ?? "";
+  const base = {
+    title: input.title,
+    sourceLabel: input.sourceLabel,
+    target: input.target,
+    path: input.path,
+    contentType: input.contentType,
+    size: input.size,
+  };
+
+  if (forcedKind === "html" || input.contentType === "text/html") {
+    return {
+      ...base,
+      kind: "html",
+      text: new TextDecoder().decode(input.bytes),
+    };
+  }
+
+  if (
+    input.contentType === "application/pdf"
+    || input.contentType.startsWith("image/")
+    || input.contentType.startsWith("video/")
+    || input.contentType.startsWith("audio/")
+  ) {
+    return {
+      ...base,
+      kind: "blob",
+      bytes: input.bytes,
+      contentType: input.contentType,
+    };
+  }
+
+  if ((forcedKind === "text" || isTextContentType(input.contentType)) && !looksBinaryBytes(input.bytes)) {
+    return {
+      ...base,
+      kind: "text",
+      text: new TextDecoder().decode(input.bytes),
+    };
+  }
+
+  return {
+    ...base,
+    kind: "binary",
+    contentType: input.contentType || "application/octet-stream",
+  };
+}
+
+function looksBinaryBytes(bytes: Uint8Array): boolean {
+  const length = Math.min(bytes.byteLength, 8192);
+  for (let index = 0; index < length; index += 1) {
+    if (bytes[index] === 0) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function parsePathArg(value: unknown, syscall: string): { ok: true; path: string } | { ok: false; error: string } {

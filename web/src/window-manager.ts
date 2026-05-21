@@ -1,6 +1,7 @@
 import type { AppManifest } from "./apps";
 import { queuePendingAppOpen, type OpenAppRequest } from "./app-link";
 import type { AppInstance, AppRuntimeContext, AppRuntimeRegistry } from "./app-runtime";
+import { mountPreviewWindow, type PreviewWindowContent } from "./preview-window";
 
 type WindowMode = "normal" | "minimized" | "maximized";
 type ResizeDirection = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
@@ -36,6 +37,10 @@ type AppRuntimeState = {
   crashed: boolean;
 };
 
+type PreviewRuntimeState = {
+  dispose: () => void;
+};
+
 type WindowRecord = {
   windowId: string;
   app: AppManifest;
@@ -58,6 +63,8 @@ type WindowRecord = {
   dragHandleNode: HTMLElement;
   contentNode: HTMLElement;
   runtime: AppRuntimeState | null;
+  preview: PreviewRuntimeState | null;
+  persist: boolean;
 };
 
 type DragState = {
@@ -141,6 +148,7 @@ export type WindowJsRunResult = {
 export type WindowManager = {
   openApp: (app: AppManifest, route?: string, options?: { pendingAppOpenRequest?: OpenAppRequest | null; forceRestart?: boolean; forceNew?: boolean }) => string;
   openAppById: (appId: string, route?: string, options?: { forceRestart?: boolean; forceNew?: boolean }) => string | null;
+  openPreview: (preview: PreviewWindowContent) => string;
   focusWindow: (windowId: string) => void;
   restoreWindow: (windowId: string) => void;
   minimizeWindow: (windowId: string) => void;
@@ -176,6 +184,21 @@ const WINDOW_OFFSET_Y = 22;
 const WINDOW_STAGGER_STEPS = 8;
 const SNAP_THRESHOLD = 30;
 const LAYOUT_STORAGE_KEY = "gsv.desktop.layout.v1";
+const PREVIEW_APP: AppManifest = {
+  id: "preview",
+  name: "Preview",
+  description: "Transient file and blob preview window.",
+  icon: { kind: "fallback", label: "PV" },
+  entrypoint: { kind: "web", route: "/internal/preview" },
+  permissions: [],
+  syscalls: [],
+  windowDefaults: {
+    width: 980,
+    height: 720,
+    minWidth: 360,
+    minHeight: 280,
+  },
+};
 
 const blockSelection = (event: Event): void => {
   event.preventDefault();
@@ -655,12 +678,14 @@ export function createWindowManager({ layerNode, appRegistry, appRuntime }: Wind
 
   const persistLayout = (): void => {
     const ordered = [...windows.values()].sort((left, right) => left.zIndex - right.zIndex);
-    const activeAppId = activeWindowId ? windows.get(activeWindowId)?.app.id ?? null : null;
+    const persistent = ordered.filter((record) => record.persist);
+    const activeRecord = activeWindowId ? windows.get(activeWindowId) ?? null : null;
+    const activeAppId = activeRecord?.persist ? activeRecord.app.id : null;
 
     const layout: PersistedLayout = {
       version: 1,
       activeAppId,
-      windows: ordered.map((record) => ({
+      windows: persistent.map((record) => ({
         appId: record.app.id,
         route: record.route,
         title: record.title === record.app.name ? undefined : record.title,
@@ -848,6 +873,16 @@ export function createWindowManager({ layerNode, appRegistry, appRuntime }: Wind
   };
 
   const detachRuntime = (record: WindowRecord): void => {
+    const preview = record.preview;
+    if (preview) {
+      record.preview = null;
+      try {
+        preview.dispose();
+      } catch {
+        // Ignore preview teardown errors during window disposal.
+      }
+    }
+
     const runtime = record.runtime;
     if (!runtime) {
       return;
@@ -1342,6 +1377,8 @@ export function createWindowManager({ layerNode, appRegistry, appRuntime }: Wind
       dragHandleNode,
       contentNode,
       runtime: null,
+      preview: null,
+      persist: true,
     };
 
     if (!persisted) {
@@ -1476,6 +1513,25 @@ export function createWindowManager({ layerNode, appRegistry, appRuntime }: Wind
       return null;
     }
     return openApp(app, route, options);
+  };
+
+  const openPreview = (preview: PreviewWindowContent): string => {
+    const route = `preview:${preview.sourceLabel}`;
+    const record = createRecord(PREVIEW_APP, undefined, route);
+    record.title = normalizeChromeText(preview.title) ?? PREVIEW_APP.name;
+    record.persist = false;
+    record.preview = {
+      dispose: mountPreviewWindow(record.contentNode, preview),
+    };
+    attachWindowListeners(record);
+    windows.set(record.windowId, record);
+    layerNode.appendChild(record.node);
+
+    activeWindowId = record.windowId;
+    repaintAll();
+    emit();
+
+    return record.windowId;
   };
 
   const automationContext = (windowId: string): {
@@ -1827,6 +1883,7 @@ export function createWindowManager({ layerNode, appRegistry, appRuntime }: Wind
   return {
     openApp,
     openAppById,
+    openPreview,
     focusWindow,
     restoreWindow,
     minimizeWindow,
