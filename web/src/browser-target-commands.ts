@@ -7,11 +7,14 @@ import type { WindowManager, WindowSummary } from "./window-manager";
 type JustBashModule = typeof import("just-bash/browser");
 type CommandResult = { stdout: string; stderr: string; exitCode: number };
 export type BrowserCopyCommandRunner = (args: string[], cwd: string) => Promise<CommandResult>;
+export type BrowserOpenCommandRunner = (args: string[], cwd: string, stdin: string) => Promise<CommandResult>;
 
 export function buildBrowserCommands(
   windowManager: WindowManager,
   defineBrowserCommand: JustBashModule["defineCommand"],
   copyCommand?: BrowserCopyCommandRunner,
+  openCommand?: BrowserOpenCommandRunner,
+  viewCommand?: BrowserOpenCommandRunner,
 ): CustomCommand[] {
   const commands: CustomCommand[] = [
     defineBrowserCommand("windows", async (args) => {
@@ -54,6 +57,18 @@ export function buildBrowserCommands(
       return handleJsCommand(args, windowManager);
     }),
   ];
+
+  if (openCommand) {
+    commands.push(defineBrowserCommand("open", async (args, ctx) => {
+      return openCommand(args, ctx.cwd, ctx.stdin);
+    }));
+  }
+
+  if (viewCommand) {
+    commands.push(defineBrowserCommand("view", async (args, ctx) => {
+      return viewCommand(args, ctx.cwd, ctx.stdin);
+    }));
+  }
 
   if (copyCommand) {
     commands.push(defineBrowserCommand("cp", async (args, ctx) => {

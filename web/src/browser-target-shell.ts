@@ -70,11 +70,16 @@ type ShellExecArgs = {
   timeout?: unknown;
 };
 
+type ParsedOpenCommandArgs =
+  | { ok: true; path: string; type?: string; title?: string }
+  | { ok: false; error: string };
+
 type JustBashModule = typeof import("just-bash/browser");
 type BrowserBash = InstanceType<JustBashModule["Bash"]>;
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_SEARCH_MATCHES = 200;
+const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const MAX_TRANSFER_READ_BYTES = 1024 * 1024;
 
 export class BrowserTargetShell {
@@ -115,8 +120,26 @@ export class BrowserTargetShell {
         };
       }
 
+      const contentType = inferContentType(path);
+      if (contentType.startsWith("image/")) {
+        if (stat.size > MAX_IMAGE_BYTES) {
+          return {
+            ok: false,
+            error: `Image too large (${formatSize(stat.size)}, max ${formatSize(MAX_IMAGE_BYTES)})`,
+          };
+        }
+        const bytes = await fs.readFileBuffer(path);
+        return readImage(path, bytes, contentType, stat.size);
+      }
+      if (!isTextContentType(contentType)) {
+        return {
+          ok: false,
+          error: `Binary file (${contentType}, ${formatSize(stat.size)}) - not readable as text`,
+        };
+      }
+
       const content = await fs.readFile(path);
-      return readText(path, content, offset, limit);
+      return readText(path, content, stat.size, offset, limit);
     } catch (error) {
       return failedFs(error);
     }
@@ -462,6 +485,8 @@ export class BrowserTargetShell {
         this.windowManager,
         justBash.defineCommand,
         (args, cwd) => this.runCopyCommand(args, cwd),
+        (args, cwd, stdin) => this.runOpenCommand(args, cwd, stdin),
+        (args, cwd, stdin) => this.runViewCommand(args, cwd, stdin),
       ),
       executionLimits: {
         maxCommandCount: 10_000,
@@ -500,7 +525,7 @@ export class BrowserTargetShell {
       "- /apps/<appId>/manifest.json",
       "- /windows/<windowId>/meta.json",
       "",
-      "Shell commands: windows, window, apps, app, cp, dom, js, plus standard just-bash commands.",
+      "Shell commands: windows, window, apps, app, open, view, cp, dom, js, plus standard just-bash commands.",
       "",
     ].join("\n"));
   }
@@ -623,6 +648,99 @@ export class BrowserTargetShell {
     await fs.writeFile(path, next);
   }
 
+  private async runOpenCommand(args: string[], cwd: string, _stdin: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    if (args.includes("--help")) {
+      return { stdout: "open [--as TYPE] [--title TITLE] PATH\n", stderr: "", exitCode: 0 };
+    }
+
+    const parsed = parseOpenCommandArgs(args, { allowMissingPath: false });
+    if (!parsed.ok) {
+      return { stdout: "", stderr: `open: ${parsed.error}\n`, exitCode: 1 };
+    }
+
+    try {
+      const endpoint = this.parseShellEndpoint(parsed.path, cwd);
+      const windowId = this.openViewer(endpoint, {
+        type: parsed.type,
+        title: parsed.title,
+      });
+      if (!windowId) {
+        return { stdout: "", stderr: "open: viewer app is not available\n", exitCode: 1 };
+      }
+      return {
+        stdout: `opened ${endpoint.target}:${endpoint.path} as ${windowId}\n`,
+        stderr: "",
+        exitCode: 0,
+      };
+    } catch (error) {
+      return {
+        stdout: "",
+        stderr: `open: ${error instanceof Error ? error.message : String(error)}\n`,
+        exitCode: 1,
+      };
+    }
+  }
+
+  private async runViewCommand(args: string[], cwd: string, stdin: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    if (args.includes("--help")) {
+      return { stdout: "view html [--title TITLE] [PATH]\n", stderr: "", exitCode: 0 };
+    }
+
+    const mode = args[0] ?? "";
+    if (mode !== "html") {
+      return { stdout: "", stderr: "view: usage: view html [--title TITLE] [PATH]\n", exitCode: 1 };
+    }
+
+    const parsed = parseOpenCommandArgs(args.slice(1), { allowMissingPath: true });
+    if (!parsed.ok) {
+      return { stdout: "", stderr: `view: ${parsed.error}\n`, exitCode: 1 };
+    }
+
+    let path = parsed.path;
+    try {
+      if (!path) {
+        if (!stdin.trim()) {
+          return { stdout: "", stderr: "view: html requires PATH or stdin\n", exitCode: 1 };
+        }
+        path = `/tmp/view-${Date.now()}.html`;
+        await this.writeText(path, stdin);
+      }
+
+      const endpoint = this.parseShellEndpoint(path, cwd);
+      const windowId = this.openViewer(endpoint, {
+        type: "html",
+        title: parsed.title || "HTML preview",
+      });
+      if (!windowId) {
+        return { stdout: "", stderr: "view: viewer app is not available\n", exitCode: 1 };
+      }
+      return {
+        stdout: `opened ${endpoint.target}:${endpoint.path} as ${windowId}\n`,
+        stderr: "",
+        exitCode: 0,
+      };
+    } catch (error) {
+      return {
+        stdout: "",
+        stderr: `view: ${error instanceof Error ? error.message : String(error)}\n`,
+        exitCode: 1,
+      };
+    }
+  }
+
+  private openViewer(endpoint: { target: string; path: string }, options: { type?: string; title?: string }): string | null {
+    const params = new URLSearchParams();
+    params.set("target", endpoint.target);
+    params.set("path", endpoint.path);
+    if (options.type) {
+      params.set("type", options.type);
+    }
+    if (options.title) {
+      params.set("title", options.title);
+    }
+    return this.windowManager.openAppById("viewer", `/apps/viewer/?${params.toString()}`, { forceNew: true });
+  }
+
   private async runCopyCommand(args: string[], cwd: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     if (args.includes("--help")) {
       return { stdout: "cp SOURCE DEST\n", stderr: "", exitCode: 0 };
@@ -641,8 +759,8 @@ export class BrowserTargetShell {
     }
 
     try {
-      const source = this.parseShellCopyEndpoint(operands[0], cwd);
-      const destination = this.parseShellCopyEndpoint(operands[1], cwd);
+      const source = this.parseShellEndpoint(operands[0], cwd);
+      const destination = this.parseShellEndpoint(operands[1], cwd);
       if (this.isLocalTarget(source.target) && this.isLocalTarget(destination.target)) {
         await this.copyLocalFile(source.path, destination.path);
         return { stdout: "", stderr: "", exitCode: 0 };
@@ -665,7 +783,7 @@ export class BrowserTargetShell {
     }
   }
 
-  private parseShellCopyEndpoint(spec: string, cwd: string): { target: string; path: string } {
+  private parseShellEndpoint(spec: string, cwd: string): { target: string; path: string } {
     const bracket = spec.match(/^\[([^\]]+)]:(.*)$/);
     if (bracket) {
       const target = bracket[1] || this.localTargetId();
@@ -791,7 +909,68 @@ function parseCopyEndpoint(
   };
 }
 
-function readText(path: string, content: string, offset: number | null, limit: number | null): unknown {
+function parseOpenCommandArgs(args: string[], options: { allowMissingPath: boolean }): ParsedOpenCommandArgs {
+  let type: string | undefined;
+  let title: string | undefined;
+  const operands: string[] = [];
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? "";
+    if (arg === "--") {
+      operands.push(...args.slice(index + 1));
+      break;
+    }
+    if (arg === "--as" || arg === "--type") {
+      const value = args[index + 1] ?? "";
+      if (!value) {
+        return { ok: false, error: `${arg} requires a value` };
+      }
+      type = value;
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--as=")) {
+      type = arg.slice("--as=".length);
+      continue;
+    }
+    if (arg.startsWith("--type=")) {
+      type = arg.slice("--type=".length);
+      continue;
+    }
+    if (arg === "--title") {
+      const value = args[index + 1] ?? "";
+      if (!value) {
+        return { ok: false, error: "--title requires a value" };
+      }
+      title = value;
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--title=")) {
+      title = arg.slice("--title=".length);
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      return { ok: false, error: `unsupported option '${arg}'` };
+    }
+    operands.push(arg);
+  }
+
+  if (operands.length === 0 && !options.allowMissingPath) {
+    return { ok: false, error: "missing file operand" };
+  }
+  if (operands.length > 1) {
+    return { ok: false, error: "multiple files are not supported yet" };
+  }
+  return {
+    ok: true,
+    path: operands[0] ?? "",
+    type,
+    title,
+  };
+}
+
+function readText(path: string, content: string, size: number, offset: number | null, limit: number | null): unknown {
   const allLines = content.split("\n");
   const start = offset ?? 0;
   const count = limit ?? allLines.length;
@@ -805,8 +984,40 @@ function readText(path: string, content: string, offset: number | null, limit: n
     content: numbered,
     path,
     lines: selected.length,
-    size: new TextEncoder().encode(content).byteLength,
+    size,
   };
+}
+
+function readImage(path: string, bytes: Uint8Array, mimeType: string, size: number): unknown {
+  return {
+    ok: true,
+    content: [
+      {
+        type: "text",
+        text: `Read image ${path} [${mimeType}, ${formatSize(size)}]`,
+      },
+      { type: "image", data: encodeBase64Bytes(bytes), mimeType },
+    ],
+    path,
+    size,
+  };
+}
+
+function isTextContentType(contentType: string): boolean {
+  const base = contentType.split(";")[0].trim().toLowerCase();
+  return base.startsWith("text/")
+    || base === "application/json"
+    || base === "application/yaml"
+    || base === "application/xml"
+    || base === "application/javascript"
+    || base === "application/typescript"
+    || base === "application/toml";
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} bytes`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function encodeBase64Bytes(bytes: Uint8Array): string {
@@ -946,7 +1157,7 @@ function joinPath(parent: string, child: string): string {
   return parent.endsWith("/") ? `${parent}${child}` : `${parent}/${child}`;
 }
 
-function inferContentType(path: string): string | undefined {
+function inferContentType(path: string): string {
   const lower = path.toLowerCase();
   if (lower.endsWith(".txt") || lower.endsWith(".log")) return "text/plain";
   if (lower.endsWith(".json")) return "application/json";
@@ -961,7 +1172,12 @@ function inferContentType(path: string): string | undefined {
   if (lower.endsWith(".gif")) return "image/gif";
   if (lower.endsWith(".svg")) return "image/svg+xml";
   if (lower.endsWith(".pdf")) return "application/pdf";
-  return undefined;
+  if (lower.endsWith(".mp3")) return "audio/mpeg";
+  if (lower.endsWith(".wav")) return "audio/wav";
+  if (lower.endsWith(".ogg")) return "audio/ogg";
+  if (lower.endsWith(".mp4")) return "video/mp4";
+  if (lower.endsWith(".webm")) return "video/webm";
+  return "text/plain";
 }
 
 function looksBinary(content: string): boolean {

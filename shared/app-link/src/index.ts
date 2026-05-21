@@ -36,11 +36,22 @@ export type WikiOpenPayload = {
   mode?: "browse" | "edit" | "build" | "ingest" | "inbox";
 };
 
+export type ViewerOpenPayload = {
+  device?: string;
+  deviceId?: string;
+  target?: string;
+  path?: string;
+  title?: string;
+  type?: "text" | "html" | "image" | string;
+  context?: ThreadContext | null;
+};
+
 export type OpenAppRequest =
   | { target: "files"; payload?: FilesOpenPayload }
   | { target: "shell"; payload?: ShellOpenPayload }
   | { target: "chat"; payload: ChatOpenPayload }
   | { target: "wiki"; payload?: WikiOpenPayload }
+  | { target: "viewer"; payload?: ViewerOpenPayload }
   | { target: string; payload?: { route?: string } };
 
 export type OpenAppEventDetail = {
@@ -129,6 +140,15 @@ export function buildOpenAppRoute(request: OpenAppRequest, locationHref: string)
     writeParam(url, "mode", asString(payload.mode) ?? undefined);
     return `${url.pathname}${url.search}`;
   }
+  if (target === "viewer") {
+    const context = normalizeThreadContext(payload.context);
+    const url = new URL("/apps/viewer/", locationHref);
+    writeParam(url, "target", readRequestedTarget(payload) ?? undefined);
+    writeParam(url, "path", asString(payload.path) ?? context?.cwd ?? undefined);
+    writeParam(url, "title", asString(payload.title) ?? undefined);
+    writeParam(url, "type", asString(payload.type) ?? undefined);
+    return `${url.pathname}${url.search}`;
+  }
   const explicitRoute = asString(payload.route)?.trim();
   if (explicitRoute) {
     return explicitRoute;
@@ -185,6 +205,14 @@ export function resolveOpenAppRequest(
       type: "app",
       appId: "wiki",
       route: buildOpenAppRoute({ target: "wiki", payload: payload as WikiOpenPayload }, locationHref),
+    };
+  }
+  if (target === "viewer") {
+    return {
+      type: "app",
+      appId: "viewer",
+      route: buildOpenAppRoute({ target: "viewer", payload: payload as ViewerOpenPayload }, locationHref),
+      threadContext: normalizeThreadContext(payload?.context),
     };
   }
   const route = asString(payload?.route)?.trim();

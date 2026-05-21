@@ -17,6 +17,7 @@ export type {
   OpenAppRequest,
   ShellOpenPayload,
   ThreadContext,
+  ViewerOpenPayload,
   WikiOpenPayload,
 } from "@gsv/app-link";
 
