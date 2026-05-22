@@ -135,11 +135,6 @@ function syncSourceVersions(version) {
     `"config/server/version": "${version}",`,
   );
   replaceInFile(
-    "gateway/src/drivers/native/shell.ts",
-    /const ver = ctx\.config\.get\("config\/server\/version"\) \?\? "[^"]+";/,
-    `const ver = ctx.config.get("config/server/version") ?? "${version}";`,
-  );
-  replaceInFile(
     "gateway/src/drivers/native/shell.test.ts",
     /if \(key === "config\/server\/version"\) return "[^"]+";/,
     `if (key === "config/server/version") return "${version}";`,
@@ -236,7 +231,6 @@ function managedFiles() {
     "ripgit/Cargo.lock",
     "gateway/src/kernel/do.ts",
     "gateway/src/kernel/config.ts",
-    "gateway/src/drivers/native/shell.ts",
     "gateway/src/drivers/native/shell.test.ts",
     "web/src/gateway-client.ts",
     "adapters/whatsapp/src/gateway-client.ts",
