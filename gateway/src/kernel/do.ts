@@ -101,6 +101,7 @@ type ConnectionState = {
   step: "pending" | "connected";
   identity?: ConnectionIdentity;
   clientId?: string;
+  clientPlatform?: string;
   providedTargets?: ProvidedTarget[];
 };
 
@@ -1728,6 +1729,7 @@ export class Kernel extends Host<Env> {
     const uid = outcome.identity.process.uid;
     const role = outcome.identity.role;
     const clientId = frame.args?.client?.id?.trim();
+    const clientPlatform = frame.args?.client?.platform?.trim();
     if (clientId) {
       for (const [connId, existing] of this.connections) {
         const existingState = existing.state as ConnectionState | undefined;
@@ -1749,6 +1751,7 @@ export class Kernel extends Host<Env> {
       step: "connected",
       identity: outcome.identity,
       clientId: clientId || undefined,
+      clientPlatform: clientPlatform || undefined,
     };
     connection.setState(newState);
     this.connections.set(ctx.connection.id, connection);

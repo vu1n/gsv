@@ -9,6 +9,7 @@
 import type { ProcessIdentity } from "@gsv/protocol/syscalls/system";
 import type { AiContextProfile } from "./ai";
 import type { ProcMediaInput } from "@gsv/protocol/syscalls/proc";
+import type { InteractionOrigin } from "./interaction-origin";
 
 export type ProcWorkspaceKind = "thread" | "app" | "shared";
 
@@ -74,6 +75,7 @@ export type ProcSendArgs = {
   conversationId?: string;
   message: string;
   media?: ProcMediaInput[];
+  origin?: InteractionOrigin;
 };
 
 export type ProcAbortArgs = {
@@ -142,6 +144,7 @@ export type ProcIpcDeliverArgs = {
   conversationId?: string;
   message: string;
   metadata?: ProcIpcMetadata;
+  origin?: InteractionOrigin;
   sentAt: number;
   call?: {
     callId: string;
@@ -197,6 +200,7 @@ export type ProcHistoryMessage = {
   role: "user" | "assistant" | "system" | "toolResult";
   content: unknown;
   timestamp?: number;
+  origin?: InteractionOrigin;
 };
 
 export type ProcContextPressureLevel =

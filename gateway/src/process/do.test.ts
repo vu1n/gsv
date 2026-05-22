@@ -1988,6 +1988,36 @@ describe("Process DO — mechanical", () => {
       expect(data.messages[1].content).toBe("4");
     });
 
+    it("returns persisted interaction origin metadata", async () => {
+      const pid = "mech-history-origin";
+      const stub = await initProcess(pid, ROOT_IDENTITY);
+      const origin = {
+        kind: "client",
+        connectionId: "conn-1",
+        clientId: "browser-shell",
+        platform: "web",
+      };
+
+      await runInDurableObject(stub, (instance: Process) => {
+        const store = (instance as any).store;
+        store.appendMessage("user", "from the browser", {
+          origin: JSON.stringify(origin),
+        });
+      });
+
+      const res = (await stub.recvFrame(
+        makeReq("proc.history", {}),
+      )) as ResponseOkFrame;
+
+      expect(res.ok).toBe(true);
+      const data = res.data as any;
+      expect(data.messages[0]).toMatchObject({
+        role: "user",
+        content: "from the browser",
+        origin,
+      });
+    });
+
     it("respects limit and offset", async () => {
       const pid = "mech-history-2";
       const stub = await initProcess(pid, ROOT_IDENTITY);

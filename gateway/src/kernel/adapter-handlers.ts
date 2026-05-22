@@ -24,6 +24,7 @@ import type { KernelContext } from "./context";
 import type { ProcessIdentity } from "@gsv/protocol/syscalls/system";
 import type { RequestFrame } from "../protocol/frames";
 import { sendFrameToProcess } from "../shared/utils";
+import type { InteractionOrigin } from "../syscalls/interaction-origin";
 
 type AdapterServiceBinding = Fetcher & Partial<AdapterWorkerInterface>;
 type ProcSendData = {
@@ -346,11 +347,17 @@ export async function handleAdapterInbound(
   }
 
   const incomingText = renderAdapterInboundText(adapter, message, actorId);
+  const origin = adapterInteractionOrigin(adapter, accountId, message, actorId);
   const response = await sendFrameToProcess(pid, {
     type: "req",
     id: crypto.randomUUID(),
     call: "proc.send",
-    args: { pid, message: incomingText, media: message.media },
+    args: {
+      pid,
+      message: incomingText,
+      media: message.media,
+      origin,
+    },
   } as RequestFrame);
 
   if (!response || response.type !== "res") {
@@ -523,6 +530,24 @@ function resolveActorId(message: AdapterInboundMessage): string | null {
   }
 
   return null;
+}
+
+function adapterInteractionOrigin(
+  adapter: string,
+  accountId: string,
+  message: AdapterInboundMessage,
+  actorId: string,
+): InteractionOrigin {
+  const actorLabel = message.actor?.handle?.trim() || message.actor?.name?.trim() || undefined;
+  return {
+    kind: "adapter",
+    adapter,
+    accountId,
+    surface: message.surface,
+    actorId,
+    ...(actorLabel ? { actorLabel } : {}),
+    ...(message.messageId?.trim() ? { messageId: message.messageId.trim() } : {}),
+  };
 }
 
 function renderAdapterInboundText(

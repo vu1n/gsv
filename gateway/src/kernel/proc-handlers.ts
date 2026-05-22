@@ -23,9 +23,11 @@ import type {
   ProcSpawnMountSpec,
   ProcSpawnArgs,
   ProcSpawnResult,
+  ProcSendArgs,
   ProcWorkspaceKind,
   ProcWorkspaceSpec,
 } from "../syscalls/proc";
+import type { InteractionOrigin } from "../syscalls/interaction-origin";
 import {
   isAiContextProfile,
   isSystemAiContextProfile,
@@ -225,11 +227,16 @@ export async function handleProcSpawn(
     }
 
     if (args.prompt) {
+      const origin = interactionOriginForContext(ctx);
       await sendFrameToProcess(ensured.pid, {
         type: "req",
         id: crypto.randomUUID(),
         call: "proc.send",
-        args: { pid: ensured.pid, message: args.prompt },
+        args: {
+          pid: ensured.pid,
+          message: args.prompt,
+          ...(origin ? { origin } : {}),
+        },
       });
     }
 
@@ -333,11 +340,16 @@ export async function handleProcSpawn(
   });
 
   if (args.prompt) {
+    const origin = interactionOriginForContext(ctx);
     await sendFrameToProcess(pid, {
       type: "req",
       id: crypto.randomUUID(),
       call: "proc.send",
-      args: { pid, message: args.prompt },
+      args: {
+        pid,
+        message: args.prompt,
+        ...(origin ? { origin } : {}),
+      },
     });
   }
 
@@ -356,6 +368,73 @@ function normalizeSpawnProfile(profile: ProcSpawnArgs["profile"] | undefined): A
     return "init";
   }
   return profile ?? "task";
+}
+
+function withProcSendOrigin(frame: RequestFrame, ctx: KernelContext): RequestFrame {
+  const args = (frame.args ?? {}) as ProcSendArgs & Record<string, unknown>;
+  const nextArgs: ProcSendArgs & Record<string, unknown> = { ...args };
+  const origin = interactionOriginForContext(ctx);
+  if (origin) {
+    nextArgs.origin = origin;
+  } else {
+    delete nextArgs.origin;
+  }
+  return { ...frame, args: nextArgs } as RequestFrame;
+}
+
+function interactionOriginForContext(ctx: KernelContext): InteractionOrigin | undefined {
+  if (ctx.appFrame) {
+    return {
+      kind: "app",
+      packageId: ctx.appFrame.packageId,
+      packageName: ctx.appFrame.packageName,
+      entrypointName: ctx.appFrame.entrypointName,
+      routeBase: ctx.appFrame.routeBase,
+    };
+  }
+
+  if (ctx.processId) {
+    return processInteractionOrigin(ctx.processId, ctx.identity?.process.uid);
+  }
+
+  const identity = ctx.identity;
+  if (!identity) return undefined;
+
+  if (identity.role === "driver") {
+    return {
+      kind: "device",
+      deviceId: identity.device,
+      ...(identity.process.cwd ? { cwd: identity.process.cwd } : {}),
+    };
+  }
+
+  if (identity.role === "user") {
+    const connection = ctx.connection as { id?: string; state?: unknown } | null | undefined;
+    if (!connection?.id) return undefined;
+    const state = connection.state as { clientId?: unknown; clientPlatform?: unknown } | undefined;
+    const clientId = typeof state?.clientId === "string" && state.clientId.trim()
+      ? state.clientId.trim()
+      : undefined;
+    const platform = typeof state?.clientPlatform === "string" && state.clientPlatform.trim()
+      ? state.clientPlatform.trim()
+      : undefined;
+    return {
+      kind: "client",
+      connectionId: connection.id,
+      ...(clientId ? { clientId } : {}),
+      ...(platform ? { platform } : {}),
+    };
+  }
+
+  return undefined;
+}
+
+function processInteractionOrigin(sourcePid: string, uid?: number): InteractionOrigin {
+  return {
+    kind: "process",
+    sourcePid,
+    ...(typeof uid === "number" && Number.isFinite(uid) ? { uid } : {}),
+  };
 }
 
 export async function handleProcIpcSend(
@@ -379,6 +458,7 @@ export async function handleProcIpcSend(
       conversationId: resolved.args.conversationId,
       message: resolved.args.message,
       metadata: resolved.args.metadata,
+      origin: processInteractionOrigin(resolved.sourcePid, resolved.source.uid),
       sentAt: Date.now(),
     },
   });
@@ -435,6 +515,7 @@ export async function handleProcIpcCall(
         conversationId: resolved.args.conversationId,
         message: resolved.args.message,
         metadata: resolved.args.metadata,
+        origin: processInteractionOrigin(resolved.sourcePid, resolved.source.uid),
         sentAt: Date.now(),
         call: {
           callId,
@@ -505,7 +586,10 @@ export async function forwardToProcess(
   if (frame.call === "proc.send" && proc.workspaceId) {
     ctx.workspaces.touch(proc.workspaceId);
   }
-  const response = await sendFrameToProcess(pid, frame);
+  const processFrame = frame.call === "proc.send"
+    ? withProcSendOrigin(frame, ctx)
+    : frame;
+  const response = await sendFrameToProcess(pid, processFrame);
 
   if (response && response.type === "res") {
     const res = response as ResponseFrame;
