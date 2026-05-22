@@ -1,7 +1,6 @@
 import { defineCommand, type CommandContext, type ExecResult } from "just-bash";
 import type { KernelContext } from "../../../kernel/context";
 import { handleFsCopy, type FsCopyDeviceTransport } from "../fs";
-import { requireCommandCapability } from "./common";
 
 type ShellCopyEndpoint = {
   target: string;
@@ -54,9 +53,6 @@ export function buildCpCommand(
         exitCode: 1,
       };
     }
-
-    requireCommandCapability(kernelCtx, "fs.read");
-    requireCommandCapability(kernelCtx, "fs.write");
 
     const source = parseShellCopyEndpoint(operands[0], ctx, kernelCtx);
     const destination = parseShellCopyEndpoint(operands[1], ctx, kernelCtx);

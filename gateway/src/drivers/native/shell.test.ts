@@ -362,7 +362,7 @@ describe("fs copy", () => {
 
     const result = await handleShellExec(
       { input: "cp /home/sam/copy-test/shell-source.txt /home/sam/copy-test/shell-destination.txt" },
-      makeContext({ capabilities: ["fs.read", "fs.write"] }),
+      makeContext({ capabilities: ["shell.exec"] }),
     );
 
     expect(result.ok).toBe(true);
