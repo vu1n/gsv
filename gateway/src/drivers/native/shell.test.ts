@@ -548,6 +548,78 @@ describe("fs copy", () => {
     });
     expect(await (await env.STORAGE.get(destinationKey))?.text()).toBe("hello world");
   });
+
+  it("round trips target transfers through gsv tmp", async () => {
+    const tmpKey = "tmp/browser-transfer.txt";
+    await env.STORAGE.delete(tmpKey);
+    const ctx = makeContext() as KernelContext;
+    ctx.devices = {
+      canAccess: vi.fn(() => true),
+      canHandle: vi.fn(() => true),
+    } as never;
+
+    const inbound = await handleFsCopy({
+      source: { target: "browser:source", path: "/tmp/browser-transfer.txt" },
+      destination: { target: "gsv", path: "/tmp/browser-transfer.txt" },
+    }, ctx, {
+      async requestDevice(deviceId, call, args) {
+        expect(deviceId).toBe("browser:source");
+        if (call === "fs.transfer.stat") {
+          return { ok: true, path: "/tmp/browser-transfer.txt", size: 20, isFile: true, isDirectory: false, contentType: "text/plain" };
+        }
+        expect(call).toBe("fs.transfer.read");
+        return {
+          ok: true,
+          path: "/tmp/browser-transfer.txt",
+          offset: (args as { offset: number }).offset,
+          bytesRead: 20,
+          eof: true,
+        };
+      },
+      async requestDeviceBinary(deviceId, call) {
+        expect(deviceId).toBe("browser:source");
+        expect(call).toBe("fs.transfer.read");
+        return {
+          data: { ok: true, path: "/tmp/browser-transfer.txt", offset: 0, bytesRead: 20, eof: true },
+          payload: new TextEncoder().encode("binary transfer test"),
+          flags: 3,
+          streamId: 1,
+        };
+      },
+    });
+
+    expect(inbound).toMatchObject({ ok: true, size: 20 });
+    expect(await (await env.STORAGE.get(tmpKey))?.text()).toBe("binary transfer test");
+
+    const writes: Uint8Array[] = [];
+    const outbound = await handleFsCopy({
+      source: { target: "gsv", path: "/tmp/browser-transfer.txt" },
+      destination: { target: "browser:dest", path: "/home/browser/readback.txt" },
+    }, ctx, {
+      async requestDevice(deviceId, call, args) {
+        expect(deviceId).toBe("browser:dest");
+        if (call === "fs.transfer.stat") {
+          return { ok: false, error: "not found" };
+        }
+        expect(call).toBe("fs.transfer.write");
+        return { ok: true, path: "/home/browser/readback.txt", offset: 0, bytesWritten: 0, done: Boolean((args as { done?: boolean }).done) };
+      },
+      async requestDeviceBinary(deviceId, call, args, options) {
+        expect(deviceId).toBe("browser:dest");
+        expect(call).toBe("fs.transfer.write");
+        if (!(args as { done?: boolean }).done) {
+          writes.push(options?.payload ?? new Uint8Array());
+        }
+        return {
+          data: { ok: true, path: "/home/browser/readback.txt", offset: (args as { offset: number }).offset, bytesWritten: options?.payload?.byteLength ?? 0, done: Boolean((args as { done?: boolean }).done) },
+          streamId: 1,
+        };
+      },
+    });
+
+    expect(outbound).toMatchObject({ ok: true, size: 20 });
+    expect(writes.map((chunk) => new TextDecoder().decode(chunk)).join("")).toBe("binary transfer test");
+  });
 });
 
 describe("pkg shell command", () => {

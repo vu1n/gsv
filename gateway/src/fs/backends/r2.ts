@@ -80,7 +80,7 @@ export class R2MountBackend implements MountBackend {
     }
 
     const totalSize = obj.range ? (await this.bucket.head(key))?.size ?? obj.size : obj.size;
-    const range = obj.range ? normalizeR2Range(obj.range, totalSize) : undefined;
+    const range = options?.range && obj.range ? normalizeR2Range(obj.range, totalSize) : undefined;
     return {
       body: obj.body as ReadableStream<Uint8Array>,
       size: range?.length ?? obj.size,
