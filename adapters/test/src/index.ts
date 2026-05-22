@@ -30,6 +30,7 @@ type ChannelMedia = {
   mimeType: string;
   data?: string;
   url?: string;
+  filename?: string;
 };
 
 type ChannelInboundMessage = {
@@ -48,6 +49,7 @@ type ChannelOutboundMessage = {
   peer: ChannelPeer;
   text: string;
   replyToId?: string;
+  media?: ChannelMedia[];
 };
 
 type ChannelAccountStatus = {
@@ -182,7 +184,7 @@ export class TestChannel extends WorkerEntrypoint<Env> {
   readonly capabilities: ChannelCapabilities = {
     chatTypes: ["dm", "group"],
     media: true,
-    reactions: false,
+    reactions: true,
     threads: false,
     typing: true,
     editing: false,
@@ -250,6 +252,7 @@ export class TestChannel extends WorkerEntrypoint<Env> {
       surface: ChannelPeer;
       text: string;
       replyToId?: string;
+      media?: ChannelMedia[];
     },
   ): Promise<SendResult> {
     const state = this.getStateDO(accountId);
@@ -257,6 +260,7 @@ export class TestChannel extends WorkerEntrypoint<Env> {
       peer: message.surface,
       text: message.text,
       replyToId: message.replyToId,
+      media: message.media,
     };
     await state.recordMessage("out", outbound);
     
@@ -271,6 +275,7 @@ export class TestChannel extends WorkerEntrypoint<Env> {
       surface: message.peer,
       text: message.text,
       replyToId: message.replyToId,
+      media: message.media,
     });
   }
 
@@ -293,15 +298,11 @@ export class TestChannel extends WorkerEntrypoint<Env> {
       return shellOk([
         "test adapter commands:",
         "  help",
-        "  status",
         "  send <surface-id> <text>",
         "  reply <surface-id> <message-id> <text>",
-        "  typing <surface-id> on|off",
+        "  react <surface-id> <message-id> <emoji>",
+        "  attach <surface-id> <url> [filename] [caption]",
       ].join("\n"));
-    }
-
-    if (command === "status") {
-      return shellOk(JSON.stringify((await this.adapterStatus(accountId))[0] ?? null, null, 2));
     }
 
     if (command === "send") {
@@ -331,13 +332,25 @@ export class TestChannel extends WorkerEntrypoint<Env> {
       return result.ok ? shellOk(`sent ${result.messageId ?? ""}`.trim()) : shellFail(result.error);
     }
 
-    if (command === "typing") {
-      const [surfaceId, state] = tokens.slice(1);
-      if (!surfaceId || !["on", "off"].includes(state ?? "")) {
-        return shellFail("usage: typing <surface-id> on|off");
+    if (command === "react") {
+      const [surfaceId, messageId, emoji] = tokens.slice(1);
+      if (!surfaceId || !messageId || !emoji) {
+        return shellFail("usage: react <surface-id> <message-id> <emoji>");
       }
-      await this.setTyping(accountId, { kind: "dm", id: surfaceId }, state === "on");
-      return shellOk(`typing ${state}`);
+      return shellOk(`reacted ${emoji} to ${surfaceId}/${messageId}`);
+    }
+
+    if (command === "attach") {
+      const [surfaceId, url, filename, ...captionParts] = tokens.slice(1);
+      if (!surfaceId || !url) {
+        return shellFail("usage: attach <surface-id> <url> [filename] [caption]");
+      }
+      const result = await this.adapterSend(accountId, {
+        surface: { kind: "dm", id: surfaceId },
+        text: captionParts.join(" ").trim(),
+        media: [await mediaFromUrl(url, filename)],
+      });
+      return result.ok ? shellOk(`sent ${result.messageId ?? ""}`.trim()) : shellFail(result.error);
     }
 
     return shellFail(`unknown command: ${command}`);
@@ -548,6 +561,30 @@ function parseShellWords(input: string): string[] {
     tokens.push(token.replace(/\\(["'\\])/g, "$1"));
   }
   return tokens;
+}
+
+async function mediaFromUrl(url: string, filename?: string): Promise<ChannelMedia> {
+  let mimeType = "application/octet-stream";
+  try {
+    const response = await fetch(url, { method: "HEAD" });
+    mimeType = response.headers.get("Content-Type")?.split(";")[0].trim() || mimeType;
+  } catch {
+    // Test adapter does not need to fetch the body; fall back to generic binary.
+  }
+
+  return {
+    type: mediaTypeFromMime(mimeType),
+    mimeType,
+    url,
+    ...(filename ? { filename } : {}),
+  };
+}
+
+function mediaTypeFromMime(mimeType: string): ChannelMedia["type"] {
+  if (mimeType.startsWith("image/")) return "image";
+  if (mimeType.startsWith("audio/")) return "audio";
+  if (mimeType.startsWith("video/")) return "video";
+  return "document";
 }
 
 function shellOk(output: string): ShellExecResult {

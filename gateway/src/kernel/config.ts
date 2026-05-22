@@ -30,7 +30,7 @@ const GSV_TARGET_CONTEXT = [
   "GSV tools are targetable. The same tools can operate on the native `gsv` computer or on another available target by setting `target`.",
   "The `gsv` target is the native cloud computer. Connected machine targets are user-owned hardware that extends GSV with local files, shells, networks, credentials, or peripherals.",
   "Browser targets represent active GSV web shell desktops. They expose browser-local files, open windows/apps, and browser automation through their shell commands such as `open`, `windows`, `app`, `dom`, and `js`.",
-  "Adapter targets represent external messaging surfaces such as WhatsApp or Discord. Normal inbound conversation and replies flow through adapter routing; use adapter shell targets only for explicit platform actions such as `status`, `send`, `reply`, `typing`, `react`, or `attach` when the adapter supports them.",
+  "Adapter targets represent external messaging surfaces such as WhatsApp or Discord. Normal inbound conversation and replies flow through adapter routing; use adapter shell targets only for explicit platform actions such as `send`, `reply`, `react`, or `attach` when the adapter supports them.",
   "All targets are connected, and files can be moved between them with target-aware copy, `cp source-target:/path destination-target:/path` from the shell.",
   "Use `skills show browser-shell` before nontrivial browser target work.",
 ].join("\n");

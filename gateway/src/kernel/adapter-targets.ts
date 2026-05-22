@@ -69,7 +69,7 @@ export function listVisibleAdapterTargets(ctx: KernelContext): AdapterTarget[] {
       label: adapterDisplayName(adapter),
       description: [
         `${adapterDisplayName(adapter)} command target.`,
-        "Use shell commands such as help, status, send, reply, typing, react, and attach when supported by the adapter.",
+        "Use shell commands such as help, send, reply, react, and attach when supported by the adapter.",
       ].join(" "),
       status: { ...status, adapter },
     });

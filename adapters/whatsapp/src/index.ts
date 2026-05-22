@@ -100,7 +100,7 @@ export class WhatsAppChannelEntrypoint extends WorkerEntrypoint<Env> implements 
   readonly capabilities: ChannelCapabilities = {
     chatTypes: ["dm", "group"],
     media: true,
-    reactions: false,
+    reactions: true,
     threads: false,
     typing: true,
     editing: false,
@@ -305,6 +305,33 @@ export class WhatsAppChannelEntrypoint extends WorkerEntrypoint<Env> implements 
     }
   }
 
+  async adapterReact(
+    accountId: string,
+    args: {
+      surface: ChannelPeer;
+      messageId: string;
+      emoji: string;
+      participant?: string;
+    },
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
+    try {
+      const res = await this.doFetch(accountId, "/react", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          peer: args.surface,
+          messageId: args.messageId,
+          emoji: args.emoji,
+          participant: args.participant,
+        }),
+      });
+      const data = await res.json() as { success?: boolean; error?: string };
+      return data.success ? { ok: true } : { ok: false, error: data.error || "Failed to react" };
+    } catch (e) {
+      return { ok: false, error: String(e) };
+    }
+  }
+
   async adapterShellExec(accountId: string, args: ShellExecArgs): Promise<ShellExecResult> {
     const tokens = parseShellWords(args.input);
     const command = tokens[0] ?? "help";
@@ -313,17 +340,12 @@ export class WhatsAppChannelEntrypoint extends WorkerEntrypoint<Env> implements 
       return shellOk([
         "whatsapp adapter commands:",
         "  help",
-        "  status",
         "  send <jid-or-phone> <text>",
-        "  typing <jid-or-phone> on|off",
+        "  react <jid-or-phone> <message-id> <emoji> [participant-jid]",
+        "  attach <jid-or-phone> <url> [filename] [caption]",
         "",
-        "Unsupported here: reply, react, attach.",
         "Normal back-and-forth replies should use the adapter conversation route.",
       ].join("\n"));
-    }
-
-    if (command === "status") {
-      return shellOk(JSON.stringify((await this.adapterStatus(accountId))[0] ?? null, null, 2));
     }
 
     if (command === "send") {
@@ -339,17 +361,36 @@ export class WhatsAppChannelEntrypoint extends WorkerEntrypoint<Env> implements 
       return result.ok ? shellOk(`sent ${result.messageId ?? ""}`.trim()) : shellFail(result.error);
     }
 
-    if (command === "typing") {
-      const [surfaceId, state] = tokens.slice(1);
-      if (!surfaceId || !["on", "off"].includes(state ?? "")) {
-        return shellFail("usage: typing <jid-or-phone> on|off");
+    if (command === "react") {
+      const [surfaceId, messageId, emoji, participant] = tokens.slice(1);
+      if (!surfaceId || !messageId || emoji === undefined) {
+        return shellFail("usage: react <jid-or-phone> <message-id> <emoji> [participant-jid]");
       }
-      await this.setTyping(accountId, whatsappSurface(surfaceId), state === "on");
-      return shellOk(`typing ${state}`);
+      const result = await this.adapterReact(accountId, {
+        surface: whatsappSurface(surfaceId),
+        messageId,
+        emoji,
+        participant,
+      });
+      return result.ok ? shellOk("reacted") : shellFail(result.error);
     }
 
-    if (["reply", "react", "attach"].includes(command)) {
-      return shellFail(`${command} is not implemented for WhatsApp adapter targets yet`);
+    if (command === "attach") {
+      const [surfaceId, url, filename, ...captionParts] = tokens.slice(1);
+      if (!surfaceId || !url) {
+        return shellFail("usage: attach <jid-or-phone> <url> [filename] [caption]");
+      }
+      const media = await mediaFromUrl(url, filename);
+      const result = await this.adapterSend(accountId, {
+        surface: whatsappSurface(surfaceId),
+        text: captionParts.join(" ").trim(),
+        media: [media],
+      });
+      return result.ok ? shellOk(`sent ${result.messageId ?? ""}`.trim()) : shellFail(result.error);
+    }
+
+    if (command === "reply") {
+      return shellFail("reply is handled by normal adapter conversation routing for WhatsApp");
     }
 
     return shellFail(`unknown command: ${command}`);
@@ -484,6 +525,33 @@ function whatsappSurface(id: string): ChannelPeer {
     kind: trimmed.endsWith("@g.us") ? "group" : "dm",
     id: trimmed,
   };
+}
+
+async function mediaFromUrl(
+  url: string,
+  filename?: string,
+): Promise<NonNullable<ChannelOutboundMessage["media"]>[number]> {
+  let mimeType = "application/octet-stream";
+  try {
+    const response = await fetch(url, { method: "HEAD" });
+    mimeType = response.headers.get("Content-Type")?.split(";")[0].trim() || mimeType;
+  } catch {
+    // The send path can still fetch the URL later; content type falls back.
+  }
+
+  return {
+    type: mediaTypeFromMime(mimeType),
+    mimeType,
+    url,
+    ...(filename ? { filename } : {}),
+  };
+}
+
+function mediaTypeFromMime(mimeType: string): NonNullable<ChannelOutboundMessage["media"]>[number]["type"] {
+  if (mimeType.startsWith("image/")) return "image";
+  if (mimeType.startsWith("audio/")) return "audio";
+  if (mimeType.startsWith("video/")) return "video";
+  return "document";
 }
 
 function shellOk(output: string): ShellExecResult {

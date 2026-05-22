@@ -160,7 +160,7 @@ Adapter workers should keep owning platform-specific behavior:
 - inbound event normalization through `adapter.inbound`
 - outbound delivery through `adapter.send`
 - account/auth state through adapter control syscalls
-- platform-specific commands such as send, reply, react, upload, or typing
+- platform-specific commands such as send, reply, react, or attach
 
 We should not pretend that an adapter account is a mounted phone filesystem.
 WhatsApp does not provide generic `fs.read` access to the user's phone. The
@@ -208,8 +208,7 @@ Status: implemented.
   example "available: WhatsApp, Discord".
 - Keep account identifiers and linked external actor IDs out of the main
   agent-facing surface unless needed for a specific operation.
-- Add adapter-specific command surfaces for send, reply, react, attach, typing,
-  and status.
+- Add adapter-specific command surfaces for send, reply, react, and attach.
 - Keep generic `adapter.*` syscalls as adapter control/ingress paths.
 
 Current adapter command targets use existing target descriptors:
@@ -230,18 +229,17 @@ flow through `adapter.inbound` and the kernel run-route machinery. Adapter shell
 commands are for explicit platform actions such as:
 
 ```bash
-status
 send <surface-id> <text>
 reply <surface-id> <message-id> <text>
-typing <surface-id> on|off
 react <surface-id> <message-id> <emoji>
 attach <surface-id> <url> [filename] [caption]
 ```
 
 Each adapter may support only the commands its platform can actually implement.
-For example, Discord can send, reply, react, type, and attach URL-backed media;
-WhatsApp currently exposes status, send, and typing, while reply/react/attach
-return explicit unsupported-command errors.
+For example, Discord can send, reply, react, and attach URL-backed media.
+WhatsApp can send, react, and attach URL-backed media; normal reply flow should
+still use `adapter.inbound` and kernel run routes because quoted WhatsApp replies
+need richer message-key context than a bare shell message id.
 
 ### Batch 4: Unified Target Provider
 

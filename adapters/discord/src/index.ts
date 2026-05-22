@@ -284,17 +284,11 @@ export class DiscordChannel extends WorkerEntrypoint<Env> implements ChannelWork
       return shellOk([
         "discord adapter commands:",
         "  help",
-        "  status",
         "  send <channel-id> <text>",
         "  reply <channel-id> <message-id> <text>",
-        "  typing <channel-id> on",
         "  react <channel-id> <message-id> <emoji>",
         "  attach <channel-id> <url> [filename] [caption]",
       ].join("\n"));
-    }
-
-    if (command === "status") {
-      return shellOk(JSON.stringify((await this.adapterStatus(accountId))[0] ?? null, null, 2));
     }
 
     if (command === "send") {
@@ -322,15 +316,6 @@ export class DiscordChannel extends WorkerEntrypoint<Env> implements ChannelWork
         replyToId: messageId,
       });
       return result.ok ? shellOk(`sent ${result.messageId ?? ""}`.trim()) : shellFail(result.error);
-    }
-
-    if (command === "typing") {
-      const [channelId, state] = tokens.slice(1);
-      if (!channelId || state !== "on") {
-        return shellFail("usage: typing <channel-id> on");
-      }
-      await this.setTyping(accountId, discordSurface(channelId), true);
-      return shellOk("typing on");
     }
 
     if (command === "react") {

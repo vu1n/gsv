@@ -207,7 +207,7 @@ describe("dispatch", () => {
       type: "req",
       id: "req_adapter",
       call: "shell.exec",
-      args: { target: "adapter:whatsapp:primary", input: "status" },
+      args: { target: "adapter:whatsapp:primary", input: "send +15551234567 hello" },
     } as RequestFrame<"shell.exec">;
 
     const result = await dispatch(
@@ -234,7 +234,7 @@ describe("dispatch", () => {
         },
       },
     });
-    expect(adapterShellExec).toHaveBeenCalledWith("primary", { input: "status" });
+    expect(adapterShellExec).toHaveBeenCalledWith("primary", { input: "send +15551234567 hello" });
     expect(deps.routingTable.register).not.toHaveBeenCalled();
   });
 });
