@@ -14,7 +14,7 @@ import type { Connection } from "agents";
 import type { RequestFrame, ResponseFrame } from "../protocol/frames";
 import type { SyscallName } from "../syscalls";
 import type { KernelContext } from "./context";
-import type { RoutingTable, RouteOrigin } from "./routing";
+import type { RouteOrigin } from "./routing";
 import type { ShellSessionRecord, ShellSessionStore } from "./shell-sessions";
 import {
   handleFsRead,
@@ -121,10 +121,15 @@ import {
 } from "./targets";
 
 export type DispatchDeps = {
-  routingTable: RoutingTable;
   shellSessions: ShellSessionStore;
   connections: Map<string, Connection>;
-  scheduleExpiry: (id: string, ttlMs: number) => void;
+  registerRoute: (route: {
+    id: string;
+    call: SyscallName;
+    origin: RouteOrigin;
+    deviceId: string;
+    ttlMs: number;
+  }) => Promise<{ cancel: () => void }>;
   requestDevice: (deviceId: string, call: string, args: unknown, ttlMs?: number) => Promise<unknown>;
 };
 
@@ -568,13 +573,22 @@ async function routeToTarget(
     };
   }
 
-  deps.routingTable.register(
-    frame.id,
-    frame.call,
-    origin,
-    target.targetId,
-    { ttlMs: DEFAULT_DEVICE_TTL_MS },
-  );
+  let route: { cancel: () => void };
+  try {
+    route = await deps.registerRoute({
+      id: frame.id,
+      call: frame.call,
+      origin,
+      deviceId: target.targetId,
+      ttlMs: DEFAULT_DEVICE_TTL_MS,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      handled: true,
+      response: errFrame(frame.id, 500, `Failed to register route for ${frame.call}: ${message}`),
+    };
+  }
 
   try {
     deviceConn.send(JSON.stringify({
@@ -584,11 +598,13 @@ async function routeToTarget(
       args: frame.args,
     }));
   } catch (error) {
-    deps.routingTable.expire(frame.id);
-    throw error;
+    route.cancel();
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      handled: true,
+      response: errFrame(frame.id, 500, `Failed to send ${frame.call} to device ${target.targetId}: ${message}`),
+    };
   }
-
-  deps.scheduleExpiry(frame.id, DEFAULT_DEVICE_TTL_MS);
 
   return { handled: false };
 }

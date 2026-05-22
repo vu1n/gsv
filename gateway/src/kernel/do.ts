@@ -1228,34 +1228,54 @@ export class Kernel extends Host<Env> {
 
   private buildDispatchDeps(): DispatchDeps {
     return {
-      routingTable: this.routes,
       shellSessions: this.shellSessions,
       connections: this.connections,
-      scheduleExpiry: (id: string, ttlMs: number) => {
-        this.scheduleRouteExpiry(id, ttlMs);
-      },
+      registerRoute: this.registerRouteWithExpiry.bind(this),
       requestDevice: this.requestDevice.bind(this),
     };
   }
 
-  private scheduleRouteExpiry(routeId: string, ttlMs: number): void {
-    this.schedule(
+  private async registerRouteWithExpiry(route: {
+    id: string;
+    call: SyscallName;
+    origin: RouteOrigin;
+    deviceId: string;
+    ttlMs: number;
+  }): Promise<{ cancel: () => void }> {
+    const scheduleId = await this.scheduleRouteExpiry(route.id, route.ttlMs);
+
+    try {
+      this.routes.register(
+        route.id,
+        route.call,
+        route.origin,
+        route.deviceId,
+        { ttlMs: route.ttlMs, scheduleId },
+      );
+    } catch (error) {
+      this.cancelSchedule(scheduleId).catch(() => {});
+      throw error;
+    }
+
+    return {
+      cancel: () => this.cancelRoute(route.id),
+    };
+  }
+
+  private async scheduleRouteExpiry(routeId: string, ttlMs: number): Promise<string> {
+    const sched = await this.schedule(
       ttlMs / 1000,
       "onRouteExpired",
       routeId,
-    )
-      .then((sched) => {
-        const attached = this.routes.setScheduleId(routeId, sched.id);
-        if (!attached) {
-          this.cancelSchedule(sched.id).catch(() => {});
-        }
-      })
-      .catch((error) => {
-        console.warn(
-          `[Kernel] Failed to schedule route expiry for ${routeId}:`,
-          error,
-        );
-      });
+    );
+    return sched.id;
+  }
+
+  private cancelRoute(routeId: string): void {
+    const route = this.routes.remove(routeId);
+    if (route?.scheduleId) {
+      this.cancelSchedule(route.scheduleId).catch(() => {});
+    }
   }
 
   private async requestDevice(
@@ -1280,15 +1300,15 @@ export class Kernel extends Host<Env> {
     const id = crypto.randomUUID();
     const pending = this.createPendingAppResponse(id);
 
-    this.routes.register(
-      id,
-      call as SyscallName,
-      { type: "app", id },
-      deviceId,
-      { ttlMs },
-    );
-
     try {
+      const route = await this.registerRouteWithExpiry({
+        id,
+        call: call as SyscallName,
+        origin: { type: "app", id },
+        deviceId,
+        ttlMs,
+      });
+
       try {
         deviceConn.send(JSON.stringify({
           type: "req",
@@ -1297,10 +1317,9 @@ export class Kernel extends Host<Env> {
           args,
         }));
       } catch (error) {
-        this.routes.expire(id);
+        route.cancel();
         throw error;
       }
-      this.scheduleRouteExpiry(id, ttlMs);
       const frame = await pending.promise;
       if (!frame.ok) {
         throw new Error(frame.error.message);

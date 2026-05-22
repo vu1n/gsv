@@ -69,7 +69,7 @@ export class RoutingTable {
     );
   }
 
-  consume(id: string): { origin: RouteOrigin; call: SyscallName; deviceId: string; scheduleId: string | null } | null {
+  remove(id: string): { origin: RouteOrigin; call: SyscallName; deviceId: string; scheduleId: string | null } | null {
     const rows = [...this.sql.exec<{
       origin_type: string;
       origin_id: string;
@@ -94,13 +94,8 @@ export class RoutingTable {
     };
   }
 
-  setScheduleId(id: string, scheduleId: string): boolean {
-    const existing = this.get(id);
-    if (!existing) {
-      return false;
-    }
-    this.sql.exec("UPDATE routing_table SET schedule_id = ? WHERE id = ?", scheduleId, id);
-    return true;
+  consume(id: string): { origin: RouteOrigin; call: SyscallName; deviceId: string; scheduleId: string | null } | null {
+    return this.remove(id);
   }
 
   get(id: string): RouteEntry | null {
