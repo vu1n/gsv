@@ -195,6 +195,20 @@ function packageScopeKey(scope: InstalledPackageRecord["scope"]): string {
   }
 }
 
+describe("native shell execution", () => {
+  it("keeps command stderr visible on non-zero exits", async () => {
+    const result = await handleShellExec(
+      { input: "printf 'real failure\\n' >&2; exit 7" },
+      makeContext(),
+    );
+
+    expect(result.status).toBe("failed");
+    expect(result.exitCode).toBe(7);
+    expect(result.stderr).toContain("real failure");
+    expect(result.error).toContain("real failure");
+  });
+});
+
 describe("targets native command", () => {
   it("lists targets with pagination and keeps devices as an alias", async () => {
     const records = [

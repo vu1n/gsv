@@ -101,7 +101,9 @@ export async function handleShellExec(
       status: "failed",
       output,
       exitCode: result.exitCode,
-      error: `Command exited with code ${result.exitCode}`,
+      error: stderr.trim().length > 0
+        ? stderr.trim()
+        : `Command exited with code ${result.exitCode}`,
       truncated,
       ok: true,
       pid: 0,
