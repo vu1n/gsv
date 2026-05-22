@@ -368,12 +368,13 @@ async fn handle_driver_request(
     workspace: &Path,
     req: &RequestFrame,
     logger: &NodeLogger,
+    binary_inbox: &transfer::BinaryFrameInbox,
 ) {
     let args = req.args.clone().unwrap_or(serde_json::Value::Null);
 
     let call = req.call.as_str();
     let result = if let Some(transfer_result) =
-        transfer::handle_transfer_syscall(call, args.clone(), workspace).await
+        transfer::handle_transfer_syscall(call, args.clone(), workspace, conn, binary_inbox).await
     {
         transfer_result
     } else if let Some(tool_name) = syscall_to_tool_name(call) {
@@ -650,11 +651,18 @@ pub(crate) async fn run_node(
         );
 
         let conn = Arc::new(conn);
+        let binary_inbox = transfer::BinaryFrameInbox::new();
+        let binary_inbox_for_handler = binary_inbox.clone();
+        conn.set_binary_handler(move |data| {
+            binary_inbox_for_handler.push(data);
+        })
+        .await;
 
         let conn_clone = conn.clone();
         let tools_clone = tools_for_handler.clone();
         let workspace_clone = workspace.clone();
         let logger_clone = logger.clone();
+        let binary_inbox_clone = binary_inbox.clone();
 
         // In the new OS architecture, the kernel sends req frames directly to
         // the driver. We dispatch based on `call` and respond with a res frame.
@@ -663,10 +671,12 @@ pub(crate) async fn run_node(
             let tools = tools_clone.clone();
             let workspace = workspace_clone.clone();
             let logger = logger_clone.clone();
+            let binary_inbox = binary_inbox_clone.clone();
 
             tokio::spawn(async move {
                 if let Frame::Req(req) = frame {
-                    handle_driver_request(&conn, &tools, &workspace, &req, &logger).await;
+                    handle_driver_request(&conn, &tools, &workspace, &req, &logger, &binary_inbox)
+                        .await;
                 }
             });
         })

@@ -130,7 +130,21 @@ export type DispatchDeps = {
     deviceId: string;
     ttlMs: number;
   }) => Promise<{ cancel: () => void }>;
+  registerBinaryRoute: (route: {
+    requestId: string;
+    streamId: number;
+    origin: RouteOrigin;
+    deviceId: string;
+    ttlMs: number;
+  }) => { cancel: () => void };
   requestDevice: (deviceId: string, call: string, args: unknown, ttlMs?: number) => Promise<unknown>;
+  requestDeviceBinary: (
+    deviceId: string,
+    call: string,
+    args: unknown,
+    options?: { payload?: Uint8Array; receive?: boolean; streamId?: number },
+    ttlMs?: number,
+  ) => Promise<{ data: unknown; payload?: Uint8Array; flags?: number; streamId: number }>;
 };
 
 export type DispatchResult =
@@ -251,7 +265,10 @@ async function dispatchNative(
         data = await handleFsSearch(frame.args, ctx);
         break;
       case "fs.copy":
-        data = await handleFsCopy(frame.args, ctx, { requestDevice: deps.requestDevice });
+        data = await handleFsCopy(frame.args, ctx, {
+          requestDevice: deps.requestDevice,
+          requestDeviceBinary: deps.requestDeviceBinary,
+        });
         break;
       case "fs.transfer.stat":
         data = await handleFsTransferStat(frame.args, ctx);
@@ -261,7 +278,12 @@ async function dispatchNative(
         break;
 
       case "shell.exec":
-        data = await handleShellExec(frame.args, ctx, { fsCopyTransport: { requestDevice: deps.requestDevice } });
+        data = await handleShellExec(frame.args, ctx, {
+          fsCopyTransport: {
+            requestDevice: deps.requestDevice,
+            requestDeviceBinary: deps.requestDeviceBinary,
+          },
+        });
         break;
 
       case "codemode.run":
@@ -574,6 +596,7 @@ async function routeToTarget(
   }
 
   let route: { cancel: () => void };
+  let binaryRoute: { cancel: () => void } | null = null;
   try {
     route = await deps.registerRoute({
       id: frame.id,
@@ -582,6 +605,16 @@ async function routeToTarget(
       deviceId: target.targetId,
       ttlMs: DEFAULT_DEVICE_TTL_MS,
     });
+    const streamId = transferStreamId(frame.call, frame.args);
+    if (streamId !== null) {
+      binaryRoute = deps.registerBinaryRoute({
+        requestId: frame.id,
+        streamId,
+        origin,
+        deviceId: target.targetId,
+        ttlMs: DEFAULT_DEVICE_TTL_MS,
+      });
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {
@@ -599,6 +632,7 @@ async function routeToTarget(
     }));
   } catch (error) {
     route.cancel();
+    binaryRoute?.cancel();
     const message = error instanceof Error ? error.message : String(error);
     return {
       handled: true,
@@ -607,6 +641,20 @@ async function routeToTarget(
   }
 
   return { handled: false };
+}
+
+function transferStreamId(call: string, args: unknown): number | null {
+  if (call !== "fs.transfer.read" && call !== "fs.transfer.write") {
+    return null;
+  }
+  if (!args || typeof args !== "object") {
+    return null;
+  }
+  const value = (args as { streamId?: unknown }).streamId;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0 || value > 0xffffffff) {
+    return null;
+  }
+  return value;
 }
 
 async function routeToAdapterShell(

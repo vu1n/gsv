@@ -6,6 +6,10 @@ import type {
   NotificationCreateResult,
   NotificationLevel,
 } from "@gsv/protocol/syscalls/notification";
+import {
+  BINARY_FRAME_DATA,
+  BINARY_FRAME_END,
+} from "@gsv/protocol/binary-frame";
 import { buildBrowserCommands } from "./browser-target-commands";
 import { BrowserRuntimeFileSystem } from "./browser-runtime-fs";
 import { BrowserTargetFileSystem } from "./browser-target-fs";
@@ -59,12 +63,13 @@ type TransferReadArgs = {
   path?: unknown;
   offset?: unknown;
   length?: unknown;
+  streamId?: unknown;
 };
 
 type TransferWriteArgs = {
   path?: unknown;
   offset?: unknown;
-  data?: unknown;
+  streamId?: unknown;
   expectedSize?: unknown;
   contentType?: unknown;
   done?: unknown;
@@ -87,7 +92,6 @@ type TransferReadResult =
       path: string;
       offset: number;
       bytesRead: number;
-      data: string;
       eof: boolean;
     }
   | { ok: false; error?: string };
@@ -390,17 +394,21 @@ export class BrowserTargetShell {
     }
     const offset = parseNonNegativeInteger(args.offset) ?? 0;
     const length = Math.min(parseNonNegativeInteger(args.length) ?? MAX_TRANSFER_READ_BYTES, MAX_TRANSFER_READ_BYTES);
+    const streamId = parseStreamId(args.streamId);
+    if (streamId === null) {
+      return { ok: false, error: "fs.transfer.read requires streamId" };
+    }
 
     try {
       const bytes = await this.getFs().readFileBuffer(path.path);
       const end = Math.min(offset + length, bytes.byteLength);
       const chunk = offset >= bytes.byteLength ? new Uint8Array() : bytes.subarray(offset, end);
+      this.gatewayClient.sendBinaryFrame(streamId, BINARY_FRAME_DATA | BINARY_FRAME_END, chunk);
       return {
         ok: true,
         path: path.path,
         offset,
         bytesRead: chunk.byteLength,
-        data: encodeBase64Bytes(chunk),
         eof: end >= bytes.byteLength,
       };
     } catch (error) {
@@ -421,12 +429,17 @@ export class BrowserTargetShell {
     if (expectedSize === null) {
       return { ok: false, error: "fs.transfer.write requires expectedSize" };
     }
-    if (typeof args.data !== "string") {
-      return { ok: false, error: "fs.transfer.write requires base64 data" };
+    const streamId = parseStreamId(args.streamId);
+    if (streamId === null) {
+      return { ok: false, error: "fs.transfer.write requires streamId" };
     }
 
     try {
-      const bytes = decodeBase64Bytes(args.data);
+      const frame = await this.gatewayClient.waitForBinaryFrame(streamId);
+      if ((frame.flags & BINARY_FRAME_DATA) === 0) {
+        return { ok: false, error: "fs.transfer.write binary frame did not include data" };
+      }
+      const bytes = frame.payload;
       await this.writeLocalChunk(path.path, offset, bytes);
 
       if (args.done === true) {
@@ -854,19 +867,35 @@ export class BrowserTargetShell {
     let offset = 0;
 
     while (offset < size) {
-      const result = await this.gatewayClient.call<TransferReadResult>("fs.transfer.read", this.withEndpointTarget(endpoint, {
-        path: endpoint.path,
-        offset,
-        length: Math.min(MAX_TRANSFER_READ_BYTES, size - offset),
-      }));
+      const streamId = this.gatewayClient.allocateBinaryStreamId();
+      const binary = this.gatewayClient.waitForBinaryFrame(streamId);
+      let result: TransferReadResult;
+      try {
+        result = await this.gatewayClient.call<TransferReadResult>("fs.transfer.read", this.withEndpointTarget(endpoint, {
+          path: endpoint.path,
+          offset,
+          length: Math.min(MAX_TRANSFER_READ_BYTES, size - offset),
+          streamId,
+        }));
+      } catch (error) {
+        this.gatewayClient.cancelBinaryFrame(streamId, error instanceof Error ? error.message : "Remote transfer read failed");
+        binary.catch(() => undefined);
+        throw error;
+      }
       if (!result.ok) {
+        this.gatewayClient.cancelBinaryFrame(streamId, result.error ?? "Remote transfer read failed");
+        binary.catch(() => undefined);
         throw new Error(result.error ?? `Unable to read ${endpoint.target}:${endpoint.path}`);
       }
       if (result.bytesRead <= 0 && !result.eof) {
         throw new Error(`Read zero bytes before EOF from ${endpoint.target}:${endpoint.path}`);
       }
+      const frame = await binary;
+      if ((frame.flags & BINARY_FRAME_DATA) === 0) {
+        throw new Error(`fs.transfer.read from ${endpoint.target}:${endpoint.path} did not include data`);
+      }
       if (result.bytesRead > 0) {
-        const chunk = decodeBase64Bytes(result.data);
+        const chunk = frame.payload;
         chunks.push(chunk);
         total += chunk.byteLength;
         offset += result.bytesRead;
@@ -1165,6 +1194,13 @@ function parsePathArg(value: unknown, syscall: string): { ok: true; path: string
   return { ok: true, path: normalizePath(value) };
 }
 
+function parseStreamId(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0 || value > 0xffffffff) {
+    return null;
+  }
+  return value;
+}
+
 function parseCopyEndpoint(
   value: FsCopyEndpoint | undefined,
   name: "source" | "destination",
@@ -1305,15 +1341,6 @@ function encodeBase64Bytes(bytes: Uint8Array): string {
     binary += String.fromCharCode(...chunk);
   }
   return btoa(binary);
-}
-
-function decodeBase64Bytes(data: string): Uint8Array {
-  const binary = atob(data);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return bytes;
 }
 
 function failedFs(error: unknown): unknown {

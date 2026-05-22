@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:test";
 import { handleShellExec } from "./shell";
 import { handleFsCopy, handleFsTransferRead } from "./fs";
-import { decodeBase64Bytes } from "../../shared/base64";
+import { parseBinaryFrame } from "@gsv/protocol/binary-frame";
 import type { KernelContext } from "../../kernel/context";
 import type { DeviceRecord } from "../../kernel/devices";
 import type { ProcessIdentity } from "@gsv/protocol/syscalls/system";
@@ -300,11 +300,20 @@ describe("fs copy", () => {
       customMetadata: { uid: "1000", gid: "1000", mode: "644" },
     });
 
+    const sent: unknown[] = [];
+    const ctx = makeContext();
+    ctx.connection = {
+      send(message: unknown) {
+        sent.push(message);
+      },
+    } as never;
+
     const result = await handleFsTransferRead({
       path: "/home/sam/copy-test/ranged-source.txt",
       offset: 2,
       length: 4,
-    }, makeContext());
+      streamId: 123,
+    }, ctx);
 
     expect(result).toMatchObject({
       ok: true,
@@ -313,7 +322,10 @@ describe("fs copy", () => {
       bytesRead: 4,
       eof: false,
     });
-    expect(new TextDecoder().decode(decodeBase64Bytes(result.ok ? result.data : ""))).toBe("2345");
+    expect(sent).toHaveLength(1);
+    const frame = parseBinaryFrame(sent[0] as ArrayBuffer);
+    expect(frame).toMatchObject({ streamId: 123 });
+    expect(new TextDecoder().decode(frame?.payload)).toBe("2345");
   });
 
   it("copies gsv files through the fs.copy syscall", async () => {
@@ -372,7 +384,7 @@ describe("fs copy", () => {
       canHandle: vi.fn(() => true),
       listForUser: vi.fn(() => [{ device_id: browserTarget }]),
     } as never;
-    const writes: Array<{ offset: number; data: string; done?: boolean }> = [];
+    const writes: Array<{ offset: number; bytes: Uint8Array; done?: boolean }> = [];
 
     const result = await handleShellExec(
       { input: `cp /home/sam/copy-test/browser-source.txt ${browserTarget}:/home/browser/browser-destination.txt` },
@@ -385,8 +397,20 @@ describe("fs copy", () => {
               return { ok: false, error: "not found" };
             }
             expect(call).toBe("fs.transfer.write");
-            writes.push(args as { offset: number; data: string; done?: boolean });
             return { ok: true, path: "/home/browser/browser-destination.txt", offset: 0, bytesWritten: 0, done: Boolean((args as { done?: boolean }).done) };
+          },
+          async requestDeviceBinary(deviceId, call, args, options) {
+            expect(deviceId).toBe(browserTarget);
+            expect(call).toBe("fs.transfer.write");
+            writes.push({
+              offset: (args as { offset: number }).offset,
+              bytes: options?.payload ?? new Uint8Array(),
+              done: (args as { done?: boolean }).done,
+            });
+            return {
+              data: { ok: true, path: "/home/browser/browser-destination.txt", offset: 0, bytesWritten: options?.payload?.byteLength ?? 0, done: Boolean((args as { done?: boolean }).done) },
+              streamId: 1,
+            };
           },
         },
       },
@@ -397,7 +421,7 @@ describe("fs copy", () => {
     expect(writes.length).toBeGreaterThan(0);
     const payload = writes
       .filter((write) => !write.done)
-      .map((write) => atob(write.data))
+      .map((write) => new TextDecoder().decode(write.bytes))
       .join("");
     expect(payload).toBe("to browser");
   });
@@ -414,7 +438,7 @@ describe("fs copy", () => {
       canAccess: vi.fn(() => true),
       canHandle: vi.fn(() => true),
     } as never;
-    const writes: Array<{ offset: number; data: string; done?: boolean }> = [];
+    const writes: Array<{ offset: number; bytes: Uint8Array; done?: boolean }> = [];
 
     const result = await handleFsCopy({
       source: { target: "gsv", path: "/home/sam/copy-test/device-source.txt" },
@@ -426,8 +450,20 @@ describe("fs copy", () => {
           return { ok: false, error: "not found" };
         }
         expect(call).toBe("fs.transfer.write");
-        writes.push(args as { offset: number; data: string; done?: boolean });
         return { ok: true, path: "/tmp/device-destination.txt", offset: 0, bytesWritten: 0, done: Boolean((args as { done?: boolean }).done) };
+      },
+      async requestDeviceBinary(deviceId, call, args, options) {
+        expect(deviceId).toBe("rearden");
+        expect(call).toBe("fs.transfer.write");
+        writes.push({
+          offset: (args as { offset: number }).offset,
+          bytes: options?.payload ?? new Uint8Array(),
+          done: (args as { done?: boolean }).done,
+        });
+        return {
+          data: { ok: true, path: "/tmp/device-destination.txt", offset: 0, bytesWritten: options?.payload?.byteLength ?? 0, done: Boolean((args as { done?: boolean }).done) },
+          streamId: 1,
+        };
       },
     });
 
@@ -438,7 +474,7 @@ describe("fs copy", () => {
     });
     const payload = writes
       .filter((write) => !write.done)
-      .map((write) => atob(write.data))
+      .map((write) => new TextDecoder().decode(write.bytes))
       .join("");
     expect(payload).toBe("to device");
     expect(writes.at(-1)?.done).toBe(true);
@@ -463,15 +499,30 @@ describe("fs copy", () => {
           return { ok: true, path: "/tmp/source.txt", size: 11, isFile: true, isDirectory: false, contentType: "text/plain" };
         }
         expect(call).toBe("fs.transfer.read");
-        const offset = (args as { offset: number }).offset;
-        const text = "hello world".slice(offset);
         return {
           ok: true,
           path: "/tmp/source.txt",
-          offset,
-          bytesRead: text.length,
-          data: btoa(text),
+          offset: (args as { offset: number }).offset,
+          bytesRead: 0,
           eof: true,
+        };
+      },
+      async requestDeviceBinary(deviceId, call, args) {
+        expect(deviceId).toBe("rearden");
+        expect(call).toBe("fs.transfer.read");
+        const offset = (args as { offset: number }).offset;
+        const text = "hello world".slice(offset);
+        return {
+          data: {
+            ok: true,
+            path: "/tmp/source.txt",
+            offset,
+            bytesRead: text.length,
+            eof: true,
+          },
+          payload: new TextEncoder().encode(text),
+          flags: 3,
+          streamId: 1,
         };
       },
     });

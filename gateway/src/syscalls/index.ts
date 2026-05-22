@@ -9,6 +9,8 @@ import type {
   FsTransferReadResult,
   FsTransferStatArgs,
   FsTransferStatResult,
+  FsTransferWriteArgs,
+  FsTransferWriteResult,
 } from "./transfer";
 import type {
   ShellExecArgs,
@@ -244,6 +246,7 @@ export type SyscallDomains = {
   "fs.copy": { args: FsCopyArgs; result: FsCopyResult };
   "fs.transfer.stat": { args: FsTransferStatArgs; result: FsTransferStatResult };
   "fs.transfer.read": { args: FsTransferReadArgs; result: FsTransferReadResult };
+  "fs.transfer.write": { args: FsTransferWriteArgs; result: FsTransferWriteResult };
 
   // Shell (device commands)
   "shell.exec": { args: ShellExecArgs; result: ShellExecResult };

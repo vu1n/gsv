@@ -17,6 +17,7 @@ export type FsTransferReadArgs = {
   path: string;
   offset?: number;
   length?: number;
+  streamId?: number;
 };
 
 export type FsTransferReadResult =
@@ -25,7 +26,26 @@ export type FsTransferReadResult =
       path: string;
       offset: number;
       bytesRead: number;
-      data: string;
       eof: boolean;
+    }
+  | { ok: false; error: string };
+
+export type FsTransferWriteArgs = {
+  path: string;
+  offset?: number;
+  expectedSize: number;
+  contentType?: string;
+  done?: boolean;
+  streamId?: number;
+};
+
+export type FsTransferWriteResult =
+  | {
+      ok: true;
+      path: string;
+      offset: number;
+      bytesWritten: number;
+      done: boolean;
+      contentType?: string;
     }
   | { ok: false; error: string };

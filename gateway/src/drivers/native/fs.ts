@@ -37,7 +37,11 @@ import type {
   FsTransferStatArgs,
   FsTransferStatResult,
 } from "../../syscalls/transfer";
-import { decodeBase64Bytes, encodeBase64Bytes } from "../../shared/base64";
+import {
+  BINARY_FRAME_DATA,
+  BINARY_FRAME_END,
+  buildBinaryFrame,
+} from "@gsv/protocol/binary-frame";
 
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const COPY_CHUNK_SIZE = 512 * 1024;
@@ -50,6 +54,13 @@ export type FsCopyDeviceTransport = {
     args: unknown,
     ttlMs?: number,
   ): Promise<unknown>;
+  requestDeviceBinary(
+    deviceId: string,
+    call: string,
+    args: unknown,
+    options?: { payload?: Uint8Array; receive?: boolean; streamId?: number },
+    ttlMs?: number,
+  ): Promise<{ data: unknown; payload?: Uint8Array; flags?: number; streamId: number }>;
 };
 
 type TransferStatResult =
@@ -69,7 +80,6 @@ type TransferReadResult =
       path: string;
       offset: number;
       bytesRead: number;
-      data: string;
       eof: boolean;
     }
   | { ok: false; error: string };
@@ -280,6 +290,13 @@ export async function handleFsTransferRead(
     normalizeTransferNumber(args.length, TRANSFER_READ_CHUNK_SIZE),
     TRANSFER_READ_CHUNK_SIZE,
   );
+  const streamId = normalizeTransferStreamId(args.streamId);
+  if (streamId === null) {
+    return { ok: false, error: "fs.transfer.read requires streamId" };
+  }
+  if (!ctx.connection || typeof ctx.connection.send !== "function") {
+    return { ok: false, error: "fs.transfer.read requires an active WebSocket connection" };
+  }
   const path = resolve(rawPath, ctx);
 
   try {
@@ -289,12 +306,12 @@ export async function handleFsTransferRead(
     }
 
     if (length === 0 || offset >= stat.size) {
+      ctx.connection.send(buildBinaryFrame(streamId, BINARY_FRAME_DATA | BINARY_FRAME_END));
       return {
         ok: true,
         path,
         offset,
         bytesRead: 0,
-        data: "",
         eof: true,
       };
     }
@@ -306,12 +323,12 @@ export async function handleFsTransferRead(
     const chunk = opened.body
       ? await streamToBytes(opened.body, opened.size)
       : new Uint8Array();
+    ctx.connection.send(buildBinaryFrame(streamId, BINARY_FRAME_DATA | BINARY_FRAME_END, chunk));
     return {
       ok: true,
       path,
       offset,
       bytesRead: chunk.byteLength,
-      data: encodeBase64Bytes(chunk),
       eof: offset + chunk.byteLength >= stat.size,
     };
   } catch (error) {
@@ -695,7 +712,7 @@ async function readDeviceChunk(
   offset: number,
   length: number,
 ): Promise<Uint8Array> {
-  const result = await requestDeviceResult<TransferReadResult>(
+  const transfer = await requestDeviceBinaryResult<TransferReadResult>(
     transport,
     source.target,
     "fs.transfer.read",
@@ -704,11 +721,16 @@ async function readDeviceChunk(
       offset,
       length,
     },
+    { receive: true },
   );
+  const result = transfer.data;
   if (!result.ok) {
     throw new Error(result.error);
   }
-  return decodeBase64Bytes(result.data);
+  if ((transfer.flags ?? 0) & BINARY_FRAME_DATA) {
+    return transfer.payload ?? new Uint8Array();
+  }
+  throw new Error(`fs.transfer.read from ${source.target}:${source.path} did not include data`);
 }
 
 async function writeDeviceChunk(
@@ -720,21 +742,21 @@ async function writeDeviceChunk(
   contentType: string | undefined,
   done: boolean,
 ): Promise<void> {
-  const result = await requestDeviceResult<TransferWriteResult>(
+  const result = await requestDeviceBinaryResult<TransferWriteResult>(
     transport,
     destination.target,
     "fs.transfer.write",
     {
       path: destination.path,
       offset,
-      data: encodeBase64Bytes(bytes),
       expectedSize,
       contentType,
       done,
     },
+    { payload: bytes },
   );
-  if (!result.ok) {
-    throw new Error(result.error);
+  if (!result.data.ok) {
+    throw new Error(result.data.error);
   }
 }
 
@@ -745,6 +767,22 @@ async function requestDeviceResult<T>(
   args: unknown,
 ): Promise<T> {
   return (await transport.requestDevice(deviceId, call, args, 60_000)) as T;
+}
+
+async function requestDeviceBinaryResult<T>(
+  transport: FsCopyDeviceTransport,
+  deviceId: string,
+  call: string,
+  args: unknown,
+  options: { payload?: Uint8Array; receive?: boolean },
+): Promise<{ data: T; payload?: Uint8Array; flags?: number; streamId: number }> {
+  const result = await transport.requestDeviceBinary(deviceId, call, args, options, 60_000);
+  return {
+    data: result.data as T,
+    ...(result.payload ? { payload: result.payload } : {}),
+    ...(typeof result.flags === "number" ? { flags: result.flags } : {}),
+    streamId: result.streamId,
+  };
 }
 
 function splitCopyChunk(chunk: Uint8Array): Uint8Array[] {
@@ -829,6 +867,13 @@ function normalizeTransferNumber(value: unknown, fallback: number): number {
     return fallback;
   }
   return Math.max(0, Math.floor(value));
+}
+
+function normalizeTransferStreamId(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0 || value > 0xffffffff) {
+    return null;
+  }
+  return value;
 }
 
 function normalizeCopyEndpoint(
