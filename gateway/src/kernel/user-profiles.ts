@@ -4,10 +4,14 @@ import {
   GsvFs,
   normalizePath,
 } from "../fs";
-import type { ContextFile } from "../syscalls/ai";
+import {
+  isUserAiContextProfile,
+  type ContextFile,
+} from "../syscalls/ai";
 import type { KernelContext } from "./context";
 
 const USER_PROFILE_ROOT = "profiles.d";
+const RESERVED_USER_PROFILE_NAMES = new Set(["personal"]);
 
 export type UserAiProfile = {
   id: string;
@@ -34,12 +38,17 @@ export async function resolveUserAiProfile(
   ctx: KernelContext,
   profile: string,
 ): Promise<UserAiProfile | null> {
+  const normalizedProfile = normalizeUserProfileName(profile);
+  if (!normalizedProfile || normalizedProfile !== profile) {
+    return null;
+  }
+
   const fs = createProfileFs(ctx);
   if (!fs) {
     return null;
   }
 
-  const root = userProfilePath(ctx.identity!.process, profile);
+  const root = userProfilePath(ctx.identity!.process, normalizedProfile);
   if (!(await isDirectory(fs, root))) {
     return null;
   }
@@ -48,8 +57,8 @@ export async function resolveUserAiProfile(
   const description = metadata.description ?? await readDescription(fs, root);
 
   return {
-    id: profile,
-    displayName: metadata.displayName ?? titleFromProfileId(profile),
+    id: normalizedProfile,
+    displayName: metadata.displayName ?? titleFromProfileId(normalizedProfile),
     ...(description ? { description } : {}),
     ...(metadata.icon ? { icon: metadata.icon } : {}),
     interactive: metadata.interactive ?? true,
@@ -92,7 +101,10 @@ export function normalizeUserProfileName(value: unknown): string | null {
     return null;
   }
   const trimmed = value.trim();
-  return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/.test(trimmed) ? trimmed : null;
+  if (RESERVED_USER_PROFILE_NAMES.has(trimmed)) {
+    return null;
+  }
+  return isUserAiContextProfile(trimmed) ? trimmed : null;
 }
 
 function createProfileFs(ctx: KernelContext): GsvFs | null {
