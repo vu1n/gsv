@@ -494,6 +494,52 @@ describe("fs copy", () => {
     expect(writes.at(-1)?.done).toBe(true);
   });
 
+  it("allows transfer-only device targets without fs.copy", async () => {
+    const sourceKey = "home/sam/copy-test/transfer-only-source.txt";
+    await env.STORAGE.delete(sourceKey);
+    await env.STORAGE.put(sourceKey, "transfer only", {
+      customMetadata: { uid: "1000", gid: "1000", mode: "644" },
+    });
+    const canHandle = vi.fn((_deviceId: string, syscall: string) =>
+      syscall === "fs.transfer.stat" || syscall === "fs.transfer.write"
+    );
+    const ctx = makeContext() as KernelContext;
+    ctx.devices = {
+      canAccess: vi.fn(() => true),
+      canHandle,
+    } as never;
+    const writes: Uint8Array[] = [];
+
+    const result = await handleFsCopy({
+      source: { target: "gsv", path: "/home/sam/copy-test/transfer-only-source.txt" },
+      destination: { target: "browser:target", path: "/tmp/transfer-only.txt" },
+    }, ctx, {
+      async requestDevice(deviceId, call) {
+        expect(deviceId).toBe("browser:target");
+        expect(call).toBe("fs.transfer.stat");
+        return { ok: false, error: "not found" };
+      },
+      async requestDeviceBinary(deviceId, call, args, options) {
+        expect(deviceId).toBe("browser:target");
+        expect(call).toBe("fs.transfer.write");
+        if (!(args as { done?: boolean }).done) {
+          writes.push(options?.payload ?? new Uint8Array());
+        }
+        return {
+          data: { ok: true, path: "/tmp/transfer-only.txt", offset: (args as { offset: number }).offset, bytesWritten: options?.payload?.byteLength ?? 0, done: Boolean((args as { done?: boolean }).done) },
+          streamId: 1,
+        };
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      destination: { target: "browser:target", path: "/tmp/transfer-only.txt" },
+    });
+    expect(canHandle).not.toHaveBeenCalledWith("browser:target", "fs.copy");
+    expect(writes.map((chunk) => new TextDecoder().decode(chunk)).join("")).toBe("transfer only");
+  });
+
   it("streams device files to gsv", async () => {
     const destinationKey = "home/sam/copy-test/from-device.txt";
     await env.STORAGE.delete(destinationKey);

@@ -365,24 +365,15 @@ export async function handleFsCopy(
   try {
     const source = normalizeCopyEndpoint(args.source, ctx);
     let destination = normalizeCopyEndpoint(args.destination, ctx);
-    assertCanUseCopyEndpoint(source, ctx);
-    assertCanUseCopyEndpoint(destination, ctx);
+    assertCanAccessCopyEndpoint(source, ctx);
+    assertCanAccessCopyEndpoint(destination, ctx);
 
-    if (destination.target === "gsv") {
+    if (source.target === "gsv" && destination.target === "gsv") {
       destination = await resolveGsvDestinationDirectory(
         source,
         destination,
         ctx,
       );
-    } else if (transport) {
-      destination = await resolveDeviceDestinationDirectory(
-        source,
-        destination,
-        transport,
-      );
-    }
-
-    if (source.target === "gsv" && destination.target === "gsv") {
       return await copyGsvToGsv(source, destination, ctx);
     }
 
@@ -398,17 +389,48 @@ export async function handleFsCopy(
       destination.target !== "gsv" &&
       source.target === destination.target
     ) {
-      return await copyOnDevice(source, destination, transport);
+      if (ctx.devices.canHandle(source.target, "fs.copy")) {
+        assertCanUseDeviceCapabilities(source, ctx, ["fs.copy"]);
+        return await copyOnDevice(source, destination, transport);
+      }
+    }
+
+    if (destination.target === "gsv") {
+      destination = await resolveGsvDestinationDirectory(
+        source,
+        destination,
+        ctx,
+      );
+    } else {
+      assertCanUseDeviceCapabilities(destination, ctx, ["fs.transfer.stat"]);
+      destination = await resolveDeviceDestinationDirectory(
+        source,
+        destination,
+        transport,
+      );
     }
 
     if (source.target === "gsv") {
+      assertCanUseDeviceCapabilities(destination, ctx, ["fs.transfer.write"]);
       return await copyGsvToDevice(source, destination, ctx, transport);
     }
 
     if (destination.target === "gsv") {
+      assertCanUseDeviceCapabilities(source, ctx, [
+        "fs.transfer.stat",
+        "fs.transfer.read",
+      ]);
       return await copyDeviceToGsv(source, destination, ctx, transport);
     }
 
+    assertCanUseDeviceCapabilities(source, ctx, [
+      "fs.transfer.stat",
+      "fs.transfer.read",
+    ]);
+    assertCanUseDeviceCapabilities(destination, ctx, [
+      "fs.transfer.stat",
+      "fs.transfer.write",
+    ]);
     return await copyDeviceToDevice(source, destination, transport);
   } catch (err) {
     return {
@@ -895,7 +917,7 @@ function normalizeCopyEndpoint(
   };
 }
 
-function assertCanUseCopyEndpoint(
+function assertCanAccessCopyEndpoint(
   endpoint: Required<FsCopyEndpoint>,
   ctx: KernelContext,
 ): void {
@@ -906,8 +928,20 @@ function assertCanUseCopyEndpoint(
   if (!ctx.devices.canAccess(endpoint.target, identity.uid, identity.gids)) {
     throw new Error(`Access denied to device: ${endpoint.target}`);
   }
-  if (!ctx.devices.canHandle(endpoint.target, "fs.copy")) {
-    throw new Error(`Device ${endpoint.target} does not implement fs.copy`);
+}
+
+function assertCanUseDeviceCapabilities(
+  endpoint: Required<FsCopyEndpoint>,
+  ctx: KernelContext,
+  syscalls: string[],
+): void {
+  if (endpoint.target === "gsv") {
+    return;
+  }
+  for (const syscall of syscalls) {
+    if (!ctx.devices.canHandle(endpoint.target, syscall)) {
+      throw new Error(`Device ${endpoint.target} does not implement ${syscall}`);
+    }
   }
 }
 
