@@ -3,6 +3,8 @@ import type {
   AdapterInboundMessage,
   AdapterAccountStatus,
   AdapterOutboundMessage,
+  AdapterShellExecArgs,
+  AdapterShellExecResult,
   AdapterSurface,
   AdapterWorkerInterface,
 } from "../adapter-interface";
@@ -25,6 +27,7 @@ import type { ProcessIdentity } from "@gsv/protocol/syscalls/system";
 import type { RequestFrame } from "../protocol/frames";
 import { sendFrameToProcess } from "../shared/utils";
 import type { InteractionOrigin } from "../syscalls/interaction-origin";
+import { isVisibleAdapterTarget } from "./adapter-targets";
 
 type AdapterServiceBinding = Fetcher & Partial<AdapterWorkerInterface>;
 type ProcSendData = {
@@ -184,6 +187,37 @@ export async function handleAdapterSend(
     surfaceId: args.surface.id,
     messageId: result.messageId,
   };
+}
+
+export async function handleAdapterShellExec(
+  adapter: string,
+  accountId: string,
+  args: unknown,
+  ctx: KernelContext,
+): Promise<AdapterShellExecResult> {
+  const normalizedAdapter = adapter.trim().toLowerCase();
+  const normalizedAccountId = accountId.trim();
+  if (!normalizedAdapter) {
+    return failedShellResult("adapter is required");
+  }
+  if (!normalizedAccountId) {
+    return failedShellResult("accountId is required");
+  }
+  if (!isVisibleAdapterTarget(ctx, normalizedAdapter, normalizedAccountId)) {
+    throw new Error(`Access denied to adapter target: ${normalizedAdapter}`);
+  }
+
+  const service = resolveAdapterService(ctx.env, normalizedAdapter);
+  if (!service || typeof service.adapterShellExec !== "function") {
+    return failedShellResult(`Adapter does not expose shell commands: ${normalizedAdapter}`);
+  }
+
+  const execArgs = normalizeAdapterShellArgs(args);
+  if (!execArgs.input.trim()) {
+    return completedShellResult("");
+  }
+
+  return service.adapterShellExec(normalizedAccountId, execArgs);
 }
 
 export async function handleAdapterStatus(
@@ -488,6 +522,43 @@ async function refreshAdapterStatus(
     console.error(`[adapter.status] refresh failed adapter=${adapter} accountId=${accountId}`, error);
     return null;
   }
+}
+
+function normalizeAdapterShellArgs(args: unknown): AdapterShellExecArgs {
+  const raw = args && typeof args === "object" ? args as Record<string, unknown> : {};
+  return {
+    input: typeof raw.input === "string" ? raw.input : "",
+    ...(typeof raw.cwd === "string" ? { cwd: raw.cwd } : {}),
+    ...(typeof raw.sessionId === "string" ? { sessionId: raw.sessionId } : {}),
+    ...(typeof raw.timeout === "number" ? { timeout: raw.timeout } : {}),
+    ...(typeof raw.background === "boolean" ? { background: raw.background } : {}),
+    ...(typeof raw.yieldMs === "number" ? { yieldMs: raw.yieldMs } : {}),
+  };
+}
+
+function completedShellResult(output: string): AdapterShellExecResult {
+  return {
+    status: "completed",
+    output,
+    exitCode: 0,
+    ok: true,
+    pid: 0,
+    stdout: output,
+    stderr: "",
+  };
+}
+
+function failedShellResult(error: string): AdapterShellExecResult {
+  return {
+    status: "failed",
+    output: error,
+    error,
+    exitCode: 1,
+    ok: false,
+    pid: 0,
+    stdout: "",
+    stderr: error,
+  };
 }
 
 function identityForUid(uid: number, ctx: KernelContext): ProcessIdentity | null {

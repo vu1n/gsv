@@ -10,9 +10,21 @@ import type {
   SysDeviceSummary,
 } from "@gsv/protocol/syscalls/system";
 import type { DeviceRecord } from "../devices";
+import {
+  adapterTargetToDeviceDetail,
+  adapterTargetToDeviceSummary,
+  getVisibleAdapterTarget,
+  listVisibleAdapterTargets,
+  parseAdapterTargetId,
+} from "../adapter-targets";
 
 function ownerUsername(record: DeviceRecord, ctx: KernelContext): string | null {
   return ctx.auth?.getPasswdByUid(record.owner_uid)?.username ?? null;
+}
+
+function currentUsername(ctx: KernelContext): string | null {
+  const username = ctx.identity?.process.username;
+  return username ?? null;
 }
 
 function toSummary(record: DeviceRecord, ctx: KernelContext): SysDeviceSummary {
@@ -54,9 +66,16 @@ export function handleSysDeviceList(
   const includeOffline = raw.includeOffline === true;
   const all = ctx.devices.listForUser(identity.uid, identity.gids);
   const visible = includeOffline ? all : all.filter((device) => device.online);
+  const adapterTargets = listVisibleAdapterTargets(ctx)
+    .filter((target) => includeOffline || (target.status.connected && target.status.authenticated));
 
   return {
-    devices: visible.map((device) => toSummary(device, ctx)),
+    devices: [
+      ...visible.map((device) => toSummary(device, ctx)),
+      ...adapterTargets.map((target) =>
+        adapterTargetToDeviceSummary(target, identity.uid, currentUsername(ctx))
+      ),
+    ],
   };
 }
 
@@ -73,6 +92,15 @@ export function handleSysDeviceGet(
   const deviceId = typeof raw.deviceId === "string" ? raw.deviceId.trim() : "";
   if (!deviceId) {
     throw new Error("sys.device.get requires deviceId");
+  }
+
+  if (parseAdapterTargetId(deviceId)) {
+    const target = getVisibleAdapterTarget(ctx, deviceId);
+    return {
+      device: target
+        ? adapterTargetToDeviceDetail(target, identity.uid, currentUsername(ctx))
+        : null,
+    };
   }
 
   if (!ctx.devices.canAccess(deviceId, identity.uid, identity.gids)) {

@@ -96,9 +96,11 @@ import {
   handleAdapterDisconnect,
   handleAdapterInbound,
   handleAdapterSend,
+  handleAdapterShellExec,
   handleAdapterStateUpdate,
   handleAdapterStatus,
 } from "./adapter-handlers";
+import { parseAdapterTargetId } from "./adapter-targets";
 import {
   handleNotificationCreate,
   handleNotificationDismiss,
@@ -181,6 +183,31 @@ export async function dispatch(
     }
     delete raw.target;
     return routeToDevice(frame, session.deviceId, origin, ctx, deps);
+  }
+
+  if (target && frame.call === "shell.exec") {
+    const adapterTarget = parseAdapterTargetId(target);
+    if (adapterTarget) {
+      delete raw.target;
+      try {
+        const data = await handleAdapterShellExec(
+          adapterTarget.adapter,
+          adapterTarget.accountId,
+          frame.args,
+          ctx,
+        );
+        return {
+          handled: true,
+          response: { type: "res", id: frame.id, ok: true, data },
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+          handled: true,
+          response: errFrame(frame.id, message.startsWith("Access denied") ? 403 : 500, message),
+        };
+      }
+    }
   }
 
   if (target && target !== "gsv" && isRoutable(frame.call)) {

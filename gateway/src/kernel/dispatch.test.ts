@@ -138,4 +138,103 @@ describe("dispatch", () => {
     expect(scheduleExpiry).not.toHaveBeenCalled();
     expect(routingTable.register).not.toHaveBeenCalled();
   });
+
+  it("routes adapter shell targets through adapter workers", async () => {
+    const adapterShellExec = vi.fn(async () => ({
+      status: "completed" as const,
+      output: "ok",
+      exitCode: 0,
+      ok: true as const,
+      pid: 0,
+      stdout: "ok",
+      stderr: "",
+    }));
+    const deps = {
+      routingTable: { register: vi.fn() },
+      connections: new Map(),
+      scheduleExpiry: vi.fn(),
+      shellSessions: {
+        get: vi.fn(),
+      },
+    } as unknown as DispatchDeps;
+    const ctx = {
+      identity: {
+        role: "user",
+        process: {
+          uid: 1000,
+          gid: 1000,
+          gids: [1000],
+          username: "sam",
+          home: "/home/sam",
+          cwd: "/home/sam",
+          workspaceId: null,
+        },
+        capabilities: ["*"],
+      },
+      env: {
+        CHANNEL_WHATSAPP: { adapterShellExec },
+      },
+      devices: {
+        canAccess: vi.fn(),
+        get: vi.fn(),
+        canHandle: vi.fn(),
+      },
+      adapters: {
+        identityLinks: {
+          list: vi.fn(() => [{
+            adapter: "whatsapp",
+            accountId: "primary",
+            actorId: "wa:jid:123@s.whatsapp.net",
+            uid: 1000,
+            createdAt: 1,
+            linkedByUid: 1000,
+            metadata: null,
+          }]),
+        },
+        status: {
+          list: vi.fn(() => [{
+            adapter: "whatsapp",
+            accountId: "primary",
+            connected: true,
+            authenticated: true,
+            mode: "websocket",
+            updatedAt: 2,
+          }]),
+        },
+      },
+    } as unknown as KernelContext;
+    const frame = {
+      type: "req",
+      id: "req_adapter",
+      call: "shell.exec",
+      args: { target: "adapter:whatsapp:primary", input: "status" },
+    } as RequestFrame<"shell.exec">;
+
+    const result = await dispatch(
+      frame,
+      { type: "app", id: "app_1" },
+      ctx,
+      deps,
+    );
+
+    expect(result).toEqual({
+      handled: true,
+      response: {
+        type: "res",
+        id: "req_adapter",
+        ok: true,
+        data: {
+          status: "completed",
+          output: "ok",
+          exitCode: 0,
+          ok: true,
+          pid: 0,
+          stdout: "ok",
+          stderr: "",
+        },
+      },
+    });
+    expect(adapterShellExec).toHaveBeenCalledWith("primary", { input: "status" });
+    expect(deps.routingTable.register).not.toHaveBeenCalled();
+  });
 });

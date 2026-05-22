@@ -71,6 +71,27 @@ type ChannelCapabilities = {
 type StartResult = { ok: true } | { ok: false; error: string };
 type StopResult = { ok: true } | { ok: false; error: string };
 type SendResult = { ok: true; messageId?: string } | { ok: false; error: string };
+type ShellExecArgs = { input: string };
+type ShellExecResult =
+  | {
+      status: "completed";
+      output: string;
+      exitCode: number;
+      ok: true;
+      pid: number;
+      stdout: string;
+      stderr: string;
+    }
+  | {
+      status: "failed";
+      output: string;
+      error: string;
+      exitCode: number;
+      ok: false;
+      pid: number;
+      stdout: string;
+      stderr: string;
+    };
 
 type GatewayChannelBinding = Fetcher & {
   channelInbound: (
@@ -263,6 +284,63 @@ export class TestChannel extends WorkerEntrypoint<Env> {
 
   async setTyping(_accountId: string, _peer: ChannelPeer, _typing: boolean): Promise<void> {
     // No-op
+  }
+
+  async adapterShellExec(accountId: string, args: ShellExecArgs): Promise<ShellExecResult> {
+    const tokens = parseShellWords(args.input);
+    const command = tokens[0] ?? "help";
+    if (command === "help") {
+      return shellOk([
+        "test adapter commands:",
+        "  help",
+        "  status",
+        "  send <surface-id> <text>",
+        "  reply <surface-id> <message-id> <text>",
+        "  typing <surface-id> on|off",
+      ].join("\n"));
+    }
+
+    if (command === "status") {
+      return shellOk(JSON.stringify((await this.adapterStatus(accountId))[0] ?? null, null, 2));
+    }
+
+    if (command === "send") {
+      const [surfaceId, ...textParts] = tokens.slice(1);
+      const text = textParts.join(" ").trim();
+      if (!surfaceId || !text) {
+        return shellFail("usage: send <surface-id> <text>");
+      }
+      const result = await this.adapterSend(accountId, {
+        surface: { kind: "dm", id: surfaceId },
+        text,
+      });
+      return result.ok ? shellOk(`sent ${result.messageId ?? ""}`.trim()) : shellFail(result.error);
+    }
+
+    if (command === "reply") {
+      const [surfaceId, messageId, ...textParts] = tokens.slice(1);
+      const text = textParts.join(" ").trim();
+      if (!surfaceId || !messageId || !text) {
+        return shellFail("usage: reply <surface-id> <message-id> <text>");
+      }
+      const result = await this.adapterSend(accountId, {
+        surface: { kind: "dm", id: surfaceId },
+        text,
+        replyToId: messageId,
+      });
+      return result.ok ? shellOk(`sent ${result.messageId ?? ""}`.trim()) : shellFail(result.error);
+    }
+
+    if (command === "typing") {
+      const [surfaceId, state] = tokens.slice(1);
+      if (!surfaceId || !["on", "off"].includes(state ?? "")) {
+        return shellFail("usage: typing <surface-id> on|off");
+      }
+      await this.setTyping(accountId, { kind: "dm", id: surfaceId }, state === "on");
+      return shellOk(`typing ${state}`);
+    }
+
+    return shellFail(`unknown command: ${command}`);
   }
 
   // =========================================================================
@@ -460,3 +538,39 @@ export default {
     return new Response("Not Found", { status: 404 });
   },
 };
+
+function parseShellWords(input: string): string[] {
+  const tokens: string[] = [];
+  const pattern = /"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'|(\S+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(input.trim())) !== null) {
+    const token = match[1] ?? match[2] ?? match[3] ?? "";
+    tokens.push(token.replace(/\\(["'\\])/g, "$1"));
+  }
+  return tokens;
+}
+
+function shellOk(output: string): ShellExecResult {
+  return {
+    status: "completed",
+    output,
+    exitCode: 0,
+    ok: true,
+    pid: 0,
+    stdout: output,
+    stderr: "",
+  };
+}
+
+function shellFail(error: string): ShellExecResult {
+  return {
+    status: "failed",
+    output: error,
+    error,
+    exitCode: 1,
+    ok: false,
+    pid: 0,
+    stdout: "",
+    stderr: error,
+  };
+}

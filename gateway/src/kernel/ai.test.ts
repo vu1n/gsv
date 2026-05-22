@@ -104,6 +104,49 @@ describe("handleAiTools", () => {
     expect(result.mcpServers).toEqual([]);
     expect(ctx.mcp.listTools).not.toHaveBeenCalled();
   });
+
+  it("advertises visible adapter targets through the routable Shell target list", async () => {
+    const ctx = {
+      ...makeContext("ready"),
+      env: {
+        CHANNEL_WHATSAPP: { adapterShellExec: vi.fn() },
+      },
+      adapters: {
+        identityLinks: {
+          list: vi.fn(() => [{
+            adapter: "whatsapp",
+            accountId: "primary",
+            actorId: "wa:jid:123@s.whatsapp.net",
+            uid: 1000,
+            createdAt: 1,
+            linkedByUid: 1000,
+            metadata: null,
+          }]),
+        },
+        status: {
+          list: vi.fn(() => [{
+            adapter: "whatsapp",
+            accountId: "primary",
+            connected: true,
+            authenticated: true,
+            mode: "websocket",
+            updatedAt: 2,
+          }]),
+        },
+      },
+    } as unknown as KernelContext;
+
+    const result = await handleAiTools(ctx);
+
+    expect(result.devices).toContainEqual(expect.objectContaining({
+      id: "adapter:whatsapp:primary",
+      label: "WhatsApp",
+      platform: "adapter",
+      implements: ["shell.exec"],
+    }));
+    const shell = result.tools.find((tool) => tool.name === "Shell");
+    expect(JSON.stringify(shell?.inputSchema)).toContain("adapter:whatsapp:primary");
+  });
 });
 
 describe("handleAiTranscriptionCreate", () => {

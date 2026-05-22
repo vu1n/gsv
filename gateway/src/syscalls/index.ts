@@ -417,7 +417,7 @@ export function intoSyscallTool(
     );
   }
 
-  const deviceList = devices.length > 0 ? devices.join(", ") : "none";
+  const targetList = devices.length > 0 ? devices.join(", ") : "none";
 
   const targetRequired = tool.name !== "Shell";
 
@@ -430,7 +430,7 @@ export function intoSyscallTool(
         ...properties,
         target: {
           type: "string",
-          description: `Target device to execute on. Use "gsv" to execute on the cloud or use one of the accessible online devices: ${deviceList}`,
+          description: `Target to execute on. Use "gsv" to execute on the cloud or use one of the accessible online targets: ${targetList}`,
         },
       },
       required: targetRequired ? [...required, "target"] : required,

@@ -71,6 +71,7 @@ import {
   normalizeSpeechTextFormat,
 } from "../inference/speech-text";
 import { collectPromptSkillIndex } from "./skills";
+import { adapterTargetToAiDevice, listVisibleAdapterTargets } from "./adapter-targets";
 
 const SYSCALL_TOOLS: Record<string, ToolDefinition> = {
   "fs.read": FS_READ_DEFINITION,
@@ -109,6 +110,10 @@ export async function handleAiTools(
       platform: device.platform || undefined,
       lifecycle: device.lifecycle,
     });
+  }
+  for (const target of listVisibleAdapterTargets(ctx)) {
+    deviceIds.push(target.targetId);
+    onlineDevices.push(adapterTargetToAiDevice(target));
   }
 
   const tools: ToolDefinition[] = [];

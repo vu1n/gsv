@@ -63,6 +63,28 @@ import type {
 
 export { WhatsAppAccount } from "./whatsapp-account";
 
+type ShellExecArgs = { input: string };
+type ShellExecResult =
+  | {
+      status: "completed";
+      output: string;
+      exitCode: number;
+      ok: true;
+      pid: number;
+      stdout: string;
+      stderr: string;
+    }
+  | {
+      status: "failed";
+      output: string;
+      error: string;
+      exitCode: number;
+      ok: false;
+      pid: number;
+      stdout: string;
+      stderr: string;
+    };
+
 interface Env {
   WHATSAPP_ACCOUNT: DurableObjectNamespace;
 }
@@ -283,6 +305,56 @@ export class WhatsAppChannelEntrypoint extends WorkerEntrypoint<Env> implements 
     }
   }
 
+  async adapterShellExec(accountId: string, args: ShellExecArgs): Promise<ShellExecResult> {
+    const tokens = parseShellWords(args.input);
+    const command = tokens[0] ?? "help";
+
+    if (command === "help") {
+      return shellOk([
+        "whatsapp adapter commands:",
+        "  help",
+        "  status",
+        "  send <jid-or-phone> <text>",
+        "  typing <jid-or-phone> on|off",
+        "",
+        "Unsupported here: reply, react, attach.",
+        "Normal back-and-forth replies should use the adapter conversation route.",
+      ].join("\n"));
+    }
+
+    if (command === "status") {
+      return shellOk(JSON.stringify((await this.adapterStatus(accountId))[0] ?? null, null, 2));
+    }
+
+    if (command === "send") {
+      const [surfaceId, ...textParts] = tokens.slice(1);
+      const text = textParts.join(" ").trim();
+      if (!surfaceId || !text) {
+        return shellFail("usage: send <jid-or-phone> <text>");
+      }
+      const result = await this.adapterSend(accountId, {
+        surface: whatsappSurface(surfaceId),
+        text,
+      });
+      return result.ok ? shellOk(`sent ${result.messageId ?? ""}`.trim()) : shellFail(result.error);
+    }
+
+    if (command === "typing") {
+      const [surfaceId, state] = tokens.slice(1);
+      if (!surfaceId || !["on", "off"].includes(state ?? "")) {
+        return shellFail("usage: typing <jid-or-phone> on|off");
+      }
+      await this.setTyping(accountId, whatsappSurface(surfaceId), state === "on");
+      return shellOk(`typing ${state}`);
+    }
+
+    if (["reply", "react", "attach"].includes(command)) {
+      return shellFail(`${command} is not implemented for WhatsApp adapter targets yet`);
+    }
+
+    return shellFail(`unknown command: ${command}`);
+  }
+
   async login(accountId: string, options?: { force?: boolean; traceId?: string }): Promise<LoginResult> {
     try {
       const traceId = options?.traceId?.trim() || "no-trace";
@@ -394,3 +466,47 @@ export default {
     return new Response("Not Found", { status: 404 });
   },
 };
+
+function parseShellWords(input: string): string[] {
+  const tokens: string[] = [];
+  const pattern = /"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'|(\S+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(input.trim())) !== null) {
+    const token = match[1] ?? match[2] ?? match[3] ?? "";
+    tokens.push(token.replace(/\\(["'\\])/g, "$1"));
+  }
+  return tokens;
+}
+
+function whatsappSurface(id: string): ChannelPeer {
+  const trimmed = id.trim();
+  return {
+    kind: trimmed.endsWith("@g.us") ? "group" : "dm",
+    id: trimmed,
+  };
+}
+
+function shellOk(output: string): ShellExecResult {
+  return {
+    status: "completed",
+    output,
+    exitCode: 0,
+    ok: true,
+    pid: 0,
+    stdout: output,
+    stderr: "",
+  };
+}
+
+function shellFail(error: string): ShellExecResult {
+  return {
+    status: "failed",
+    output: error,
+    error,
+    exitCode: 1,
+    ok: false,
+    pid: 0,
+    stdout: "",
+    stderr: error,
+  };
+}

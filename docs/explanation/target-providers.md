@@ -202,6 +202,8 @@ Status: implemented.
 
 ### Batch 3: Adapter Availability And Commands
 
+Status: implemented.
+
 - Expose per-user adapter availability as a simple capability surface, for
   example "available: WhatsApp, Discord".
 - Keep account identifiers and linked external actor IDs out of the main
@@ -209,6 +211,37 @@ Status: implemented.
 - Add adapter-specific command surfaces for send, reply, react, attach, typing,
   and status.
 - Keep generic `adapter.*` syscalls as adapter control/ingress paths.
+
+Current adapter command targets use existing target descriptors:
+
+```text
+adapter:<adapter>:<accountId>
+```
+
+They advertise `shell.exec` only and appear in the same target lists as browser
+and native-device targets. The label shown to users and agents is the adapter
+name, such as `WhatsApp` or `Discord`; the target id carries the account
+selector only because execution needs it. Adapter workers own their command
+surface. Gateway only decides whether the current user may see the target and
+routes `shell.exec` to the adapter worker.
+
+Normal inbound messages, media, voice, documents, and route-aware replies still
+flow through `adapter.inbound` and the kernel run-route machinery. Adapter shell
+commands are for explicit platform actions such as:
+
+```bash
+status
+send <surface-id> <text>
+reply <surface-id> <message-id> <text>
+typing <surface-id> on|off
+react <surface-id> <message-id> <emoji>
+attach <surface-id> <url> [filename] [caption]
+```
+
+Each adapter may support only the commands its platform can actually implement.
+For example, Discord can send, reply, react, type, and attach URL-backed media;
+WhatsApp currently exposes status, send, and typing, while reply/react/attach
+return explicit unsupported-command errors.
 
 ### Batch 4: Unified Target Provider
 

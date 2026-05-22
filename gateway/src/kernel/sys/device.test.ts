@@ -127,6 +127,49 @@ describe("sys.device handlers", () => {
     expect(result.devices.map((device) => device.deviceId)).toEqual(["node-alpha", "node-beta"]);
   });
 
+  it("includes visible adapter command targets", () => {
+    const ctx = {
+      ...makeContext(1000, []),
+      env: {
+        CHANNEL_WHATSAPP: { adapterShellExec: () => undefined },
+      },
+      adapters: {
+        identityLinks: {
+          list: () => [{
+            adapter: "whatsapp",
+            accountId: "primary",
+            actorId: "wa:jid:123@s.whatsapp.net",
+            uid: 1000,
+            createdAt: 1,
+            linkedByUid: 1000,
+            metadata: null,
+          }],
+        },
+        status: {
+          list: () => [{
+            adapter: "whatsapp",
+            accountId: "primary",
+            connected: true,
+            authenticated: true,
+            mode: "websocket",
+            updatedAt: 2,
+          }],
+        },
+      },
+    } as unknown as KernelContext;
+
+    const result = handleSysDeviceList({}, ctx);
+
+    expect(result.devices).toEqual([
+      expect.objectContaining({
+        deviceId: "adapter:whatsapp:primary",
+        label: "WhatsApp",
+        platform: "adapter",
+        online: true,
+      }),
+    ]);
+  });
+
   it("returns null for inaccessible device details", () => {
     const ctx = makeContext(1001, records);
     const result = handleSysDeviceGet({ deviceId: "node-alpha" }, ctx);
@@ -150,6 +193,48 @@ describe("sys.device handlers", () => {
     expect(result.device?.ownerUid).toBe(1000);
     expect(result.device?.label).toBe("Alpha");
     expect(result.device?.description).toBe("Linux home server");
+  });
+
+  it("returns details for visible adapter command targets", () => {
+    const ctx = {
+      ...makeContext(1000, []),
+      env: {
+        CHANNEL_DISCORD: { adapterShellExec: () => undefined },
+      },
+      adapters: {
+        identityLinks: {
+          list: () => [{
+            adapter: "discord",
+            accountId: "ops",
+            actorId: "discord:user:1",
+            uid: 1000,
+            createdAt: 1,
+            linkedByUid: 1000,
+            metadata: null,
+          }],
+        },
+        status: {
+          list: () => [{
+            adapter: "discord",
+            accountId: "ops",
+            connected: true,
+            authenticated: true,
+            mode: "gateway",
+            updatedAt: 2,
+          }],
+        },
+      },
+    } as unknown as KernelContext;
+
+    const result = handleSysDeviceGet({ deviceId: "adapter:discord:ops" }, ctx);
+
+    expect(result.device).toMatchObject({
+      deviceId: "adapter:discord:ops",
+      label: "Discord",
+      platform: "adapter",
+      implements: ["shell.exec"],
+      online: true,
+    });
   });
 
   it("lets owners update device descriptions", () => {

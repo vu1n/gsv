@@ -80,6 +80,14 @@ export class AdapterStatusStore {
       adapter,
     ).toArray().map(toRecord);
   }
+
+  listAll(): AdapterStatusRecord[] {
+    return this.sql.exec<RowShape>(
+      `SELECT adapter, account_id, connected, authenticated, mode, last_activity, error, extra_json, updated_at
+       FROM adapter_status
+       ORDER BY adapter ASC, updated_at DESC`,
+    ).toArray().map(toRecord);
+  }
 }
 
 type RowShape = {
