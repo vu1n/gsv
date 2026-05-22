@@ -279,11 +279,11 @@ explicit capture strategy.
 
 ### Batch 6: Browser Filesystem
 
-- Add ZenFS to the browser target.
-- Mount in-memory `/tmp`.
-- Mount persistent IndexedDB-backed `/home` or `/browser`.
-- Keep live desktop/app paths as synthetic mounts.
-- Decide whether browser-local files should sync or remain local-only by default.
+- ZenFS backs the browser target's persistent local filesystem.
+- `/home/browser` is persistent when IndexedDB is available.
+- `/tmp` is a separate in-memory scratch mount and is cleared when the browser target restarts.
+- Live desktop/app state is exposed through the generated read-only `/run/gsv` mount.
+- Browser-local files remain local-only unless explicitly copied or opened from another target.
 
 ### Batch 7: Polish and Observability
 

@@ -14,7 +14,7 @@ Use this skill when a target id starts with `browser:` or when the user asks you
 - Use the `Shell` tool with `target: "browser:..."` for desktop/browser commands.
 - The browser shell runs just-bash plus GSV commands: `open`, `cp`, `windows`, `window`, `apps`, `app`, `dom`, `js`, `clipboard`, and `notify`.
 - Browser shell commands accept `-h` and `--help` for usage.
-- Writable browser-local paths include `/home/browser` and `/tmp`.
+- Writable browser-local paths include persistent `/home/browser` and ephemeral in-memory `/tmp`.
 - Live metadata is exposed under the read-only `/run/gsv` mount, including `/run/gsv/desktop/windows.json`, `/run/gsv/desktop/active-window`, `/run/gsv/apps.json`, `/run/gsv/apps/<appId>/manifest.json`, `/run/gsv/apps/<appId>/windows.json`, `/run/gsv/windows/<windowId>/meta.json`, and `/run/gsv/windows/<windowId>/{app,mode,route,title}.txt`.
 
 ## Discover the Desktop

@@ -508,6 +508,7 @@ export class BrowserTargetShell {
     this.storageInfo = persistentFs.info;
     await cleanupLegacyRuntimePaths(persistentFs);
     const fs = new justBash.MountableFs({ base: persistentFs });
+    fs.mount("/tmp", new justBash.InMemoryFs());
     fs.mount("/run/gsv", new BrowserRuntimeFileSystem(this.windowManager));
     this.fs = fs;
     await this.ensureBaseFiles();
@@ -558,8 +559,8 @@ export class BrowserTargetShell {
       `Local filesystem backend: ${this.storageInfo.backend}`,
       "",
       "Writable paths:",
-      "- /home/browser",
-      "- /tmp",
+      "- /home/browser (persistent when IndexedDB is available)",
+      "- /tmp (in-memory scratch, cleared when the browser target restarts)",
       "",
       "Generated read-only runtime mount:",
       "- /run/gsv/desktop/windows.json",
