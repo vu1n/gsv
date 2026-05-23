@@ -1,6 +1,6 @@
 export const PIPER_PUBLIC_ASSET_ROOT = "public/gsv/assets/tts";
 export const PIPER_PUBLIC_URL_ROOT = "/public/gsv/assets/tts";
-export const PIPER_DEFAULT_VOICE = "en_US-lessac-medium";
+export const PIPER_DEFAULT_VOICE = "en_US-joe-medium";
 
 export const ONNX_RUNTIME_VERSION = "1.26.0";
 export const PIPER_WASM_VERSION = "1.0.0";
@@ -17,7 +17,7 @@ type PiperPublicAsset = {
 };
 
 export const PIPER_DEFAULT_VOICE_MODEL_PATHS: Record<string, string> = {
-  [PIPER_DEFAULT_VOICE]: "en/en_US/lessac/medium/en_US-lessac-medium.onnx",
+  [PIPER_DEFAULT_VOICE]: "en/en_US/joe/medium/en_US-joe-medium.onnx",
 };
 
 export const PIPER_PUBLIC_ASSET_MANIFEST_KEY = `${PIPER_PUBLIC_ASSET_ROOT}/manifest.json`;

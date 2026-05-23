@@ -10,4 +10,4 @@ export const GSV_PIPER_VOICE_BASE = `${GSV_TTS_PUBLIC_BASE}/piper-voices/${PIPER
 
 export const HUGGINGFACE_PIPER_VOICE_BASE = `https://huggingface.co/diffusionstudio/piper-voices/resolve/${PIPER_VOICE_REF}`;
 
-export const DEFAULT_PIPER_VOICE = "en_US-lessac-medium";
+export const DEFAULT_PIPER_VOICE = "en_US-joe-medium";
