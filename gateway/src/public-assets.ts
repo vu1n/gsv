@@ -113,13 +113,18 @@ export async function servePublicAssetRequest(
   try {
     const options = openFileOptionsFromRequest(request);
     if (!options) {
-      return new Response("Range Not Satisfiable", {
-        status: 416,
-        headers: { "accept-ranges": "bytes" },
-      });
+      return rangeNotSatisfiableResponse();
     }
 
     const file = await fs.openFile(resolvedPath, options);
+    if (
+      file.status !== 304 &&
+      file.status !== 412 &&
+      options.range &&
+      isUnsatisfiableRange(options.range, file.totalSize)
+    ) {
+      return rangeNotSatisfiableResponse(file.totalSize);
+    }
     const headers = publicAssetHeaders(resolvedPath, file);
     if (file.status === 304 || file.status === 412) {
       headers.delete("content-length");
@@ -165,6 +170,24 @@ function publicAssetHeaders(path: string, file: OpenFileResult): Headers {
   }
 
   return headers;
+}
+
+function rangeNotSatisfiableResponse(totalSize?: number): Response {
+  const headers = new Headers({ "accept-ranges": "bytes" });
+  if (typeof totalSize === "number") {
+    headers.set("content-range", `bytes */${totalSize}`);
+  }
+  return new Response("Range Not Satisfiable", {
+    status: 416,
+    headers,
+  });
+}
+
+function isUnsatisfiableRange(range: OpenFileRangeRequest, totalSize: number): boolean {
+  if (totalSize <= 0) {
+    return true;
+  }
+  return "offset" in range && range.offset >= totalSize;
 }
 
 function publicAssetCacheControl(path: string): string {

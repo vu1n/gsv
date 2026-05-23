@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Notify;
 
@@ -220,51 +220,70 @@ async fn handle_receive(
             .await
             .map_err(|e| format!("Failed to create '{}': {}", parent.display(), e))?;
     }
-
-    let mut file = tokio::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(&path)
-        .await
-        .map_err(|e| format!("Failed to open '{}': {}", path.display(), e))?;
-
-    let mut bytes_written: u64 = 0;
-    loop {
-        let frame = binary_inbox.take(args.stream_id).await?;
-        if frame.flags & BINARY_FRAME_ERROR != 0 {
-            return Err(String::from_utf8(frame.payload)
-                .unwrap_or_else(|_| "Binary transfer failed".to_string()));
-        }
-        if frame.flags & BINARY_FRAME_DATA != 0 {
-            bytes_written += frame.payload.len() as u64;
-            if bytes_written > args.expected_size {
-                return Err(format!(
-                    "Transfer size mismatch for '{}': expected {}, got more than {}",
-                    path.display(),
-                    args.expected_size,
-                    bytes_written
-                ));
-            }
-            file.write_all(&frame.payload)
-                .await
-                .map_err(|e| format!("Failed to write '{}': {}", path.display(), e))?;
-        }
-        if frame.flags & BINARY_FRAME_END != 0 {
-            break;
+    if let Ok(metadata) = tokio::fs::metadata(&path).await {
+        if metadata.is_dir() {
+            return Err(format!("Destination is a directory: '{}'", path.display()));
         }
     }
 
-    file.flush()
+    let temp_path = transfer_temp_path(&path, args.stream_id);
+    let mut file = tokio::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temp_path)
         .await
-        .map_err(|e| format!("Failed to flush '{}': {}", path.display(), e))?;
-    if bytes_written != args.expected_size {
-        return Err(format!(
-            "Transfer size mismatch for '{}': expected {}, got {}",
-            path.display(),
-            args.expected_size,
-            bytes_written
-        ));
+        .map_err(|e| format!("Failed to open '{}': {}", temp_path.display(), e))?;
+
+    let mut bytes_written: u64 = 0;
+    let receive_result: Result<(), String> = async {
+        loop {
+            let frame = binary_inbox.take(args.stream_id).await?;
+            if frame.flags & BINARY_FRAME_ERROR != 0 {
+                return Err(String::from_utf8(frame.payload)
+                    .unwrap_or_else(|_| "Binary transfer failed".to_string()));
+            }
+            if frame.flags & BINARY_FRAME_DATA != 0 {
+                bytes_written += frame.payload.len() as u64;
+                if bytes_written > args.expected_size {
+                    return Err(format!(
+                        "Transfer size mismatch for '{}': expected {}, got more than {}",
+                        path.display(),
+                        args.expected_size,
+                        bytes_written
+                    ));
+                }
+                file.write_all(&frame.payload)
+                    .await
+                    .map_err(|e| format!("Failed to write '{}': {}", temp_path.display(), e))?;
+            }
+            if frame.flags & BINARY_FRAME_END != 0 {
+                break;
+            }
+        }
+
+        file.flush()
+            .await
+            .map_err(|e| format!("Failed to flush '{}': {}", temp_path.display(), e))?;
+        if bytes_written != args.expected_size {
+            return Err(format!(
+                "Transfer size mismatch for '{}': expected {}, got {}",
+                path.display(),
+                args.expected_size,
+                bytes_written
+            ));
+        }
+        Ok(())
+    }
+    .await;
+
+    drop(file);
+    if let Err(error) = receive_result {
+        let _ = tokio::fs::remove_file(&temp_path).await;
+        return Err(error);
+    }
+    if let Err(error) = tokio::fs::rename(&temp_path, &path).await {
+        let _ = tokio::fs::remove_file(&temp_path).await;
+        return Err(format!("Failed to replace '{}': {}", path.display(), error));
     }
 
     Ok(json!({
@@ -282,6 +301,19 @@ fn resolve_path(path: &str, workspace: &Path) -> PathBuf {
     } else {
         workspace.join(path)
     }
+}
+
+fn transfer_temp_path(path: &Path, stream_id: u32) -> PathBuf {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("transfer");
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    parent.join(format!(".{}.gsv-transfer-{}-{}", file_name, stream_id, now))
 }
 
 #[cfg(test)]

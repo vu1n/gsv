@@ -285,6 +285,24 @@ describe("public asset serving", () => {
     expect(response.headers.get("accept-ranges")).toBe("bytes");
   });
 
+  it("rejects byte ranges beyond EOF after opening the file", async () => {
+    const fs = new FakePublicAssetFs();
+    fs.put("/public/audio/sample.wav", "image");
+    const match = matchPublicAssetPath("/public/audio/sample.wav");
+
+    const response = await servePublicAssetRequest(
+      new Request("https://gsv.test/public/audio/sample.wav", {
+        headers: { range: "bytes=5-" },
+      }),
+      fs,
+      match!,
+    );
+
+    expect(response.status).toBe(416);
+    expect(response.headers.get("accept-ranges")).toBe("bytes");
+    expect(response.headers.get("content-range")).toBe("bytes */5");
+  });
+
   it("sandboxes document-like public files", async () => {
     const fs = new FakePublicAssetFs();
     fs.put("/public/site/index.html", "<script>alert(1)</script>");

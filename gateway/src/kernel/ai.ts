@@ -241,7 +241,7 @@ export async function handleAiConfig(
   ) ?? parsePositiveInt(
     config.get("config/ai/generation/timeout_ms"),
   ) ?? DEFAULT_GENERATION_TIMEOUT_MS;
-  const skillIndex = await collectPromptSkillIndex(ctx, requestedProfile).catch((error) => {
+  const skillIndex = await collectPromptSkillIndex(ctx, profile).catch((error) => {
     console.warn(
       `[Prompt] failed to collect skills.d index: ${error instanceof Error ? error.message : String(error)}`,
     );

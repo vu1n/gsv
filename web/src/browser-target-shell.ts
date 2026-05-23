@@ -686,6 +686,31 @@ export class BrowserTargetShell {
   }
 
   private async writeLocalStream(path: string, stream: ReadableStream<Uint8Array>, expectedSize: number): Promise<number> {
+    const fs = this.getFs();
+    if (await fs.exists(path)) {
+      const stat = await fs.stat(path);
+      if (stat.isDirectory) {
+        throw new Error(`Destination is a directory: ${path}`);
+      }
+    }
+
+    const tempPath = temporaryTransferPath(path);
+    try {
+      const bytesWritten = await this.writeLocalStreamToPath(tempPath, stream, expectedSize, path);
+      await fs.mv(tempPath, path);
+      return bytesWritten;
+    } catch (error) {
+      await fs.rm(tempPath, { force: true }).catch(() => {});
+      throw error;
+    }
+  }
+
+  private async writeLocalStreamToPath(
+    path: string,
+    stream: ReadableStream<Uint8Array>,
+    expectedSize: number,
+    displayPath: string,
+  ): Promise<number> {
     const reader = stream.getReader();
     let offset = 0;
 
@@ -699,7 +724,7 @@ export class BrowserTargetShell {
           continue;
         }
         if (offset + value.byteLength > expectedSize) {
-          throw new Error(`Transfer size mismatch for ${path}: expected ${expectedSize}, got more than ${offset + value.byteLength}`);
+          throw new Error(`Transfer size mismatch for ${displayPath}: expected ${expectedSize}, got more than ${offset + value.byteLength}`);
         }
         await this.writeLocalChunk(path, offset, value);
         offset += value.byteLength;
@@ -709,7 +734,7 @@ export class BrowserTargetShell {
     }
 
     if (offset !== expectedSize) {
-      throw new Error(`Transfer size mismatch for ${path}: expected ${expectedSize}, got ${offset}`);
+      throw new Error(`Transfer size mismatch for ${displayPath}: expected ${expectedSize}, got ${offset}`);
     }
     return offset;
   }
@@ -1513,8 +1538,22 @@ function basename(path: string): string {
   return index >= 0 ? normalized.slice(index + 1) : normalized;
 }
 
+function dirname(path: string): string {
+  const normalized = normalizePath(path);
+  if (normalized === "/") {
+    return "/";
+  }
+  const index = normalized.lastIndexOf("/");
+  return index <= 0 ? "/" : normalized.slice(0, index);
+}
+
 function joinPath(parent: string, child: string): string {
   return parent.endsWith("/") ? `${parent}${child}` : `${parent}/${child}`;
+}
+
+function temporaryTransferPath(path: string): string {
+  const suffix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return joinPath(dirname(path), `.${basename(path) || "transfer"}.gsv-transfer-${suffix}`);
 }
 
 function inferContentType(path: string): string {
