@@ -32,22 +32,22 @@ import type {
   FsCopyResult,
 } from "../../syscalls/copy";
 import type {
-  FsTransferReadArgs,
-  FsTransferReadResult,
+  FsTransferReceiveArgs,
+  FsTransferReceiveResult,
+  FsTransferSendArgs,
+  FsTransferSendResult,
   FsTransferStatArgs,
   FsTransferStatResult,
-  FsTransferWriteArgs,
-  FsTransferWriteResult,
 } from "../../syscalls/transfer";
 import {
   BINARY_FRAME_DATA,
   BINARY_FRAME_END,
+  BINARY_FRAME_ERROR,
   buildBinaryFrame,
 } from "@gsv/protocol/binary-frame";
 
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
-const COPY_CHUNK_SIZE = 512 * 1024;
-const TRANSFER_READ_CHUNK_SIZE = 1024 * 1024;
+const TRANSFER_SEND_CHUNK_SIZE = 512 * 1024;
 
 export type FsCopyDeviceTransport = {
   requestDevice(
@@ -56,13 +56,32 @@ export type FsCopyDeviceTransport = {
     args: unknown,
     ttlMs?: number,
   ): Promise<unknown>;
-  requestDeviceBinary(
+  allocateBinaryStreamId(): number;
+  startDeviceRequest(
     deviceId: string,
     call: string,
     args: unknown,
-    options?: { payload?: Uint8Array; receive?: boolean; streamId?: number },
     ttlMs?: number,
-  ): Promise<{ data: unknown; payload?: Uint8Array; flags?: number; streamId: number }>;
+  ): Promise<{ requestId: string; promise: Promise<unknown>; cancel: () => void }>;
+  registerBinaryRelay(route: {
+    requestId: string;
+    streamId: number;
+    sourceDeviceId: string;
+    destinationDeviceId: string;
+    ttlMs?: number;
+  }): { cancel: () => void };
+  receiveDeviceBinaryStream(route: {
+    requestId: string;
+    streamId: number;
+    sourceDeviceId: string;
+    ttlMs?: number;
+  }): { stream: ReadableStream<Uint8Array>; cancel: () => void };
+  sendDeviceBinaryFrame(
+    deviceId: string,
+    streamId: number,
+    flags: number,
+    payload?: Uint8Array,
+  ): void;
 };
 
 type TransferStatResult =
@@ -76,23 +95,22 @@ type TransferStatResult =
     }
   | { ok: false; error: string };
 
-type TransferReadResult =
+type TransferSendResult =
   | {
       ok: true;
       path: string;
-      offset: number;
-      bytesRead: number;
-      eof: boolean;
+      size: number;
+      bytesSent: number;
+      contentType?: string;
     }
   | { ok: false; error: string };
 
-type TransferWriteResult =
+type TransferReceiveResult =
   | {
       ok: true;
       path: string;
-      offset: number;
       bytesWritten: number;
-      done: boolean;
+      contentType?: string;
     }
   | { ok: false; error: string };
 
@@ -277,63 +295,47 @@ export async function handleFsTransferStat(
   }
 }
 
-export async function handleFsTransferRead(
-  args: FsTransferReadArgs,
+export async function handleFsTransferSend(
+  args: FsTransferSendArgs,
   ctx: KernelContext,
-): Promise<FsTransferReadResult> {
+): Promise<FsTransferSendResult> {
   const fs = makeFs(ctx);
   const rawPath = typeof args.path === "string" ? args.path.trim() : "";
   if (!rawPath) {
-    return { ok: false, error: "fs.transfer.read requires path" };
+    return { ok: false, error: "fs.transfer.send requires path" };
   }
-
-  const offset = normalizeTransferNumber(args.offset, 0);
-  const length = Math.min(
-    normalizeTransferNumber(args.length, TRANSFER_READ_CHUNK_SIZE),
-    TRANSFER_READ_CHUNK_SIZE,
-  );
   const streamId = normalizeTransferStreamId(args.streamId);
   if (streamId === null) {
-    return { ok: false, error: "fs.transfer.read requires streamId" };
+    return { ok: false, error: "fs.transfer.send requires streamId" };
   }
   if (!ctx.connection || typeof ctx.connection.send !== "function") {
-    return { ok: false, error: "fs.transfer.read requires an active WebSocket connection" };
+    return { ok: false, error: "fs.transfer.send requires an active WebSocket connection" };
   }
   const path = resolve(rawPath, ctx);
 
   try {
-    const stat = await fs.stat(path);
-    if (!stat.isFile) {
-      throw new Error(`fs.transfer.read path is not a file: ${path}`);
+    const opened = await fs.openFile(path);
+    if (opened.status !== 200 || !opened.body) {
+      throw new Error(`Unable to open source for transfer: ${path}`);
     }
-
-    if (length === 0 || offset >= stat.size) {
-      ctx.connection.send(buildBinaryFrame(streamId, BINARY_FRAME_DATA | BINARY_FRAME_END));
-      return {
-        ok: true,
-        path,
-        offset,
-        bytesRead: 0,
-        eof: true,
-      };
-    }
-
-    const readLength = Math.min(length, stat.size - offset);
-    const opened = await fs.openFile(path, {
-      range: { offset, length: readLength },
-    });
-    const chunk = opened.body
-      ? await streamToBytes(opened.body, opened.size)
-      : new Uint8Array();
-    ctx.connection.send(buildBinaryFrame(streamId, BINARY_FRAME_DATA | BINARY_FRAME_END, chunk));
+    const bytesSent = await sendStreamToConnection(
+      ctx.connection,
+      streamId,
+      opened.body,
+    );
     return {
       ok: true,
       path,
-      offset,
-      bytesRead: chunk.byteLength,
-      eof: offset + chunk.byteLength >= stat.size,
+      size: opened.size,
+      bytesSent,
+      contentType: opened.contentType ?? inferContentType(path),
     };
   } catch (error) {
+    ctx.connection.send(buildBinaryFrame(
+      streamId,
+      BINARY_FRAME_ERROR | BINARY_FRAME_END,
+      new TextEncoder().encode(error instanceof Error ? error.message : String(error)),
+    ));
     return {
       ok: false,
       error: error instanceof Error ? error.message : String(error),
@@ -341,64 +343,37 @@ export async function handleFsTransferRead(
   }
 }
 
-export async function handleFsTransferWrite(
-  args: FsTransferWriteArgs,
+export async function handleFsTransferReceive(
+  args: FsTransferReceiveArgs,
   ctx: KernelContext,
-  bytes: Uint8Array,
-): Promise<FsTransferWriteResult> {
+  stream: ReadableStream<Uint8Array>,
+): Promise<FsTransferReceiveResult> {
   const fs = makeFs(ctx);
   const rawPath = typeof args.path === "string" ? args.path.trim() : "";
   if (!rawPath) {
-    return { ok: false, error: "fs.transfer.write requires path" };
+    return { ok: false, error: "fs.transfer.receive requires path" };
   }
   if (normalizeTransferStreamId(args.streamId) === null) {
-    return { ok: false, error: "fs.transfer.write requires streamId" };
+    return { ok: false, error: "fs.transfer.receive requires streamId" };
   }
   if (
     typeof args.expectedSize !== "number" ||
     !Number.isSafeInteger(args.expectedSize) ||
     args.expectedSize < 0
   ) {
-    return { ok: false, error: "fs.transfer.write requires expectedSize" };
-  }
-
-  const offset = normalizeTransferNumber(args.offset, 0);
-  const endOffset = offset + bytes.byteLength;
-  const done = args.done === true;
-  if (endOffset > args.expectedSize) {
-    return { ok: false, error: `fs.transfer.write exceeds expectedSize ${args.expectedSize}` };
-  }
-  if (done && endOffset !== args.expectedSize) {
-    return {
-      ok: false,
-      error: `fs.transfer.write final size ${endOffset} did not match expectedSize ${args.expectedSize}`,
-    };
+    return { ok: false, error: "fs.transfer.receive requires expectedSize" };
   }
 
   const path = resolve(rawPath, ctx);
-
   try {
-    let next = bytes;
-    if (offset > 0) {
-      const existing = await fs.readFileBuffer(path);
-      if (existing.byteLength !== offset) {
-        throw new Error(
-          `fs.transfer.write offset ${offset} does not match existing size ${existing.byteLength}`,
-        );
-      }
-      next = concatBytes(existing, bytes);
-    }
-
-    await fs.writeFileStream(path, bytesToStream(next), {
-      expectedSize: next.byteLength,
+    const result = await fs.writeFileStream(path, stream, {
+      expectedSize: args.expectedSize,
       contentType: args.contentType,
     });
     return {
       ok: true,
       path,
-      offset,
-      bytesWritten: bytes.byteLength,
-      done,
+      bytesWritten: result.size,
       contentType: args.contentType,
     };
   } catch (error) {
@@ -481,25 +456,25 @@ export async function handleFsCopy(
     }
 
     if (source.target === "gsv") {
-      assertCanUseDeviceCapabilities(destination, ctx, ["fs.transfer.write"]);
+      assertCanUseDeviceCapabilities(destination, ctx, ["fs.transfer.receive"]);
       return await copyGsvToDevice(source, destination, ctx, transport);
     }
 
     if (destination.target === "gsv") {
       assertCanUseDeviceCapabilities(source, ctx, [
         "fs.transfer.stat",
-        "fs.transfer.read",
+        "fs.transfer.send",
       ]);
       return await copyDeviceToGsv(source, destination, ctx, transport);
     }
 
     assertCanUseDeviceCapabilities(source, ctx, [
       "fs.transfer.stat",
-      "fs.transfer.read",
+      "fs.transfer.send",
     ]);
     assertCanUseDeviceCapabilities(destination, ctx, [
       "fs.transfer.stat",
-      "fs.transfer.write",
+      "fs.transfer.receive",
     ]);
     return await copyDeviceToDevice(source, destination, transport);
   } catch (err) {
@@ -579,41 +554,34 @@ async function copyGsvToDevice(
   }
 
   const contentType = opened.contentType ?? inferContentType(source.path);
-  const reader = opened.body.getReader();
-  let offset = 0;
-
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (!value || value.byteLength === 0) continue;
-      const chunks = splitCopyChunk(value);
-      for (const chunk of chunks) {
-        await writeDeviceChunk(
-          transport,
-          destination,
-          offset,
-          chunk,
-          opened.size,
-          contentType,
-          false,
-        );
-        offset += chunk.byteLength;
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
-
-  await writeDeviceChunk(
-    transport,
-    destination,
-    offset,
-    new Uint8Array(),
-    opened.size,
-    contentType,
-    true,
+  const streamId = transport.allocateBinaryStreamId();
+  const receive = await transport.startDeviceRequest(
+    destination.target,
+    "fs.transfer.receive",
+    {
+      path: destination.path,
+      streamId,
+      expectedSize: opened.size,
+      contentType,
+    },
+    120_000,
   );
+  try {
+    await sendStreamToDevice(transport, destination.target, streamId, opened.body);
+    const result = await receive.promise as TransferReceiveResult;
+    if (!result.ok) {
+      throw new Error(result.error);
+    }
+  } catch (error) {
+    transport.sendDeviceBinaryFrame(
+      destination.target,
+      streamId,
+      BINARY_FRAME_ERROR | BINARY_FRAME_END,
+      new TextEncoder().encode(error instanceof Error ? error.message : String(error)),
+    );
+    receive.cancel();
+    throw error;
+  }
 
   return {
     ok: true,
@@ -632,12 +600,47 @@ async function copyDeviceToGsv(
 ): Promise<FsCopyResult> {
   const sourceStat = await statDeviceSource(transport, source);
   const contentType = sourceStat.contentType ?? inferContentType(source.path);
-  const stream = deviceReadStream(transport, source, sourceStat.size);
-  const fs = makeFs(ctx);
-  await fs.writeFileStream(destination.path, stream, {
-    expectedSize: sourceStat.size,
-    contentType,
+  const streamId = transport.allocateBinaryStreamId();
+  const streamRoute = transport.receiveDeviceBinaryStream({
+    requestId: `fs.copy:${streamId}`,
+    streamId,
+    sourceDeviceId: source.target,
+    ttlMs: 120_000,
   });
+  const send = await transport.startDeviceRequest(
+    source.target,
+    "fs.transfer.send",
+    {
+      path: source.path,
+      streamId,
+    },
+    120_000,
+  );
+  const fs = makeFs(ctx);
+  try {
+    const transferPromise = send.promise.then((sendResult) => {
+      const transfer = sendResult as TransferSendResult;
+      if (!transfer.ok) {
+        throw new Error(transfer.error);
+      }
+      return transfer;
+    });
+    const [writeResult] = await Promise.all([
+      fs.writeFileStream(destination.path, streamRoute.stream, {
+        expectedSize: sourceStat.size,
+        contentType,
+      }),
+      transferPromise,
+    ]);
+    if (writeResult.size !== sourceStat.size) {
+      throw new Error(
+        `Transfer size mismatch for ${destination.path}: expected ${sourceStat.size}, got ${writeResult.size}`,
+      );
+    }
+  } finally {
+    streamRoute.cancel();
+    send.cancel();
+  }
 
   return {
     ok: true,
@@ -655,37 +658,63 @@ async function copyDeviceToDevice(
 ): Promise<FsCopyResult> {
   const sourceStat = await statDeviceSource(transport, source);
   const contentType = sourceStat.contentType ?? inferContentType(source.path);
-  let offset = 0;
-
-  while (offset < sourceStat.size) {
-    const readLength = Math.min(COPY_CHUNK_SIZE, sourceStat.size - offset);
-    const chunk = await readDeviceChunk(transport, source, offset, readLength);
-    if (chunk.byteLength === 0) {
-      throw new Error(
-        `fs.copy read zero bytes before EOF from ${source.target}:${source.path}`,
-      );
-    }
-    await writeDeviceChunk(
-      transport,
-      destination,
-      offset,
-      chunk,
-      sourceStat.size,
+  const streamId = transport.allocateBinaryStreamId();
+  const receive = await transport.startDeviceRequest(
+    destination.target,
+    "fs.transfer.receive",
+    {
+      path: destination.path,
+      streamId,
+      expectedSize: sourceStat.size,
       contentType,
-      false,
-    );
-    offset += chunk.byteLength;
-  }
-
-  await writeDeviceChunk(
-    transport,
-    destination,
-    offset,
-    new Uint8Array(),
-    sourceStat.size,
-    contentType,
-    true,
+    },
+    120_000,
   );
+  const relay = transport.registerBinaryRelay({
+    requestId: `fs.copy:${streamId}`,
+    streamId,
+    sourceDeviceId: source.target,
+    destinationDeviceId: destination.target,
+    ttlMs: 120_000,
+  });
+  const send = await transport.startDeviceRequest(
+    source.target,
+    "fs.transfer.send",
+    {
+      path: source.path,
+      streamId,
+    },
+    120_000,
+  );
+  try {
+    const sendPromise = send.promise.then((sendResult) => {
+      const sent = sendResult as TransferSendResult;
+      if (!sent.ok) {
+        throw new Error(sent.error);
+      }
+      return sent;
+    });
+    const receivePromise = receive.promise.then((receiveResult) => {
+      const received = receiveResult as TransferReceiveResult;
+      if (!received.ok) {
+        throw new Error(received.error);
+      }
+      return received;
+    });
+    await Promise.all([sendPromise, receivePromise]);
+  } catch (error) {
+    transport.sendDeviceBinaryFrame(
+      destination.target,
+      streamId,
+      BINARY_FRAME_ERROR | BINARY_FRAME_END,
+      new TextEncoder().encode(error instanceof Error ? error.message : String(error)),
+    );
+    throw error;
+  } finally {
+    relay.cancel();
+    send.cancel();
+    receive.cancel();
+  }
 
   return {
     ok: true,
@@ -761,97 +790,6 @@ async function statDeviceSource(
   return stat;
 }
 
-function deviceReadStream(
-  transport: FsCopyDeviceTransport,
-  source: Required<FsCopyEndpoint>,
-  size: number,
-): ReadableStream<Uint8Array> {
-  let offset = 0;
-  return new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      if (offset >= size) {
-        controller.close();
-        return;
-      }
-      try {
-        const readLength = Math.min(COPY_CHUNK_SIZE, size - offset);
-        const chunk = await readDeviceChunk(
-          transport,
-          source,
-          offset,
-          readLength,
-        );
-        if (chunk.byteLength === 0) {
-          throw new Error(
-            `fs.copy read zero bytes before EOF from ${source.target}:${source.path}`,
-          );
-        }
-        offset += chunk.byteLength;
-        controller.enqueue(chunk);
-        if (offset >= size) {
-          controller.close();
-        }
-      } catch (err) {
-        controller.error(err);
-      }
-    },
-  });
-}
-
-async function readDeviceChunk(
-  transport: FsCopyDeviceTransport,
-  source: Required<FsCopyEndpoint>,
-  offset: number,
-  length: number,
-): Promise<Uint8Array> {
-  const transfer = await requestDeviceBinaryResult<TransferReadResult>(
-    transport,
-    source.target,
-    "fs.transfer.read",
-    {
-      path: source.path,
-      offset,
-      length,
-    },
-    { receive: true },
-  );
-  const result = transfer.data;
-  if (!result.ok) {
-    throw new Error(result.error);
-  }
-  if ((transfer.flags ?? 0) & BINARY_FRAME_DATA) {
-    return transfer.payload ?? new Uint8Array();
-  }
-  throw new Error(`fs.transfer.read from ${source.target}:${source.path} did not include data`);
-}
-
-async function writeDeviceChunk(
-  transport: FsCopyDeviceTransport,
-  destination: Required<FsCopyEndpoint>,
-  offset: number,
-  bytes: Uint8Array,
-  expectedSize: number,
-  contentType: string | undefined,
-  done: boolean,
-): Promise<void> {
-  const result = await requestDeviceBinaryResult<TransferWriteResult>(
-    transport,
-    destination.target,
-    "fs.transfer.write",
-    {
-      path: destination.path,
-      offset,
-      expectedSize,
-      contentType,
-      done,
-    },
-    { payload: bytes },
-  );
-  if (!result.data.ok) {
-    throw new Error(result.data.error);
-  }
-}
-
 async function requestDeviceResult<T>(
   transport: FsCopyDeviceTransport,
   deviceId: string,
@@ -861,31 +799,74 @@ async function requestDeviceResult<T>(
   return (await transport.requestDevice(deviceId, call, args, 60_000)) as T;
 }
 
-async function requestDeviceBinaryResult<T>(
-  transport: FsCopyDeviceTransport,
-  deviceId: string,
-  call: string,
-  args: unknown,
-  options: { payload?: Uint8Array; receive?: boolean },
-): Promise<{ data: T; payload?: Uint8Array; flags?: number; streamId: number }> {
-  const result = await transport.requestDeviceBinary(deviceId, call, args, options, 60_000);
-  return {
-    data: result.data as T,
-    ...(result.payload ? { payload: result.payload } : {}),
-    ...(typeof result.flags === "number" ? { flags: result.flags } : {}),
-    streamId: result.streamId,
-  };
-}
-
 function splitCopyChunk(chunk: Uint8Array): Uint8Array[] {
-  if (chunk.byteLength <= COPY_CHUNK_SIZE) {
+  if (chunk.byteLength <= TRANSFER_SEND_CHUNK_SIZE) {
     return [chunk];
   }
   const chunks: Uint8Array[] = [];
-  for (let offset = 0; offset < chunk.byteLength; offset += COPY_CHUNK_SIZE) {
-    chunks.push(chunk.subarray(offset, offset + COPY_CHUNK_SIZE));
+  for (let offset = 0; offset < chunk.byteLength; offset += TRANSFER_SEND_CHUNK_SIZE) {
+    chunks.push(chunk.subarray(offset, offset + TRANSFER_SEND_CHUNK_SIZE));
   }
   return chunks;
+}
+
+async function sendStreamToConnection(
+  connection: { send: (data: ArrayBuffer) => void },
+  streamId: number,
+  stream: ReadableStream<Uint8Array>,
+): Promise<number> {
+  const reader = stream.getReader();
+  let bytesSent = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (!value || value.byteLength === 0) {
+        continue;
+      }
+      for (const chunk of splitCopyChunk(value)) {
+        connection.send(buildBinaryFrame(streamId, BINARY_FRAME_DATA, chunk));
+        bytesSent += chunk.byteLength;
+      }
+    }
+    connection.send(buildBinaryFrame(streamId, BINARY_FRAME_END));
+    return bytesSent;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+async function sendStreamToDevice(
+  transport: FsCopyDeviceTransport,
+  deviceId: string,
+  streamId: number,
+  stream: ReadableStream<Uint8Array>,
+): Promise<number> {
+  const reader = stream.getReader();
+  let bytesSent = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (!value || value.byteLength === 0) {
+        continue;
+      }
+      for (const chunk of splitCopyChunk(value)) {
+        transport.sendDeviceBinaryFrame(deviceId, streamId, BINARY_FRAME_DATA, chunk);
+        bytesSent += chunk.byteLength;
+      }
+    }
+    transport.sendDeviceBinaryFrame(deviceId, streamId, BINARY_FRAME_END);
+    return bytesSent;
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 async function streamToBytes(stream: ReadableStream<Uint8Array>, expectedSize: number): Promise<Uint8Array> {
@@ -954,34 +935,11 @@ export async function handleFsEdit(
   }
 }
 
-function normalizeTransferNumber(value: unknown, fallback: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return fallback;
-  }
-  return Math.max(0, Math.floor(value));
-}
-
 function normalizeTransferStreamId(value: unknown): number | null {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0 || value > 0xffffffff) {
     return null;
   }
   return value;
-}
-
-function concatBytes(left: Uint8Array, right: Uint8Array): Uint8Array {
-  const combined = new Uint8Array(left.byteLength + right.byteLength);
-  combined.set(left, 0);
-  combined.set(right, left.byteLength);
-  return combined;
-}
-
-function bytesToStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
-  return new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(bytes);
-      controller.close();
-    },
-  });
 }
 
 function normalizeCopyEndpoint(

@@ -13,39 +13,34 @@ export type FsTransferStatResult =
     }
   | { ok: false; error: string };
 
-export type FsTransferReadArgs = {
+export type FsTransferSendArgs = {
   path: string;
-  offset?: number;
-  length?: number;
   streamId?: number;
+  chunkSize?: number;
 };
 
-export type FsTransferReadResult =
+export type FsTransferSendResult =
   | {
       ok: true;
       path: string;
-      offset: number;
-      bytesRead: number;
-      eof: boolean;
+      size: number;
+      bytesSent: number;
+      contentType?: string;
     }
   | { ok: false; error: string };
 
-export type FsTransferWriteArgs = {
+export type FsTransferReceiveArgs = {
   path: string;
-  offset?: number;
   expectedSize: number;
   contentType?: string;
-  done?: boolean;
   streamId?: number;
 };
 
-export type FsTransferWriteResult =
+export type FsTransferReceiveResult =
   | {
       ok: true;
       path: string;
-      offset: number;
       bytesWritten: number;
-      done: boolean;
       contentType?: string;
     }
   | { ok: false; error: string };

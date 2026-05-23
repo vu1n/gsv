@@ -9,6 +9,7 @@ import type {
 import {
   BINARY_FRAME_DATA,
   BINARY_FRAME_END,
+  BINARY_FRAME_ERROR,
 } from "@gsv/protocol/binary-frame";
 import { buildBrowserCommands } from "./browser-target-commands";
 import { BrowserRuntimeFileSystem } from "./browser-runtime-fs";
@@ -59,20 +60,16 @@ type TransferStatArgs = {
   path?: unknown;
 };
 
-type TransferReadArgs = {
+type TransferSendArgs = {
   path?: unknown;
-  offset?: unknown;
-  length?: unknown;
   streamId?: unknown;
 };
 
-type TransferWriteArgs = {
+type TransferReceiveArgs = {
   path?: unknown;
-  offset?: unknown;
   streamId?: unknown;
   expectedSize?: unknown;
   contentType?: unknown;
-  done?: unknown;
 };
 
 type TransferStatResult =
@@ -86,13 +83,13 @@ type TransferStatResult =
     }
   | { ok: false; error?: string };
 
-type TransferReadResult =
+type TransferSendResult =
   | {
       ok: true;
       path: string;
-      offset: number;
-      bytesRead: number;
-      eof: boolean;
+      size: number;
+      bytesSent: number;
+      contentType?: string;
     }
   | { ok: false; error?: string };
 
@@ -122,7 +119,7 @@ type BrowserBash = InstanceType<JustBashModule["Bash"]>;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_SEARCH_MATCHES = 200;
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
-const MAX_TRANSFER_READ_BYTES = 1024 * 1024;
+const MAX_TRANSFER_CHUNK_BYTES = 1024 * 1024;
 const MAX_PREVIEW_BYTES = 64 * 1024 * 1024;
 
 export class BrowserTargetShell {
@@ -384,19 +381,17 @@ export class BrowserTargetShell {
     }
   }
 
-  async transferRead(frame: GatewayRequestFrame): Promise<unknown> {
+  async transferSend(frame: GatewayRequestFrame): Promise<unknown> {
     await this.ensureReady();
 
-    const args = (frame.args ?? {}) as TransferReadArgs;
-    const path = parsePathArg(args.path, "fs.transfer.read");
+    const args = (frame.args ?? {}) as TransferSendArgs;
+    const path = parsePathArg(args.path, "fs.transfer.send");
     if (!path.ok) {
       return path;
     }
-    const offset = parseNonNegativeInteger(args.offset) ?? 0;
-    const length = Math.min(parseNonNegativeInteger(args.length) ?? MAX_TRANSFER_READ_BYTES, MAX_TRANSFER_READ_BYTES);
     const streamId = parseStreamId(args.streamId);
     if (streamId === null) {
-      return { ok: false, error: "fs.transfer.read requires streamId" };
+      return { ok: false, error: "fs.transfer.send requires streamId" };
     }
 
     try {
@@ -404,76 +399,65 @@ export class BrowserTargetShell {
       if (!stat.isFile) {
         return { ok: false, error: `Not a file: ${path.path}` };
       }
-      const chunk = offset >= stat.size
-        ? new Uint8Array()
-        : await this.readLocalChunk(path.path, offset, Math.min(length, stat.size - offset));
-      this.gatewayClient.sendBinaryFrame(streamId, BINARY_FRAME_DATA | BINARY_FRAME_END, chunk);
+      let offset = 0;
+      while (offset < stat.size) {
+        const chunk = await this.readLocalChunk(
+          path.path,
+          offset,
+          Math.min(MAX_TRANSFER_CHUNK_BYTES, stat.size - offset),
+        );
+        if (chunk.byteLength === 0) {
+          throw new Error(`Read zero bytes before EOF from ${path.path}`);
+        }
+        this.gatewayClient.sendBinaryFrame(streamId, BINARY_FRAME_DATA, chunk);
+        offset += chunk.byteLength;
+      }
+      this.gatewayClient.sendBinaryFrame(streamId, BINARY_FRAME_END);
       return {
         ok: true,
         path: path.path,
-        offset,
-        bytesRead: chunk.byteLength,
-        eof: offset + chunk.byteLength >= stat.size,
+        size: stat.size,
+        bytesSent: offset,
+        contentType: inferContentType(path.path),
       };
     } catch (error) {
+      this.gatewayClient.sendBinaryFrame(
+        streamId,
+        BINARY_FRAME_ERROR | BINARY_FRAME_END,
+        new TextEncoder().encode(error instanceof Error ? error.message : String(error)),
+      );
       return failedFs(error);
     }
   }
 
-  async transferWrite(frame: GatewayRequestFrame): Promise<unknown> {
-    const args = (frame.args ?? {}) as TransferWriteArgs;
-    const path = parsePathArg(args.path, "fs.transfer.write");
+  async transferReceive(frame: GatewayRequestFrame): Promise<unknown> {
+    const args = (frame.args ?? {}) as TransferReceiveArgs;
+    const path = parsePathArg(args.path, "fs.transfer.receive");
     if (!path.ok) {
       return path;
     }
-    const offset = parseNonNegativeInteger(args.offset) ?? 0;
     const expectedSize = parseNonNegativeInteger(args.expectedSize);
     if (expectedSize === null) {
-      return { ok: false, error: "fs.transfer.write requires expectedSize" };
+      return { ok: false, error: "fs.transfer.receive requires expectedSize" };
     }
     const streamId = parseStreamId(args.streamId);
     if (streamId === null) {
-      return { ok: false, error: "fs.transfer.write requires streamId" };
+      return { ok: false, error: "fs.transfer.receive requires streamId" };
     }
 
-    const binary = this.gatewayClient.waitForBinaryFrame(streamId);
-    let binaryConsumed = false;
+    const binary = this.gatewayClient.openBinaryStream(streamId, 120_000);
     try {
       await this.ensureReady();
-      const frame = await binary;
-      binaryConsumed = true;
-      if ((frame.flags & BINARY_FRAME_DATA) === 0) {
-        return { ok: false, error: "fs.transfer.write binary frame did not include data" };
-      }
-      const bytes = frame.payload;
-      await this.writeLocalChunk(path.path, offset, bytes);
-
-      if (args.done === true) {
-        const stat = await this.getFs().stat(path.path);
-        if (stat.size !== expectedSize) {
-          return {
-            ok: false,
-            error: `Transfer size mismatch for ${path.path}: expected ${expectedSize}, got ${stat.size}`,
-          };
-        }
-      }
+      const bytesWritten = await this.writeLocalStream(path.path, binary.stream, expectedSize);
 
       return {
         ok: true,
         path: path.path,
-        offset,
-        bytesWritten: bytes.byteLength,
-        done: args.done === true,
+        bytesWritten,
         contentType: typeof args.contentType === "string" ? args.contentType : inferContentType(path.path),
       };
     } catch (error) {
-      if (!binaryConsumed) {
-        this.gatewayClient.cancelBinaryFrame(
-          streamId,
-          error instanceof Error ? error.message : "Binary transfer write failed",
-        );
-        binary.catch(() => undefined);
-      }
+      binary.cancel(error instanceof Error ? error.message : "Binary transfer receive failed");
       return failedFs(error);
     }
   }
@@ -701,6 +685,35 @@ export class BrowserTargetShell {
     await fs.writeFile(path, next);
   }
 
+  private async writeLocalStream(path: string, stream: ReadableStream<Uint8Array>, expectedSize: number): Promise<number> {
+    const reader = stream.getReader();
+    let offset = 0;
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+        if (!value || value.byteLength === 0) {
+          continue;
+        }
+        if (offset + value.byteLength > expectedSize) {
+          throw new Error(`Transfer size mismatch for ${path}: expected ${expectedSize}, got more than ${offset + value.byteLength}`);
+        }
+        await this.writeLocalChunk(path, offset, value);
+        offset += value.byteLength;
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    if (offset !== expectedSize) {
+      throw new Error(`Transfer size mismatch for ${path}: expected ${expectedSize}, got ${offset}`);
+    }
+    return offset;
+  }
+
   private async readLocalChunk(path: string, offset: number, length: number): Promise<Uint8Array> {
     const fs = this.getFs();
     if (fs instanceof BrowserTargetFileSystem) {
@@ -897,56 +910,33 @@ export class BrowserTargetShell {
   }
 
   private async readRemoteBytes(endpoint: { target: string; path: string }, size: number): Promise<Uint8Array> {
-    const chunks: Uint8Array[] = [];
-    let total = 0;
-    let offset = 0;
+    const streamId = this.gatewayClient.allocateBinaryStreamId();
+    const binary = this.gatewayClient.openBinaryStream(streamId, 120_000);
+    const collect = streamToBytes(binary.stream, size);
+    let result: TransferSendResult;
 
-    while (offset < size) {
-      const streamId = this.gatewayClient.allocateBinaryStreamId();
-      const binary = this.gatewayClient.waitForBinaryFrame(streamId);
-      let result: TransferReadResult;
-      try {
-        result = await this.gatewayClient.call<TransferReadResult>("fs.transfer.read", this.withEndpointTarget(endpoint, {
-          path: endpoint.path,
-          offset,
-          length: Math.min(MAX_TRANSFER_READ_BYTES, size - offset),
-          streamId,
-        }));
-      } catch (error) {
-        this.gatewayClient.cancelBinaryFrame(streamId, error instanceof Error ? error.message : "Remote transfer read failed");
-        binary.catch(() => undefined);
-        throw error;
-      }
-      if (!result.ok) {
-        this.gatewayClient.cancelBinaryFrame(streamId, result.error ?? "Remote transfer read failed");
-        binary.catch(() => undefined);
-        throw new Error(result.error ?? `Unable to read ${endpoint.target}:${endpoint.path}`);
-      }
-      if (result.bytesRead <= 0 && !result.eof) {
-        throw new Error(`Read zero bytes before EOF from ${endpoint.target}:${endpoint.path}`);
-      }
-      const frame = await binary;
-      if ((frame.flags & BINARY_FRAME_DATA) === 0) {
-        throw new Error(`fs.transfer.read from ${endpoint.target}:${endpoint.path} did not include data`);
-      }
-      if (result.bytesRead > 0) {
-        const chunk = frame.payload;
-        chunks.push(chunk);
-        total += chunk.byteLength;
-        offset += result.bytesRead;
-      }
-      if (result.eof) {
-        break;
-      }
+    try {
+      result = await this.gatewayClient.call<TransferSendResult>("fs.transfer.send", this.withEndpointTarget(endpoint, {
+        path: endpoint.path,
+        streamId,
+      }));
+    } catch (error) {
+      binary.cancel(error instanceof Error ? error.message : "Remote transfer failed");
+      collect.catch(() => undefined);
+      throw error;
     }
 
-    const bytes = new Uint8Array(total);
-    let cursor = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, cursor);
-      cursor += chunk.byteLength;
+    if (!result.ok) {
+      binary.cancel(result.error ?? "Remote transfer failed");
+      collect.catch(() => undefined);
+      throw new Error(result.error ?? `Unable to read ${endpoint.target}:${endpoint.path}`);
     }
-    return bytes;
+    if (typeof result.bytesSent === "number" && result.bytesSent !== size) {
+      binary.cancel("Remote transfer size mismatch");
+      collect.catch(() => undefined);
+      throw new Error(`Transfer size mismatch for ${endpoint.target}:${endpoint.path}: expected ${size}, got ${result.bytesSent}`);
+    }
+    return await collect;
   }
 
   private withEndpointTarget(endpoint: { target: string; path: string }, args: Record<string, unknown>): Record<string, unknown> {
@@ -1448,6 +1438,43 @@ function parsePositiveInteger(value: unknown): number | null {
     return null;
   }
   return Math.floor(value);
+}
+
+async function streamToBytes(stream: ReadableStream<Uint8Array>, expectedSize: number): Promise<Uint8Array> {
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (!value || value.byteLength === 0) {
+        continue;
+      }
+      size += value.byteLength;
+      if (size > expectedSize) {
+        throw new Error(`Transfer size mismatch: expected ${expectedSize}, got more than ${size}`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  if (size !== expectedSize) {
+    throw new Error(`Transfer size mismatch: expected ${expectedSize}, got ${size}`);
+  }
+
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
 }
 
 function matchesInclude(path: string, root: string, include: string | null): boolean {

@@ -199,16 +199,14 @@ describe("dispatch", () => {
     const frame = {
       type: "req",
       id: "req_1",
-      call: "fs.transfer.write",
+      call: "fs.transfer.receive",
       args: {
         target: "browser:conn_1",
         path: "/tmp/file.txt",
         streamId: 123,
-        offset: 0,
         expectedSize: 4,
-        done: true,
       },
-    } as RequestFrame<"fs.transfer.write">;
+    } as RequestFrame<"fs.transfer.receive">;
 
     const result = await dispatch(
       frame,
@@ -225,7 +223,7 @@ describe("dispatch", () => {
         ok: false,
         error: {
           code: 500,
-          message: "Failed to register route for fs.transfer.write: Binary stream id already active: 123",
+          message: "Failed to register route for fs.transfer.receive: Binary stream id already active: 123",
         },
       },
     });

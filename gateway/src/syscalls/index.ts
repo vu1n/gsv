@@ -5,12 +5,12 @@ import type { FsDeleteArgs, FsDeleteResult } from "./delete";
 import type { FsSearchArgs, FsSearchResult } from "./search";
 import type { FsCopyArgs, FsCopyResult } from "./copy";
 import type {
-  FsTransferReadArgs,
-  FsTransferReadResult,
+  FsTransferReceiveArgs,
+  FsTransferReceiveResult,
+  FsTransferSendArgs,
+  FsTransferSendResult,
   FsTransferStatArgs,
   FsTransferStatResult,
-  FsTransferWriteArgs,
-  FsTransferWriteResult,
 } from "./transfer";
 import type {
   ShellExecArgs,
@@ -245,8 +245,8 @@ export type SyscallDomains = {
   "fs.search": { args: FsSearchArgs; result: FsSearchResult };
   "fs.copy": { args: FsCopyArgs; result: FsCopyResult };
   "fs.transfer.stat": { args: FsTransferStatArgs; result: FsTransferStatResult };
-  "fs.transfer.read": { args: FsTransferReadArgs; result: FsTransferReadResult };
-  "fs.transfer.write": { args: FsTransferWriteArgs; result: FsTransferWriteResult };
+  "fs.transfer.send": { args: FsTransferSendArgs; result: FsTransferSendResult };
+  "fs.transfer.receive": { args: FsTransferReceiveArgs; result: FsTransferReceiveResult };
 
   // Shell (device commands)
   "shell.exec": { args: ShellExecArgs; result: ShellExecResult };

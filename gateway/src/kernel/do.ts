@@ -124,11 +124,11 @@ type BinaryRoute = {
   origin: RouteOrigin;
   deviceId: string;
   expiresAt: number;
+  kind: "relay" | "native-stream";
 };
 
-type PendingBinaryFrame = {
-  resolve: (frame: BinaryFrame) => void;
-  reject: (error: Error) => void;
+type PendingBinaryStream = {
+  controller: ReadableStreamDefaultController<Uint8Array>;
   timeoutId: ReturnType<typeof setTimeout>;
 };
 
@@ -242,7 +242,7 @@ export class Kernel extends Host<Env> {
   private readonly pendingProcessSignals = new Map<string, Promise<void>>();
   private readonly binaryRoutes = new Map<number, BinaryRoute>();
   private readonly binaryRoutesByRequest = new Map<string, Set<number>>();
-  private readonly pendingBinaryFrames = new Map<number, PendingBinaryFrame>();
+  private readonly pendingBinaryStreams = new Map<number, PendingBinaryStream>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -1259,8 +1259,12 @@ export class Kernel extends Host<Env> {
       registerRoute: this.registerRouteWithExpiry.bind(this),
       registerBinaryRoute: this.registerBinaryRoute.bind(this),
       requestDevice: this.requestDevice.bind(this),
-      requestDeviceBinary: this.requestDeviceBinary.bind(this),
-      receiveBinaryFrame: this.receiveBinaryFrame.bind(this),
+      allocateBinaryStreamId: this.allocateBinaryStreamId.bind(this),
+      startDeviceRequest: this.startDeviceRequest.bind(this),
+      registerBinaryRelay: this.registerBinaryRelay.bind(this),
+      receiveDeviceBinaryStream: this.receiveDeviceBinaryStream.bind(this),
+      receiveBinaryStream: this.receiveBinaryStream.bind(this),
+      sendDeviceBinaryFrame: this.sendDeviceBinaryFrame.bind(this),
     };
   }
 
@@ -1314,6 +1318,7 @@ export class Kernel extends Host<Env> {
     origin: RouteOrigin;
     deviceId: string;
     ttlMs: number;
+    kind?: "relay" | "native-stream";
   }): { cancel: () => void } {
     if (this.binaryRoutes.has(route.streamId)) {
       throw new Error(`Binary stream id already active: ${route.streamId}`);
@@ -1325,6 +1330,7 @@ export class Kernel extends Host<Env> {
       origin: route.origin,
       deviceId: route.deviceId,
       expiresAt,
+      kind: route.kind ?? "relay",
     });
 
     const streamIds = this.binaryRoutesByRequest.get(route.requestId) ?? new Set<number>();
@@ -1349,7 +1355,7 @@ export class Kernel extends Host<Env> {
         this.binaryRoutesByRequest.delete(route.requestId);
       }
     }
-    this.rejectPendingBinaryFrame(streamId, new Error("Binary transfer route closed"));
+    this.rejectPendingBinaryStream(streamId, new Error("Binary transfer route closed"));
   }
 
   private clearBinaryRoutesForRequest(requestId: string): void {
@@ -1367,74 +1373,92 @@ export class Kernel extends Host<Env> {
     for (let attempt = 0; attempt < 16; attempt += 1) {
       crypto.getRandomValues(values);
       const streamId = values[0];
-      if (streamId > 0 && !this.binaryRoutes.has(streamId) && !this.pendingBinaryFrames.has(streamId)) {
+      if (
+        streamId > 0 &&
+        !this.binaryRoutes.has(streamId) &&
+        !this.pendingBinaryStreams.has(streamId)
+      ) {
         return streamId;
       }
     }
     throw new Error("Unable to allocate binary stream id");
   }
 
-  private createPendingBinaryFrame(streamId: number, ttlMs: number): {
-    promise: Promise<BinaryFrame>;
+  private createPendingBinaryStream(streamId: number, ttlMs: number): {
+    stream: ReadableStream<Uint8Array>;
     cleanup: () => void;
   } {
-    if (this.pendingBinaryFrames.has(streamId)) {
+    if (this.pendingBinaryStreams.has(streamId)) {
       throw new Error(`Binary stream id already waiting: ${streamId}`);
     }
+
     let settled = false;
-    const promise = new Promise<BinaryFrame>((resolve, reject) => {
-      const timeoutId = setTimeout(() => {
-        this.pendingBinaryFrames.delete(streamId);
-        settled = true;
-        reject(new Error(`Binary transfer timed out: ${streamId}`));
-      }, ttlMs);
-      this.pendingBinaryFrames.set(streamId, {
-        resolve: (frame) => {
+    const stream = new ReadableStream<Uint8Array>({
+      start: (controller) => {
+        const timeoutId = setTimeout(() => {
           settled = true;
-          resolve(frame);
-        },
-        reject: (error) => {
-          settled = true;
-          reject(error);
-        },
-        timeoutId,
-      });
+          this.rejectPendingBinaryStream(
+            streamId,
+            new Error(`Binary transfer timed out: ${streamId}`),
+          );
+          this.clearBinaryRoute(streamId);
+        }, ttlMs);
+        this.pendingBinaryStreams.set(streamId, { controller, timeoutId });
+      },
+      cancel: () => {
+        if (!settled) {
+          this.clearPendingBinaryStream(streamId);
+          this.clearBinaryRoute(streamId);
+        }
+      },
     });
 
     return {
-      promise,
+      stream,
       cleanup: () => {
         if (!settled) {
-          this.rejectPendingBinaryFrame(streamId, new Error("Binary transfer cancelled"));
+          this.rejectPendingBinaryStream(streamId, new Error("Binary transfer cancelled"));
+          this.clearBinaryRoute(streamId);
         }
       },
     };
   }
 
-  private rejectPendingBinaryFrame(streamId: number, error: Error): void {
-    const pending = this.pendingBinaryFrames.get(streamId);
+  private clearPendingBinaryStream(streamId: number): PendingBinaryStream | null {
+    const pending = this.pendingBinaryStreams.get(streamId);
     if (!pending) {
-      return;
+      return null;
     }
-    this.pendingBinaryFrames.delete(streamId);
+    this.pendingBinaryStreams.delete(streamId);
     clearTimeout(pending.timeoutId);
-    pending.reject(error);
+    return pending;
   }
 
-  private receiveBinaryFrame(route: {
+  private closePendingBinaryStream(streamId: number): void {
+    const pending = this.clearPendingBinaryStream(streamId);
+    if (pending) {
+      pending.controller.close();
+    }
+  }
+
+  private rejectPendingBinaryStream(streamId: number, error: Error): void {
+    const pending = this.clearPendingBinaryStream(streamId);
+    if (pending) {
+      pending.controller.error(error);
+    }
+  }
+
+  private receiveBinaryStream(route: {
     requestId: string;
     streamId: number;
     origin: RouteOrigin;
     ttlMs: number;
-  }): {
-    promise: Promise<BinaryFrame>;
-    cleanup: () => void;
-  } {
+  }): { stream: ReadableStream<Uint8Array>; cancel: () => void } {
     if (route.origin.type !== "connection") {
       throw new Error("Native binary transfer requires an active WebSocket connection");
     }
 
-    const pending = this.createPendingBinaryFrame(route.streamId, route.ttlMs);
+    const pending = this.createPendingBinaryStream(route.streamId, route.ttlMs);
     let binaryRoute: { cancel: () => void };
     try {
       binaryRoute = this.registerBinaryRoute({
@@ -1443,16 +1467,16 @@ export class Kernel extends Host<Env> {
         origin: route.origin,
         deviceId: KERNEL_BINARY_DEVICE_ID,
         ttlMs: route.ttlMs,
+        kind: "native-stream",
       });
     } catch (error) {
       pending.cleanup();
-      pending.promise.catch(() => {});
       throw error;
     }
 
     return {
-      promise: pending.promise,
-      cleanup: () => {
+      stream: pending.stream,
+      cancel: () => {
         pending.cleanup();
         binaryRoute.cancel();
       },
@@ -1511,13 +1535,12 @@ export class Kernel extends Host<Env> {
     }
   }
 
-  private async requestDeviceBinary(
+  private async startDeviceRequest(
     deviceId: string,
     call: string,
     args: unknown,
-    options: { payload?: Uint8Array; receive?: boolean; streamId?: number } = {},
     ttlMs = 60_000,
-  ): Promise<{ data: unknown; payload?: Uint8Array; flags?: number; streamId: number }> {
+  ): Promise<{ requestId: string; promise: Promise<unknown>; cancel: () => void }> {
     const device = this.devices.get(deviceId);
     if (!device || !device.online) {
       throw new Error(`Device offline: ${deviceId}`);
@@ -1532,13 +1555,8 @@ export class Kernel extends Host<Env> {
     }
 
     const id = crypto.randomUUID();
-    const streamId = options.streamId ?? this.allocateBinaryStreamId();
     const pending = this.createPendingAppResponse(id);
-    const binaryPending = options.receive === true
-      ? this.createPendingBinaryFrame(streamId, ttlMs)
-      : null;
     let route: { cancel: () => void } | null = null;
-    let binaryRoute: { cancel: () => void } | null = null;
 
     try {
       route = await this.registerRouteWithExpiry({
@@ -1548,75 +1566,101 @@ export class Kernel extends Host<Env> {
         deviceId,
         ttlMs,
       });
-      try {
-        binaryRoute = this.registerBinaryRoute({
-          requestId: id,
-          streamId,
-          origin: { type: "app", id },
-          deviceId,
-          ttlMs,
-        });
-      } catch (error) {
-        route.cancel();
-        throw error;
-      }
 
-      try {
-        deviceConn.send(JSON.stringify({
-          type: "req",
-          id,
-          call,
-          args: withBinaryStreamId(args, streamId),
-        }));
-        if (options.payload) {
-          deviceConn.send(buildBinaryFrame(
-            streamId,
-            BINARY_FRAME_DATA | BINARY_FRAME_END,
-            options.payload,
-          ));
-        }
-      } catch (error) {
-        route.cancel();
-        binaryRoute.cancel();
-        if (binaryPending) {
-          binaryPending.cleanup();
-          binaryPending.promise.catch(() => {});
-        }
-        throw error;
-      }
-
-      const response = await pending.promise;
-      if (!response.ok) {
-        if (binaryPending) {
-          binaryPending.cleanup();
-          binaryPending.promise.catch(() => {});
-        }
-        throw new Error(response.error.message);
-      }
-      if (isTransferFailureResponse(response.data)) {
-        if (binaryPending) {
-          binaryPending.cleanup();
-          binaryPending.promise.catch(() => {});
-        }
-        return {
-          data: response.data,
-          streamId,
-        };
-      }
-      const binaryFrame = binaryPending ? await binaryPending.promise : null;
-      if (binaryFrame?.flags && (binaryFrame.flags & BINARY_FRAME_ERROR) !== 0) {
-        throw new Error(new TextDecoder().decode(binaryFrame.payload) || "Binary transfer failed");
-      }
-      return {
-        data: response.data ?? {},
-        ...(binaryFrame ? { payload: binaryFrame.payload, flags: binaryFrame.flags } : {}),
-        streamId,
-      };
-    } finally {
+      deviceConn.send(JSON.stringify({
+        type: "req",
+        id,
+        call,
+        args,
+      }));
+    } catch (error) {
+      route?.cancel();
       pending.cleanup();
-      binaryPending?.cleanup();
-      binaryRoute?.cancel();
+      throw error;
     }
+
+    const promise = pending.promise.then((frame) => {
+      if (!frame.ok) {
+        throw new Error(frame.error.message);
+      }
+      return frame.data ?? {};
+    }).finally(() => {
+      pending.cleanup();
+    });
+
+    return {
+      requestId: id,
+      promise,
+      cancel: () => {
+        route?.cancel();
+        pending.cleanup();
+      },
+    };
+  }
+
+  private registerBinaryRelay(route: {
+    requestId: string;
+    streamId: number;
+    sourceDeviceId: string;
+    destinationDeviceId: string;
+    ttlMs?: number;
+  }): { cancel: () => void } {
+    const destinationConn = this.findDeviceConnection(route.destinationDeviceId);
+    if (!destinationConn) {
+      throw new Error(`No active connection for device: ${route.destinationDeviceId}`);
+    }
+    return this.registerBinaryRoute({
+      requestId: route.requestId,
+      streamId: route.streamId,
+      origin: { type: "connection", id: destinationConn.id },
+      deviceId: route.sourceDeviceId,
+      ttlMs: route.ttlMs ?? 60_000,
+    });
+  }
+
+  private receiveDeviceBinaryStream(route: {
+    requestId: string;
+    streamId: number;
+    sourceDeviceId: string;
+    ttlMs?: number;
+  }): { stream: ReadableStream<Uint8Array>; cancel: () => void } {
+    const ttlMs = route.ttlMs ?? 60_000;
+    const pending = this.createPendingBinaryStream(route.streamId, ttlMs);
+    let binaryRoute: { cancel: () => void };
+    try {
+      binaryRoute = this.registerBinaryRoute({
+        requestId: route.requestId,
+        streamId: route.streamId,
+        origin: { type: "app", id: route.requestId },
+        deviceId: route.sourceDeviceId,
+        ttlMs,
+        kind: "native-stream",
+      });
+    } catch (error) {
+      pending.cleanup();
+      throw error;
+    }
+
+    return {
+      stream: pending.stream,
+      cancel: () => {
+        pending.cleanup();
+        binaryRoute.cancel();
+      },
+    };
+  }
+
+  private sendDeviceBinaryFrame(
+    deviceId: string,
+    streamId: number,
+    flags: number,
+    payload?: Uint8Array,
+  ): void {
+    const deviceConn = this.findDeviceConnection(deviceId);
+    if (!deviceConn) {
+      throw new Error(`No active connection for device: ${deviceId}`);
+    }
+    deviceConn.send(buildBinaryFrame(streamId, flags, payload));
   }
 
   private findDeviceConnection(deviceId: string): Connection<ConnectionState> | null {
@@ -2254,8 +2298,8 @@ export class Kernel extends Host<Env> {
       return;
     }
 
-    if (route.deviceId === KERNEL_BINARY_DEVICE_ID) {
-      this.deliverBinaryToNativeHandler(connection, route, frame);
+    if (route.kind === "native-stream") {
+      this.deliverBinaryToNativeStream(connection, route, frame);
       return;
     }
 
@@ -2272,23 +2316,43 @@ export class Kernel extends Host<Env> {
     }
   }
 
-  private deliverBinaryToNativeHandler(
+  private deliverBinaryToNativeStream(
     connection: Connection<ConnectionState>,
     route: BinaryRoute,
     frame: BinaryFrame,
   ): void {
-    if (route.origin.type !== "connection" || route.origin.id !== connection.id) {
+    const fromOriginConnection =
+      route.deviceId === KERNEL_BINARY_DEVICE_ID &&
+      route.origin.type === "connection" &&
+      route.origin.id === connection.id;
+    const fromDeviceConnection =
+      route.deviceId !== KERNEL_BINARY_DEVICE_ID &&
+      this.isConnectionForDevice(connection, route.deviceId);
+
+    if (!fromOriginConnection && !fromDeviceConnection) {
       return;
     }
 
-    const pending = this.pendingBinaryFrames.get(frame.streamId);
+    const pending = this.pendingBinaryStreams.get(frame.streamId);
     if (!pending) {
       return;
     }
 
-    this.pendingBinaryFrames.delete(frame.streamId);
-    clearTimeout(pending.timeoutId);
-    pending.resolve(frame);
+    if ((frame.flags & BINARY_FRAME_ERROR) !== 0) {
+      const message = new TextDecoder().decode(frame.payload) || "Binary transfer failed";
+      this.rejectPendingBinaryStream(frame.streamId, new Error(message));
+      this.clearBinaryRoute(frame.streamId);
+      return;
+    }
+
+    if ((frame.flags & BINARY_FRAME_DATA) !== 0 && frame.payload.byteLength > 0) {
+      pending.controller.enqueue(frame.payload);
+    }
+
+    if ((frame.flags & BINARY_FRAME_END) !== 0) {
+      this.closePendingBinaryStream(frame.streamId);
+      this.clearBinaryRoute(frame.streamId);
+    }
   }
 
   private deliverBinaryFromDevice(route: BinaryRoute, frame: BinaryFrame): void {
@@ -2298,15 +2362,6 @@ export class Kernel extends Host<Env> {
         conn.send(buildBinaryFrame(frame.streamId, frame.flags, frame.payload));
       }
       return;
-    }
-
-    if (route.origin.type === "app") {
-      const pending = this.pendingBinaryFrames.get(frame.streamId);
-      if (pending) {
-        this.pendingBinaryFrames.delete(frame.streamId);
-        clearTimeout(pending.timeoutId);
-        pending.resolve(frame);
-      }
     }
   }
 
@@ -2969,19 +3024,6 @@ function errFrame(id: string, code: number, message: string): ResponseFrame {
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? value as Record<string, unknown> : null;
-}
-
-function withBinaryStreamId(args: unknown, streamId: number): Record<string, unknown> {
-  return {
-    ...(args && typeof args === "object" ? args as Record<string, unknown> : {}),
-    streamId,
-  };
-}
-
-function isTransferFailureResponse(value: unknown): value is { ok: false; error?: unknown } {
-  return value !== null
-    && typeof value === "object"
-    && (value as { ok?: unknown }).ok === false;
 }
 
 function normalizeTargetText(value: unknown, fallback: string, maxLength: number): string {

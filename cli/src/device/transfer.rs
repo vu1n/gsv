@@ -8,10 +8,10 @@ use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Notify;
 
-const MAX_TRANSFER_READ_BYTES: u64 = 1024 * 1024;
+const MAX_TRANSFER_CHUNK_BYTES: usize = 1024 * 1024;
 const BINARY_TRANSFER_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
@@ -87,8 +87,8 @@ pub async fn handle_transfer_syscall(
 ) -> Option<Result<Value, String>> {
     match call {
         "fs.transfer.stat" => Some(handle_stat(args, workspace).await),
-        "fs.transfer.read" => Some(handle_read(args, workspace, conn).await),
-        "fs.transfer.write" => Some(handle_write(args, workspace, binary_inbox).await),
+        "fs.transfer.send" => Some(handle_send(args, workspace, conn).await),
+        "fs.transfer.receive" => Some(handle_receive(args, workspace, binary_inbox).await),
         _ => None,
     }
 }
@@ -100,24 +100,19 @@ struct TransferStatArgs {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct TransferReadArgs {
+struct TransferSendArgs {
     path: String,
-    offset: u64,
-    length: u64,
     stream_id: u32,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct TransferWriteArgs {
+struct TransferReceiveArgs {
     path: String,
-    offset: u64,
     stream_id: u32,
     expected_size: u64,
     #[serde(default)]
     content_type: Option<String>,
-    #[serde(default)]
-    done: bool,
 }
 
 async fn handle_stat(args: Value, workspace: &Path) -> Result<Value, String> {
@@ -145,53 +140,80 @@ async fn handle_stat(args: Value, workspace: &Path) -> Result<Value, String> {
     }))
 }
 
-async fn handle_read(args: Value, workspace: &Path, conn: &Connection) -> Result<Value, String> {
-    let args: TransferReadArgs =
+async fn handle_send(args: Value, workspace: &Path, conn: &Connection) -> Result<Value, String> {
+    let args: TransferSendArgs =
         serde_json::from_value(args).map_err(|e| format!("Invalid arguments: {}", e))?;
-    let (path, bytes, eof) = read_transfer_bytes(&args, workspace).await?;
-    conn.send_binary(build_binary_frame(
-        args.stream_id,
-        BINARY_FRAME_DATA | BINARY_FRAME_END,
-        &bytes,
-    ))
-    .await
-    .map_err(|e| format!("Failed to send binary transfer data: {}", e))?;
 
-    Ok(json!({
-        "ok": true,
-        "path": path.display().to_string(),
-        "offset": args.offset,
-        "bytesRead": bytes.len(),
-        "eof": eof
-    }))
+    let result = async {
+        let path = resolve_path(&args.path, workspace);
+        let mut file = tokio::fs::File::open(&path)
+            .await
+            .map_err(|e| format!("Failed to open '{}': {}", path.display(), e))?;
+        let metadata = file
+            .metadata()
+            .await
+            .map_err(|e| format!("Failed to stat '{}': {}", path.display(), e))?;
+        if !metadata.is_file() {
+            return Err(format!("Not a file: '{}'", path.display()));
+        }
+
+        let mut bytes_sent: u64 = 0;
+        let mut buffer = vec![0u8; MAX_TRANSFER_CHUNK_BYTES];
+        loop {
+            let bytes_read = file
+                .read(&mut buffer)
+                .await
+                .map_err(|e| format!("Failed to read '{}': {}", path.display(), e))?;
+            if bytes_read == 0 {
+                break;
+            }
+            conn.send_binary(build_binary_frame(
+                args.stream_id,
+                BINARY_FRAME_DATA,
+                &buffer[..bytes_read],
+            ))
+            .await
+            .map_err(|e| format!("Failed to send binary transfer data: {}", e))?;
+            bytes_sent += bytes_read as u64;
+        }
+        conn.send_binary(build_binary_frame(args.stream_id, BINARY_FRAME_END, &[]))
+            .await
+            .map_err(|e| format!("Failed to finish binary transfer: {}", e))?;
+
+        let content_type = mime_guess::from_path(&path)
+            .first()
+            .map(|mime| mime.essence_str().to_string());
+
+        Ok(json!({
+            "ok": true,
+            "path": path.display().to_string(),
+            "size": metadata.len(),
+            "bytesSent": bytes_sent,
+            "contentType": content_type
+        }))
+    }
+    .await;
+
+    if let Err(error) = &result {
+        let _ = conn
+            .send_binary(build_binary_frame(
+                args.stream_id,
+                BINARY_FRAME_ERROR | BINARY_FRAME_END,
+                error.as_bytes(),
+            ))
+            .await;
+    }
+
+    result
 }
 
-async fn handle_write(
+async fn handle_receive(
     args: Value,
     workspace: &Path,
     binary_inbox: &BinaryFrameInbox,
 ) -> Result<Value, String> {
-    let args: TransferWriteArgs =
+    let args: TransferReceiveArgs =
         serde_json::from_value(args).map_err(|e| format!("Invalid arguments: {}", e))?;
-    let frame = binary_inbox.take(args.stream_id).await?;
-    if frame.flags & BINARY_FRAME_ERROR != 0 {
-        return Err(String::from_utf8(frame.payload)
-            .unwrap_or_else(|_| "Binary transfer failed".to_string()));
-    }
-    if frame.flags & BINARY_FRAME_DATA == 0 {
-        return Err(format!(
-            "Binary transfer stream {} did not include data",
-            args.stream_id
-        ));
-    }
-    write_transfer_bytes(&args, workspace, &frame.payload).await
-}
-
-async fn write_transfer_bytes(
-    args: &TransferWriteArgs,
-    workspace: &Path,
-    bytes: &[u8],
-) -> Result<Value, String> {
     let path = resolve_path(&args.path, workspace);
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent)
@@ -199,75 +221,58 @@ async fn write_transfer_bytes(
             .map_err(|e| format!("Failed to create '{}': {}", parent.display(), e))?;
     }
 
-    let mut options = tokio::fs::OpenOptions::new();
-    options.create(true).write(true);
-    if args.offset == 0 {
-        options.truncate(true);
-    }
-    let mut file = options
+    let mut file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
         .open(&path)
         .await
         .map_err(|e| format!("Failed to open '{}': {}", path.display(), e))?;
-    file.seek(std::io::SeekFrom::Start(args.offset))
-        .await
-        .map_err(|e| format!("Failed to seek '{}': {}", path.display(), e))?;
-    file.write_all(bytes)
-        .await
-        .map_err(|e| format!("Failed to write '{}': {}", path.display(), e))?;
+
+    let mut bytes_written: u64 = 0;
+    loop {
+        let frame = binary_inbox.take(args.stream_id).await?;
+        if frame.flags & BINARY_FRAME_ERROR != 0 {
+            return Err(String::from_utf8(frame.payload)
+                .unwrap_or_else(|_| "Binary transfer failed".to_string()));
+        }
+        if frame.flags & BINARY_FRAME_DATA != 0 {
+            bytes_written += frame.payload.len() as u64;
+            if bytes_written > args.expected_size {
+                return Err(format!(
+                    "Transfer size mismatch for '{}': expected {}, got more than {}",
+                    path.display(),
+                    args.expected_size,
+                    bytes_written
+                ));
+            }
+            file.write_all(&frame.payload)
+                .await
+                .map_err(|e| format!("Failed to write '{}': {}", path.display(), e))?;
+        }
+        if frame.flags & BINARY_FRAME_END != 0 {
+            break;
+        }
+    }
+
     file.flush()
         .await
         .map_err(|e| format!("Failed to flush '{}': {}", path.display(), e))?;
-    drop(file);
-
-    if args.done {
-        let metadata = tokio::fs::metadata(&path)
-            .await
-            .map_err(|e| format!("Failed to stat '{}': {}", path.display(), e))?;
-        if metadata.len() != args.expected_size {
-            return Err(format!(
-                "Transfer size mismatch for '{}': expected {}, got {}",
-                path.display(),
-                args.expected_size,
-                metadata.len()
-            ));
-        }
+    if bytes_written != args.expected_size {
+        return Err(format!(
+            "Transfer size mismatch for '{}': expected {}, got {}",
+            path.display(),
+            args.expected_size,
+            bytes_written
+        ));
     }
 
     Ok(json!({
         "ok": true,
         "path": path.display().to_string(),
-        "offset": args.offset,
-        "bytesWritten": bytes.len(),
-        "done": args.done,
+        "bytesWritten": bytes_written,
         "contentType": args.content_type
     }))
-}
-
-async fn read_transfer_bytes(
-    args: &TransferReadArgs,
-    workspace: &Path,
-) -> Result<(PathBuf, Vec<u8>, bool), String> {
-    let path = resolve_path(&args.path, workspace);
-    let length = args.length.min(MAX_TRANSFER_READ_BYTES) as usize;
-    let mut file = tokio::fs::File::open(&path)
-        .await
-        .map_err(|e| format!("Failed to open '{}': {}", path.display(), e))?;
-    file.seek(std::io::SeekFrom::Start(args.offset))
-        .await
-        .map_err(|e| format!("Failed to seek '{}': {}", path.display(), e))?;
-
-    let mut bytes = vec![0u8; length];
-    let bytes_read = file
-        .read(&mut bytes)
-        .await
-        .map_err(|e| format!("Failed to read '{}': {}", path.display(), e))?;
-    bytes.truncate(bytes_read);
-    let total_size = tokio::fs::metadata(&path)
-        .await
-        .map_err(|e| format!("Failed to stat '{}': {}", path.display(), e))?
-        .len();
-    let eof = args.offset + bytes_read as u64 >= total_size;
-    Ok((path, bytes, eof))
 }
 
 fn resolve_path(path: &str, workspace: &Path) -> PathBuf {
@@ -281,103 +286,25 @@ fn resolve_path(path: &str, workspace: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{read_transfer_bytes, write_transfer_bytes, TransferReadArgs, TransferWriteArgs};
+    use super::{TransferReceiveArgs, TransferSendArgs};
     use serde_json::json;
-    use std::path::PathBuf;
-
-    fn test_root() -> PathBuf {
-        std::env::temp_dir().join(format!("gsv-transfer-test-{}", uuid::Uuid::new_v4()))
-    }
-
-    #[tokio::test]
-    async fn reads_file_chunks() {
-        let root = test_root();
-        tokio::fs::create_dir_all(&root).await.unwrap();
-        tokio::fs::write(root.join("source.txt"), "hello world")
-            .await
-            .unwrap();
-
-        let (_path, bytes, eof) = read_transfer_bytes(
-            &TransferReadArgs {
-                path: "source.txt".to_string(),
-                offset: 6,
-                length: 5,
-                stream_id: 1,
-            },
-            &root,
-        )
-        .await
-        .unwrap();
-        assert_eq!(bytes, b"world");
-        assert!(eof);
-
-        tokio::fs::remove_dir_all(root).await.unwrap();
-    }
 
     #[test]
     fn deserializes_transfer_stream_ids_from_camel_case_json() {
-        let read: TransferReadArgs = serde_json::from_value(json!({
+        let send: TransferSendArgs = serde_json::from_value(json!({
             "path": "source.txt",
-            "offset": 0,
-            "length": 10,
             "streamId": 123
         }))
         .unwrap();
-        assert_eq!(read.stream_id, 123);
+        assert_eq!(send.stream_id, 123);
 
-        let write: TransferWriteArgs = serde_json::from_value(json!({
+        let receive: TransferReceiveArgs = serde_json::from_value(json!({
             "path": "dest.txt",
-            "offset": 0,
             "streamId": 456,
-            "expectedSize": 10,
-            "done": true
+            "expectedSize": 10
         }))
         .unwrap();
-        assert_eq!(write.stream_id, 456);
-        assert_eq!(write.expected_size, 10);
-    }
-
-    #[tokio::test]
-    async fn writes_chunks_and_validates_size() {
-        let root = test_root();
-        tokio::fs::create_dir_all(&root).await.unwrap();
-
-        write_transfer_bytes(
-            &TransferWriteArgs {
-                path: "dest.txt".to_string(),
-                offset: 0,
-                stream_id: 1,
-                expected_size: 11,
-                content_type: None,
-                done: false,
-            },
-            &root,
-            b"hello ",
-        )
-        .await
-        .unwrap();
-        write_transfer_bytes(
-            &TransferWriteArgs {
-                path: "dest.txt".to_string(),
-                offset: 6,
-                stream_id: 2,
-                expected_size: 11,
-                content_type: None,
-                done: true,
-            },
-            &root,
-            b"world",
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(
-            tokio::fs::read_to_string(root.join("dest.txt"))
-                .await
-                .unwrap(),
-            "hello world"
-        );
-
-        tokio::fs::remove_dir_all(root).await.unwrap();
+        assert_eq!(receive.stream_id, 456);
+        assert_eq!(receive.expected_size, 10);
     }
 }

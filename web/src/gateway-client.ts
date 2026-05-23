@@ -8,10 +8,11 @@ import type {
 } from "@gsv/protocol/syscalls/system";
 import type { ProcMediaInput } from "@gsv/protocol/syscalls/proc";
 import {
+  BINARY_FRAME_DATA,
+  BINARY_FRAME_END,
   BINARY_FRAME_ERROR,
   buildBinaryFrame,
   parseBinaryFrame,
-  type BinaryFrame,
 } from "@gsv/protocol/binary-frame";
 
 type GatewayErrorShape = {
@@ -132,8 +133,10 @@ export type GatewayClientLike = {
   onRequest: (call: string, handler: GatewayRequestHandler) => () => void;
   call: <T = unknown>(call: string, args?: unknown) => Promise<T>;
   allocateBinaryStreamId: () => number;
-  waitForBinaryFrame: (streamId: number, timeoutMs?: number) => Promise<BinaryFrame>;
-  cancelBinaryFrame: (streamId: number, reason?: string) => void;
+  openBinaryStream: (streamId: number, timeoutMs?: number) => {
+    stream: ReadableStream<Uint8Array>;
+    cancel: (reason?: string) => void;
+  };
   sendBinaryFrame: (streamId: number, flags: number, payload?: Uint8Array) => void;
   spawnProcess: (args: ProcSpawnArgs) => Promise<ProcSpawnResult>;
   sendMessage: (message: string, pid?: string, media?: ProcMediaInput[]) => Promise<ProcSendResult>;
@@ -152,9 +155,8 @@ type PendingRequest = {
   call: string;
 };
 
-type PendingBinaryRequest = {
-  resolve: (frame: BinaryFrame) => void;
-  reject: (error: Error) => void;
+type PendingBinaryStream = {
+  controller: ReadableStreamDefaultController<Uint8Array>;
   timeoutId: number;
 };
 
@@ -165,6 +167,8 @@ const REQUEST_TIMEOUTS_MS: Record<string, number> = {
   "sys.setup": LONG_RUNNING_REQUEST_TIMEOUT_MS,
   "sys.bootstrap": LONG_RUNNING_REQUEST_TIMEOUT_MS,
   "fs.copy": LONG_RUNNING_REQUEST_TIMEOUT_MS,
+  "fs.transfer.send": LONG_RUNNING_REQUEST_TIMEOUT_MS,
+  "fs.transfer.receive": LONG_RUNNING_REQUEST_TIMEOUT_MS,
   "ai.transcription.create": LONG_RUNNING_REQUEST_TIMEOUT_MS,
   "ai.speech.create": LONG_RUNNING_REQUEST_TIMEOUT_MS,
 };
@@ -202,7 +206,7 @@ async function normalizeBinaryMessage(raw: unknown): Promise<ArrayBuffer | Array
 export class GatewayClient implements GatewayClientLike {
   private socket: WebSocket | null = null;
   private pending = new Map<string, PendingRequest>();
-  private pendingBinary = new Map<number, PendingBinaryRequest>();
+  private pendingBinaryStreams = new Map<number, PendingBinaryStream>();
   private signalListeners = new Set<(signal: string, payload: unknown) => void>();
   private statusListeners = new Set<(status: GatewayClientStatus) => void>();
   private requestHandlers = new Map<string, Set<GatewayRequestHandler>>();
@@ -444,42 +448,42 @@ export class GatewayClient implements GatewayClientLike {
     for (let attempt = 0; attempt < 16; attempt += 1) {
       crypto.getRandomValues(values);
       const streamId = values[0];
-      if (streamId > 0 && !this.pendingBinary.has(streamId)) {
+      if (streamId > 0 && !this.pendingBinaryStreams.has(streamId)) {
         return streamId;
       }
     }
     throw new Error("Unable to allocate binary stream id");
   }
 
-  waitForBinaryFrame(streamId: number, timeoutMs = DEFAULT_BINARY_TIMEOUT_MS): Promise<BinaryFrame> {
+  openBinaryStream(streamId: number, timeoutMs = DEFAULT_BINARY_TIMEOUT_MS): {
+    stream: ReadableStream<Uint8Array>;
+    cancel: (reason?: string) => void;
+  } {
     if (!Number.isSafeInteger(streamId) || streamId <= 0 || streamId > 0xffffffff) {
-      return Promise.reject(new Error(`Invalid binary stream id: ${streamId}`));
+      throw new Error(`Invalid binary stream id: ${streamId}`);
     }
-    if (this.pendingBinary.has(streamId)) {
-      return Promise.reject(new Error(`Binary stream already pending: ${streamId}`));
+    if (this.pendingBinaryStreams.has(streamId)) {
+      throw new Error(`Binary stream already pending: ${streamId}`);
     }
 
-    return new Promise((resolve, reject) => {
-      const timeoutId = window.setTimeout(() => {
-        this.pendingBinary.delete(streamId);
-        reject(new Error(`Binary transfer timed out: ${streamId}`));
-      }, timeoutMs);
-      this.pendingBinary.set(streamId, {
-        resolve,
-        reject,
-        timeoutId,
-      });
+    const stream = new ReadableStream<Uint8Array>({
+      start: (controller) => {
+        const timeoutId = window.setTimeout(() => {
+          this.rejectBinaryStream(streamId, `Binary transfer timed out: ${streamId}`);
+        }, timeoutMs);
+        this.pendingBinaryStreams.set(streamId, { controller, timeoutId });
+      },
+      cancel: () => {
+        this.clearBinaryStream(streamId);
+      },
     });
-  }
 
-  cancelBinaryFrame(streamId: number, reason = "Binary transfer cancelled"): void {
-    const pending = this.pendingBinary.get(streamId);
-    if (!pending) {
-      return;
-    }
-    this.pendingBinary.delete(streamId);
-    window.clearTimeout(pending.timeoutId);
-    pending.reject(new Error(reason));
+    return {
+      stream,
+      cancel: (reason = "Binary transfer cancelled") => {
+        this.rejectBinaryStream(streamId, reason);
+      },
+    };
   }
 
   sendBinaryFrame(streamId: number, flags: number, payload: Uint8Array = new Uint8Array()): void {
@@ -761,20 +765,41 @@ export class GatewayClient implements GatewayClientLike {
       return;
     }
 
-    const pending = this.pendingBinary.get(frame.streamId);
+    const pendingStream = this.pendingBinaryStreams.get(frame.streamId);
+    if (pendingStream) {
+      if ((frame.flags & BINARY_FRAME_ERROR) !== 0) {
+        const message = new TextDecoder().decode(frame.payload) || "Binary transfer failed";
+        this.rejectBinaryStream(frame.streamId, message);
+        return;
+      }
+      if ((frame.flags & BINARY_FRAME_DATA) !== 0 && frame.payload.byteLength > 0) {
+        pendingStream.controller.enqueue(frame.payload);
+      }
+      if ((frame.flags & BINARY_FRAME_END) !== 0) {
+        this.closeBinaryStream(frame.streamId);
+      }
+      return;
+    }
+  }
+
+  private clearBinaryStream(streamId: number): PendingBinaryStream | null {
+    const pending = this.pendingBinaryStreams.get(streamId);
     if (!pending) {
-      return;
+      return null;
     }
-    this.pendingBinary.delete(frame.streamId);
+    this.pendingBinaryStreams.delete(streamId);
     window.clearTimeout(pending.timeoutId);
+    return pending;
+  }
 
-    if ((frame.flags & BINARY_FRAME_ERROR) !== 0) {
-      const message = new TextDecoder().decode(frame.payload) || "Binary transfer failed";
-      pending.reject(new Error(message));
-      return;
-    }
+  private closeBinaryStream(streamId: number): void {
+    const pending = this.clearBinaryStream(streamId);
+    pending?.controller.close();
+  }
 
-    pending.resolve(frame);
+  private rejectBinaryStream(streamId: number, reason: string): void {
+    const pending = this.clearBinaryStream(streamId);
+    pending?.controller.error(new Error(reason));
   }
 
   private async handleIncomingRequest(frame: GatewayRequestFrame): Promise<void> {
@@ -830,11 +855,11 @@ export class GatewayClient implements GatewayClientLike {
       pending.reject(error);
     }
     this.pending.clear();
-    for (const pending of this.pendingBinary.values()) {
+    for (const pending of this.pendingBinaryStreams.values()) {
       window.clearTimeout(pending.timeoutId);
-      pending.reject(error);
+      pending.controller.error(error);
     }
-    this.pendingBinary.clear();
+    this.pendingBinaryStreams.clear();
   }
 }
 

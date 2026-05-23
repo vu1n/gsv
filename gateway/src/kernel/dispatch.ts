@@ -13,7 +13,6 @@
 import type { Connection } from "agents";
 import type { RequestFrame, ResponseFrame } from "../protocol/frames";
 import type { SyscallName } from "../syscalls";
-import type { FsTransferWriteArgs } from "../syscalls/transfer";
 import type { KernelContext } from "./context";
 import type { RouteOrigin } from "./routing";
 import type { ShellSessionRecord, ShellSessionStore } from "./shell-sessions";
@@ -25,8 +24,8 @@ import {
   handleFsSearch,
   handleFsCopy,
   handleFsTransferStat,
-  handleFsTransferRead,
-  handleFsTransferWrite,
+  handleFsTransferSend,
+  handleFsTransferReceive,
 } from "../drivers/native/fs";
 import { handleShellExec } from "../drivers/native/shell";
 import { handleAiTools, handleAiConfig, handleAiSpeechCreate, handleAiTranscriptionCreate } from "./ai";
@@ -121,12 +120,6 @@ import {
   targetCanHandle,
   type TargetDescriptor,
 } from "./targets";
-import {
-  BINARY_FRAME_DATA,
-  BINARY_FRAME_ERROR,
-  type BinaryFrame,
-} from "@gsv/protocol/binary-frame";
-
 export type DispatchDeps = {
   shellSessions: ShellSessionStore;
   connections: Map<string, Connection>;
@@ -143,24 +136,41 @@ export type DispatchDeps = {
     origin: RouteOrigin;
     deviceId: string;
     ttlMs: number;
+    kind?: "relay" | "native-stream";
   }) => { cancel: () => void };
   requestDevice: (deviceId: string, call: string, args: unknown, ttlMs?: number) => Promise<unknown>;
-  requestDeviceBinary: (
+  allocateBinaryStreamId: () => number;
+  startDeviceRequest: (
     deviceId: string,
     call: string,
     args: unknown,
-    options?: { payload?: Uint8Array; receive?: boolean; streamId?: number },
     ttlMs?: number,
-  ) => Promise<{ data: unknown; payload?: Uint8Array; flags?: number; streamId: number }>;
-  receiveBinaryFrame: (route: {
+  ) => Promise<{ requestId: string; promise: Promise<unknown>; cancel: () => void }>;
+  registerBinaryRelay: (route: {
+    requestId: string;
+    streamId: number;
+    sourceDeviceId: string;
+    destinationDeviceId: string;
+    ttlMs?: number;
+  }) => { cancel: () => void };
+  receiveDeviceBinaryStream: (route: {
+    requestId: string;
+    streamId: number;
+    sourceDeviceId: string;
+    ttlMs?: number;
+  }) => { stream: ReadableStream<Uint8Array>; cancel: () => void };
+  receiveBinaryStream: (route: {
     requestId: string;
     streamId: number;
     origin: RouteOrigin;
     ttlMs: number;
-  }) => {
-    promise: Promise<BinaryFrame>;
-    cleanup: () => void;
-  };
+  }) => { stream: ReadableStream<Uint8Array>; cancel: () => void };
+  sendDeviceBinaryFrame: (
+    deviceId: string,
+    streamId: number,
+    flags: number,
+    payload?: Uint8Array,
+  ) => void;
 };
 
 export type DispatchResult =
@@ -284,24 +294,32 @@ async function dispatchNative(
       case "fs.copy":
         data = await handleFsCopy(frame.args, ctx, {
           requestDevice: deps.requestDevice,
-          requestDeviceBinary: deps.requestDeviceBinary,
+          allocateBinaryStreamId: deps.allocateBinaryStreamId,
+          startDeviceRequest: deps.startDeviceRequest,
+          registerBinaryRelay: deps.registerBinaryRelay,
+          receiveDeviceBinaryStream: deps.receiveDeviceBinaryStream,
+          sendDeviceBinaryFrame: deps.sendDeviceBinaryFrame,
         });
         break;
       case "fs.transfer.stat":
         data = await handleFsTransferStat(frame.args, ctx);
         break;
-      case "fs.transfer.read":
-        data = await handleFsTransferRead(frame.args, ctx);
+      case "fs.transfer.send":
+        data = await handleFsTransferSend(frame.args, ctx);
         break;
-      case "fs.transfer.write":
-        data = await handleNativeFsTransferWrite(frame, origin, ctx, deps);
+      case "fs.transfer.receive":
+        data = await handleNativeFsTransferReceive(frame, origin, ctx, deps);
         break;
 
       case "shell.exec":
         data = await handleShellExec(frame.args, ctx, {
           fsCopyTransport: {
             requestDevice: deps.requestDevice,
-            requestDeviceBinary: deps.requestDeviceBinary,
+            allocateBinaryStreamId: deps.allocateBinaryStreamId,
+            startDeviceRequest: deps.startDeviceRequest,
+            registerBinaryRelay: deps.registerBinaryRelay,
+            receiveDeviceBinaryStream: deps.receiveDeviceBinaryStream,
+            sendDeviceBinaryFrame: deps.sendDeviceBinaryFrame,
           },
         });
         break;
@@ -582,20 +600,20 @@ async function dispatchNative(
   }
 }
 
-async function handleNativeFsTransferWrite(
-  frame: RequestFrame,
+async function handleNativeFsTransferReceive(
+  frame: RequestFrame<"fs.transfer.receive">,
   origin: RouteOrigin,
   ctx: KernelContext,
   deps: DispatchDeps,
 ): Promise<unknown> {
   const streamId = transferStreamId(frame.call, frame.args);
   if (streamId === null) {
-    return { ok: false, error: "fs.transfer.write requires streamId" };
+    return { ok: false, error: "fs.transfer.receive requires streamId" };
   }
 
-  let pending: { promise: Promise<BinaryFrame>; cleanup: () => void };
+  let pending: { stream: ReadableStream<Uint8Array>; cancel: () => void };
   try {
-    pending = deps.receiveBinaryFrame({
+    pending = deps.receiveBinaryStream({
       requestId: frame.id,
       streamId,
       origin,
@@ -609,19 +627,9 @@ async function handleNativeFsTransferWrite(
   }
 
   try {
-    const binaryFrame = await pending.promise;
-    if ((binaryFrame.flags & BINARY_FRAME_ERROR) !== 0) {
-      return {
-        ok: false,
-        error: new TextDecoder().decode(binaryFrame.payload) || "Binary transfer failed",
-      };
-    }
-    if ((binaryFrame.flags & BINARY_FRAME_DATA) === 0) {
-      return { ok: false, error: "fs.transfer.write did not include data" };
-    }
-    return await handleFsTransferWrite(frame.args as FsTransferWriteArgs, ctx, binaryFrame.payload);
+    return await handleFsTransferReceive(frame.args, ctx, pending.stream);
   } finally {
-    pending.cleanup();
+    pending.cancel();
   }
 }
 
@@ -708,7 +716,7 @@ async function routeToTarget(
 }
 
 function transferStreamId(call: string, args: unknown): number | null {
-  if (call !== "fs.transfer.read" && call !== "fs.transfer.write") {
+  if (call !== "fs.transfer.send" && call !== "fs.transfer.receive") {
     return null;
   }
   if (!args || typeof args !== "object") {

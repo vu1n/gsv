@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:test";
 import { handleShellExec } from "./shell";
-import { handleFsCopy, handleFsTransferRead, handleFsTransferWrite } from "./fs";
+import { handleFsCopy, handleFsTransferReceive, handleFsTransferSend } from "./fs";
 import { parseBinaryFrame } from "@gsv/protocol/binary-frame";
 import type { KernelContext } from "../../kernel/context";
 import type { DeviceRecord } from "../../kernel/devices";
@@ -306,10 +306,10 @@ describe("proc native command", () => {
 });
 
 describe("fs copy", () => {
-  it("reads only requested transfer ranges", async () => {
-    const sourceKey = "home/sam/copy-test/ranged-source.txt";
+  it("sends native transfer streams", async () => {
+    const sourceKey = "home/sam/copy-test/stream-source.txt";
     await env.STORAGE.delete(sourceKey);
-    await env.STORAGE.put(sourceKey, "0123456789", {
+    await env.STORAGE.put(sourceKey, "stream source", {
       httpMetadata: { contentType: "text/plain; charset=utf-8" },
       customMetadata: { uid: "1000", gid: "1000", mode: "644" },
     });
@@ -322,57 +322,45 @@ describe("fs copy", () => {
       },
     } as never;
 
-    const result = await handleFsTransferRead({
-      path: "/home/sam/copy-test/ranged-source.txt",
-      offset: 2,
-      length: 4,
+    const result = await handleFsTransferSend({
+      path: "/home/sam/copy-test/stream-source.txt",
       streamId: 123,
     }, ctx);
 
     expect(result).toMatchObject({
       ok: true,
-      path: "/home/sam/copy-test/ranged-source.txt",
-      offset: 2,
-      bytesRead: 4,
-      eof: false,
+      path: "/home/sam/copy-test/stream-source.txt",
+      size: "stream source".length,
+      bytesSent: "stream source".length,
     });
-    expect(sent).toHaveLength(1);
+    expect(sent).toHaveLength(2);
     const frame = parseBinaryFrame(sent[0] as ArrayBuffer);
     expect(frame).toMatchObject({ streamId: 123 });
-    expect(new TextDecoder().decode(frame?.payload)).toBe("2345");
+    expect(new TextDecoder().decode(frame?.payload)).toBe("stream source");
+    expect(parseBinaryFrame(sent[1] as ArrayBuffer)?.flags).toBe(2);
   });
 
-  it("writes native transfer chunks", async () => {
-    const destinationKey = "home/sam/copy-test/native-transfer-write.txt";
+  it("receives native transfer streams", async () => {
+    const destinationKey = "home/sam/copy-test/native-transfer-receive.txt";
     await env.STORAGE.delete(destinationKey);
-
-    const first = await handleFsTransferWrite({
-      path: "/home/sam/copy-test/native-transfer-write.txt",
-      offset: 0,
-      expectedSize: 11,
-      streamId: 123,
-    }, makeContext(), new TextEncoder().encode("hello "));
-    const second = await handleFsTransferWrite({
-      path: "/home/sam/copy-test/native-transfer-write.txt",
-      offset: 6,
-      expectedSize: 11,
-      streamId: 123,
-      done: true,
-    }, makeContext(), new TextEncoder().encode("world"));
-
-    expect(first).toMatchObject({
-      ok: true,
-      path: "/home/sam/copy-test/native-transfer-write.txt",
-      offset: 0,
-      bytesWritten: 6,
-      done: false,
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("hello "));
+        controller.enqueue(new TextEncoder().encode("world"));
+        controller.close();
+      },
     });
-    expect(second).toMatchObject({
+
+    const result = await handleFsTransferReceive({
+      path: "/home/sam/copy-test/native-transfer-receive.txt",
+      expectedSize: 11,
+      streamId: 123,
+    }, makeContext(), stream);
+
+    expect(result).toMatchObject({
       ok: true,
-      path: "/home/sam/copy-test/native-transfer-write.txt",
-      offset: 6,
-      bytesWritten: 5,
-      done: true,
+      path: "/home/sam/copy-test/native-transfer-receive.txt",
+      bytesWritten: 11,
     });
     expect(await (await env.STORAGE.get(destinationKey))?.text()).toBe("hello world");
   });
@@ -420,61 +408,6 @@ describe("fs copy", () => {
     expect(await (await env.STORAGE.get(destinationKey))?.text()).toBe("shell copied");
   });
 
-  it("routes native cp to browser targets with colon ids", async () => {
-    const sourceKey = "home/sam/copy-test/browser-source.txt";
-    await env.STORAGE.delete(sourceKey);
-    await env.STORAGE.put(sourceKey, "to browser", {
-      customMetadata: { uid: "1000", gid: "1000", mode: "644" },
-    });
-    const browserTarget = "browser:conn-123";
-    const ctx = makeContext({ capabilities: ["fs.read", "fs.write"] }) as KernelContext;
-    ctx.devices = {
-      canAccess: vi.fn(() => true),
-      canHandle: vi.fn(() => true),
-      listForUser: vi.fn(() => [{ device_id: browserTarget }]),
-    } as never;
-    const writes: Array<{ offset: number; bytes: Uint8Array; done?: boolean }> = [];
-
-    const result = await handleShellExec(
-      { input: `cp /home/sam/copy-test/browser-source.txt ${browserTarget}:/home/browser/browser-destination.txt` },
-      ctx,
-      {
-        fsCopyTransport: {
-          async requestDevice(deviceId, call, args) {
-            expect(deviceId).toBe(browserTarget);
-            if (call === "fs.transfer.stat") {
-              return { ok: false, error: "not found" };
-            }
-            expect(call).toBe("fs.transfer.write");
-            return { ok: true, path: "/home/browser/browser-destination.txt", offset: 0, bytesWritten: 0, done: Boolean((args as { done?: boolean }).done) };
-          },
-          async requestDeviceBinary(deviceId, call, args, options) {
-            expect(deviceId).toBe(browserTarget);
-            expect(call).toBe("fs.transfer.write");
-            writes.push({
-              offset: (args as { offset: number }).offset,
-              bytes: options?.payload ?? new Uint8Array(),
-              done: (args as { done?: boolean }).done,
-            });
-            return {
-              data: { ok: true, path: "/home/browser/browser-destination.txt", offset: 0, bytesWritten: options?.payload?.byteLength ?? 0, done: Boolean((args as { done?: boolean }).done) },
-              streamId: 1,
-            };
-          },
-        },
-      },
-    );
-
-    expect(result.ok).toBe(true);
-    expect(result.exitCode).toBe(0);
-    expect(writes.length).toBeGreaterThan(0);
-    const payload = writes
-      .filter((write) => !write.done)
-      .map((write) => new TextDecoder().decode(write.bytes))
-      .join("");
-    expect(payload).toBe("to browser");
-  });
-
   it("streams gsv files to a device target", async () => {
     const sourceKey = "home/sam/copy-test/device-source.txt";
     await env.STORAGE.delete(sourceKey);
@@ -487,7 +420,7 @@ describe("fs copy", () => {
       canAccess: vi.fn(() => true),
       canHandle: vi.fn(() => true),
     } as never;
-    const writes: Array<{ offset: number; bytes: Uint8Array; done?: boolean }> = [];
+    const frames: Array<{ flags: number; payload?: Uint8Array }> = [];
 
     const result = await handleFsCopy({
       source: { target: "gsv", path: "/home/sam/copy-test/device-source.txt" },
@@ -498,21 +431,31 @@ describe("fs copy", () => {
         if (call === "fs.transfer.stat") {
           return { ok: false, error: "not found" };
         }
-        expect(call).toBe("fs.transfer.write");
-        return { ok: true, path: "/tmp/device-destination.txt", offset: 0, bytesWritten: 0, done: Boolean((args as { done?: boolean }).done) };
+        throw new Error(`unexpected call ${call}`);
       },
-      async requestDeviceBinary(deviceId, call, args, options) {
+      allocateBinaryStreamId() {
+        return 99;
+      },
+      async startDeviceRequest(deviceId, call, args) {
         expect(deviceId).toBe("rearden");
-        expect(call).toBe("fs.transfer.write");
-        writes.push({
-          offset: (args as { offset: number }).offset,
-          bytes: options?.payload ?? new Uint8Array(),
-          done: (args as { done?: boolean }).done,
+        expect(call).toBe("fs.transfer.receive");
+        expect(args).toMatchObject({
+          path: "/tmp/device-destination.txt",
+          streamId: 99,
+          expectedSize: "to device".length,
         });
         return {
-          data: { ok: true, path: "/tmp/device-destination.txt", offset: 0, bytesWritten: options?.payload?.byteLength ?? 0, done: Boolean((args as { done?: boolean }).done) },
-          streamId: 1,
+          requestId: "receive-1",
+          promise: Promise.resolve({ ok: true, path: "/tmp/device-destination.txt", bytesWritten: "to device".length }),
+          cancel: vi.fn(),
         };
+      },
+      registerBinaryRelay: vi.fn(),
+      receiveDeviceBinaryStream: vi.fn(),
+      sendDeviceBinaryFrame(deviceId, streamId, flags, payload) {
+        expect(deviceId).toBe("rearden");
+        expect(streamId).toBe(99);
+        frames.push({ flags, payload });
       },
     });
 
@@ -521,58 +464,12 @@ describe("fs copy", () => {
       size: "to device".length,
       destination: { target: "rearden", path: "/tmp/device-destination.txt" },
     });
-    const payload = writes
-      .filter((write) => !write.done)
-      .map((write) => new TextDecoder().decode(write.bytes))
+    const payload = frames
+      .filter((frame) => (frame.flags & 1) !== 0)
+      .map((frame) => new TextDecoder().decode(frame.payload))
       .join("");
     expect(payload).toBe("to device");
-    expect(writes.at(-1)?.done).toBe(true);
-  });
-
-  it("allows transfer-only device targets without fs.copy", async () => {
-    const sourceKey = "home/sam/copy-test/transfer-only-source.txt";
-    await env.STORAGE.delete(sourceKey);
-    await env.STORAGE.put(sourceKey, "transfer only", {
-      customMetadata: { uid: "1000", gid: "1000", mode: "644" },
-    });
-    const canHandle = vi.fn((_deviceId: string, syscall: string) =>
-      syscall === "fs.transfer.stat" || syscall === "fs.transfer.write"
-    );
-    const ctx = makeContext() as KernelContext;
-    ctx.devices = {
-      canAccess: vi.fn(() => true),
-      canHandle,
-    } as never;
-    const writes: Uint8Array[] = [];
-
-    const result = await handleFsCopy({
-      source: { target: "gsv", path: "/home/sam/copy-test/transfer-only-source.txt" },
-      destination: { target: "browser:target", path: "/tmp/transfer-only.txt" },
-    }, ctx, {
-      async requestDevice(deviceId, call) {
-        expect(deviceId).toBe("browser:target");
-        expect(call).toBe("fs.transfer.stat");
-        return { ok: false, error: "not found" };
-      },
-      async requestDeviceBinary(deviceId, call, args, options) {
-        expect(deviceId).toBe("browser:target");
-        expect(call).toBe("fs.transfer.write");
-        if (!(args as { done?: boolean }).done) {
-          writes.push(options?.payload ?? new Uint8Array());
-        }
-        return {
-          data: { ok: true, path: "/tmp/transfer-only.txt", offset: (args as { offset: number }).offset, bytesWritten: options?.payload?.byteLength ?? 0, done: Boolean((args as { done?: boolean }).done) },
-          streamId: 1,
-        };
-      },
-    });
-
-    expect(result).toMatchObject({
-      ok: true,
-      destination: { target: "browser:target", path: "/tmp/transfer-only.txt" },
-    });
-    expect(canHandle).not.toHaveBeenCalledWith("browser:target", "fs.copy");
-    expect(writes.map((chunk) => new TextDecoder().decode(chunk)).join("")).toBe("transfer only");
+    expect(frames.at(-1)?.flags).toBe(2);
   });
 
   it("streams device files to gsv", async () => {
@@ -588,38 +485,43 @@ describe("fs copy", () => {
       source: { target: "rearden", path: "/tmp/source.txt" },
       destination: { target: "gsv", path: "/home/sam/copy-test/from-device.txt" },
     }, ctx, {
-      async requestDevice(deviceId, call, args) {
+      async requestDevice(deviceId, call) {
         expect(deviceId).toBe("rearden");
         if (call === "fs.transfer.stat") {
           return { ok: true, path: "/tmp/source.txt", size: 11, isFile: true, isDirectory: false, contentType: "text/plain" };
         }
-        expect(call).toBe("fs.transfer.read");
-        return {
-          ok: true,
-          path: "/tmp/source.txt",
-          offset: (args as { offset: number }).offset,
-          bytesRead: 0,
-          eof: true,
-        };
+        throw new Error(`unexpected call ${call}`);
       },
-      async requestDeviceBinary(deviceId, call, args) {
+      allocateBinaryStreamId() {
+        return 100;
+      },
+      async startDeviceRequest(deviceId, call, args) {
         expect(deviceId).toBe("rearden");
-        expect(call).toBe("fs.transfer.read");
-        const offset = (args as { offset: number }).offset;
-        const text = "hello world".slice(offset);
+        expect(call).toBe("fs.transfer.send");
+        expect(args).toMatchObject({ path: "/tmp/source.txt", streamId: 100 });
         return {
-          data: {
-            ok: true,
-            path: "/tmp/source.txt",
-            offset,
-            bytesRead: text.length,
-            eof: true,
-          },
-          payload: new TextEncoder().encode(text),
-          flags: 3,
-          streamId: 1,
+          requestId: "send-1",
+          promise: Promise.resolve({ ok: true, path: "/tmp/source.txt", size: 11, bytesSent: 11 }),
+          cancel: vi.fn(),
         };
       },
+      registerBinaryRelay: vi.fn(),
+      receiveDeviceBinaryStream(route) {
+        expect(route).toMatchObject({
+          streamId: 100,
+          sourceDeviceId: "rearden",
+        });
+        return {
+          stream: new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode("hello world"));
+              controller.close();
+            },
+          }),
+          cancel: vi.fn(),
+        };
+      },
+      sendDeviceBinaryFrame: vi.fn(),
     });
 
     expect(result).toMatchObject({
@@ -630,77 +532,6 @@ describe("fs copy", () => {
     expect(await (await env.STORAGE.get(destinationKey))?.text()).toBe("hello world");
   });
 
-  it("round trips target transfers through gsv tmp", async () => {
-    const tmpKey = "tmp/browser-transfer.txt";
-    await env.STORAGE.delete(tmpKey);
-    const ctx = makeContext() as KernelContext;
-    ctx.devices = {
-      canAccess: vi.fn(() => true),
-      canHandle: vi.fn(() => true),
-    } as never;
-
-    const inbound = await handleFsCopy({
-      source: { target: "browser:source", path: "/tmp/browser-transfer.txt" },
-      destination: { target: "gsv", path: "/tmp/browser-transfer.txt" },
-    }, ctx, {
-      async requestDevice(deviceId, call, args) {
-        expect(deviceId).toBe("browser:source");
-        if (call === "fs.transfer.stat") {
-          return { ok: true, path: "/tmp/browser-transfer.txt", size: 20, isFile: true, isDirectory: false, contentType: "text/plain" };
-        }
-        expect(call).toBe("fs.transfer.read");
-        return {
-          ok: true,
-          path: "/tmp/browser-transfer.txt",
-          offset: (args as { offset: number }).offset,
-          bytesRead: 20,
-          eof: true,
-        };
-      },
-      async requestDeviceBinary(deviceId, call) {
-        expect(deviceId).toBe("browser:source");
-        expect(call).toBe("fs.transfer.read");
-        return {
-          data: { ok: true, path: "/tmp/browser-transfer.txt", offset: 0, bytesRead: 20, eof: true },
-          payload: new TextEncoder().encode("binary transfer test"),
-          flags: 3,
-          streamId: 1,
-        };
-      },
-    });
-
-    expect(inbound).toMatchObject({ ok: true, size: 20 });
-    expect(await (await env.STORAGE.get(tmpKey))?.text()).toBe("binary transfer test");
-
-    const writes: Uint8Array[] = [];
-    const outbound = await handleFsCopy({
-      source: { target: "gsv", path: "/tmp/browser-transfer.txt" },
-      destination: { target: "browser:dest", path: "/home/browser/readback.txt" },
-    }, ctx, {
-      async requestDevice(deviceId, call, args) {
-        expect(deviceId).toBe("browser:dest");
-        if (call === "fs.transfer.stat") {
-          return { ok: false, error: "not found" };
-        }
-        expect(call).toBe("fs.transfer.write");
-        return { ok: true, path: "/home/browser/readback.txt", offset: 0, bytesWritten: 0, done: Boolean((args as { done?: boolean }).done) };
-      },
-      async requestDeviceBinary(deviceId, call, args, options) {
-        expect(deviceId).toBe("browser:dest");
-        expect(call).toBe("fs.transfer.write");
-        if (!(args as { done?: boolean }).done) {
-          writes.push(options?.payload ?? new Uint8Array());
-        }
-        return {
-          data: { ok: true, path: "/home/browser/readback.txt", offset: (args as { offset: number }).offset, bytesWritten: options?.payload?.byteLength ?? 0, done: Boolean((args as { done?: boolean }).done) },
-          streamId: 1,
-        };
-      },
-    });
-
-    expect(outbound).toMatchObject({ ok: true, size: 20 });
-    expect(writes.map((chunk) => new TextDecoder().decode(chunk)).join("")).toBe("binary transfer test");
-  });
 });
 
 describe("pkg shell command", () => {

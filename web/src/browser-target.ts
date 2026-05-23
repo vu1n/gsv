@@ -16,8 +16,8 @@ const TARGET_IMPLEMENTS = [
   "fs.search",
   "fs.copy",
   "fs.transfer.stat",
-  "fs.transfer.read",
-  "fs.transfer.write",
+  "fs.transfer.send",
+  "fs.transfer.receive",
   "shell.exec",
 ];
 const TARGET_VERSION = "0.1.0";
@@ -70,8 +70,8 @@ export function createBrowserTargetProvider({
   const unregisterSearch = gatewayClient.onRequest("fs.search", (frame) => shell.search(frame));
   const unregisterCopy = gatewayClient.onRequest("fs.copy", (frame) => shell.copy(frame));
   const unregisterTransferStat = gatewayClient.onRequest("fs.transfer.stat", (frame) => shell.transferStat(frame));
-  const unregisterTransferRead = gatewayClient.onRequest("fs.transfer.read", (frame) => shell.transferRead(frame));
-  const unregisterTransferWrite = gatewayClient.onRequest("fs.transfer.write", (frame) => shell.transferWrite(frame));
+  const unregisterTransferSend = gatewayClient.onRequest("fs.transfer.send", (frame) => shell.transferSend(frame));
+  const unregisterTransferReceive = gatewayClient.onRequest("fs.transfer.receive", (frame) => shell.transferReceive(frame));
   const unregisterShell = gatewayClient.onRequest("shell.exec", (frame) => shell.exec(frame));
   const unregisterStatus = gatewayClient.onStatus((status) => {
     if (status.state !== "connected" || !status.connectionId) {
@@ -102,8 +102,8 @@ export function createBrowserTargetProvider({
     unregisterSearch();
     unregisterCopy();
     unregisterTransferStat();
-    unregisterTransferRead();
-    unregisterTransferWrite();
+    unregisterTransferSend();
+    unregisterTransferReceive();
     unregisterShell();
     unregisterStatus();
     shell.dispose();
