@@ -7,7 +7,10 @@ use assembler::npm::{
     install_registry_dependencies, NpmDist, NpmPackument, NpmPackumentVersion, NpmRegistryClient,
     NpmRegistryError,
 };
-use assembler::oxc::{parse_source_text_with_oxc, transform_source_text_with_oxc, OxcResolver};
+use assembler::oxc::{
+    collect_module_request_spans_with_oxc, parse_source_text_with_oxc,
+    transform_source_text_with_oxc, OxcResolver,
+};
 use assembler::pipeline::prepare_request;
 use flate2::write::GzEncoder;
 use flate2::Compression;
@@ -479,4 +482,26 @@ export default function App({ name }: Props) {
     assert!(!transformed.contains("type Props"));
     assert!(!transformed.contains(": Props"));
     assert!(!transformed.contains("<main>"));
+}
+
+#[test]
+fn collects_dynamic_imports_from_ast_nodes() {
+    let source = r#"
+const ignoredString = "import(\"./ignored-string.ts\")";
+// import("./ignored-comment.ts")
+await import ("./worker.ts");
+await import(`./chunk.js`);
+await import(runtimePath);
+"#;
+
+    let spans = collect_module_request_spans_with_oxc("apps/demo/src/main.ts", source)
+        .expect("collect request spans");
+    let specifiers = spans
+        .iter()
+        .map(|span| span.specifier.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(specifiers, vec!["./worker.ts", "./chunk.js"]);
+    assert_eq!(&source[spans[0].start..spans[0].end], "\"./worker.ts\"");
+    assert_eq!(&source[spans[1].start..spans[1].end], "`./chunk.js`");
 }

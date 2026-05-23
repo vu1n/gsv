@@ -532,7 +532,6 @@ export class BrowserTargetShell {
     const justBash = await import("just-bash/browser");
     const persistentFs = await BrowserTargetFileSystem.create();
     this.storageInfo = persistentFs.info;
-    await cleanupLegacyRuntimePaths(persistentFs);
     const fs = new justBash.MountableFs({ base: persistentFs });
     fs.mount("/tmp", new justBash.InMemoryFs());
     fs.mount("/run/gsv", new BrowserRuntimeFileSystem(this.windowManager));
@@ -1112,12 +1111,6 @@ function directoryEntries(entries: { files: string[]; directories: string[] }): 
 
 function formatEndpointLabel(target: string, path: string): string {
   return target.includes(":") ? `[${target}]:${path}` : `${target}:${path}`;
-}
-
-async function cleanupLegacyRuntimePaths(fs: IFileSystem): Promise<void> {
-  for (const path of ["/apps", "/apps.json", "/desktop", "/windows"]) {
-    await fs.rm(path, { recursive: true, force: true }).catch(() => undefined);
-  }
 }
 
 function normalizePreviewTitle(title: string | undefined, path: string, sourceLabel: string): string {

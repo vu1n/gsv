@@ -12,7 +12,7 @@ use oxc_resolver::{
     ResolverGeneric,
 };
 use oxc_semantic::SemanticBuilder;
-use oxc_span::SourceType;
+use oxc_span::{SourceType, Span};
 use oxc_syntax::module_record::ModuleRecord;
 use oxc_transformer::{TransformOptions, Transformer};
 
@@ -338,7 +338,10 @@ pub fn collect_module_request_spans_with_oxc(
         })
         .collect::<Vec<_>>();
     spans.extend(collect_import_meta_url_request_spans(source_text));
-    spans.extend(collect_dynamic_import_request_spans(source_text));
+    spans.extend(collect_dynamic_import_request_spans(
+        &parsed.module_record,
+        source_text,
+    ));
     spans.sort_by_key(|span| (span.start, span.end));
     spans.dedup_by(|left, right| {
         left.start == right.start && left.end == right.end && left.specifier == right.specifier
@@ -539,7 +542,7 @@ fn collect_requested_modules(module_record: &ModuleRecord<'_>, source_text: &str
             .map(|span| span.specifier),
     );
     requested.extend(
-        collect_dynamic_import_request_spans(source_text)
+        collect_dynamic_import_request_spans(module_record, source_text)
             .into_iter()
             .map(|span| span.specifier),
     );
@@ -607,50 +610,44 @@ fn collect_import_meta_url_request_spans(source: &str) -> Vec<ModuleRequestSpan>
     spans
 }
 
-fn collect_dynamic_import_request_spans(source: &str) -> Vec<ModuleRequestSpan> {
-    let mut spans = Vec::new();
-    let mut search_from = 0usize;
-    const PATTERN: &str = "import(";
+fn collect_dynamic_import_request_spans(
+    module_record: &ModuleRecord<'_>,
+    source: &str,
+) -> Vec<ModuleRequestSpan> {
+    module_record
+        .dynamic_imports
+        .iter()
+        .filter_map(|dynamic_import| {
+            collect_string_literal_expression_span(source, dynamic_import.module_request)
+        })
+        .collect()
+}
 
-    while let Some(relative_match) = source[search_from..].find(PATTERN) {
-        let pattern_start = search_from + relative_match;
-        let mut index = pattern_start + PATTERN.len();
-        index = skip_ascii_whitespace(source, index);
-        let Some(quote) = source[index..].chars().next() else {
-            break;
-        };
-        if quote != '"' && quote != '\'' && quote != '`' {
-            search_from = index.saturating_add(1);
-            continue;
-        }
-
-        let literal_start = index;
-        index += quote.len_utf8();
-        let Some(literal_end) = find_quoted_literal_end(source, index, quote) else {
-            search_from = index;
-            continue;
-        };
-        let specifier = source[index..literal_end].to_string();
-        if quote == '`' && specifier.contains("${") {
-            search_from = literal_end + quote.len_utf8();
-            continue;
-        }
-
-        let suffix_index = skip_ascii_whitespace(source, literal_end + quote.len_utf8());
-        if !source[suffix_index..].starts_with(')') {
-            search_from = literal_end + quote.len_utf8();
-            continue;
-        }
-
-        spans.push(ModuleRequestSpan {
-            specifier,
-            start: literal_start,
-            end: literal_end + quote.len_utf8(),
-        });
-        search_from = suffix_index + 1;
+fn collect_string_literal_expression_span(source: &str, span: Span) -> Option<ModuleRequestSpan> {
+    let literal_start = span.start as usize;
+    let literal_end = span.end as usize;
+    let literal = source.get(literal_start..literal_end)?;
+    let quote = literal.chars().next()?;
+    if quote != '"' && quote != '\'' && quote != '`' {
+        return None;
     }
 
-    spans
+    let content_start = literal_start + quote.len_utf8();
+    let content_end = find_quoted_literal_end(source, content_start, quote)?;
+    if content_end + quote.len_utf8() != literal_end {
+        return None;
+    }
+
+    let specifier = source.get(content_start..content_end)?.to_string();
+    if quote == '`' && specifier.contains("${") {
+        return None;
+    }
+
+    Some(ModuleRequestSpan {
+        specifier,
+        start: literal_start,
+        end: literal_end,
+    })
 }
 
 fn skip_ascii_whitespace(source: &str, mut index: usize) -> usize {
