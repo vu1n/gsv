@@ -84,6 +84,28 @@ describe("tool approval policy", () => {
     expect(resolution.facts.tags).toContain("unclassified");
   });
 
+  it("requires approval for network and mutating shell commands", () => {
+    const network = resolveToolApproval(
+      DEFAULT_TOOL_APPROVAL_POLICY,
+      "shell.exec",
+      { target: "gsv", input: "curl https://example.com" },
+      IDENTITY,
+      "task",
+    );
+    expect(network.action).toBe("ask");
+    expect(network.facts.tags).toContain("network");
+
+    const redirect = resolveToolApproval(
+      DEFAULT_TOOL_APPROVAL_POLICY,
+      "shell.exec",
+      { target: "gsv", input: "echo key >> ~/.ssh/authorized_keys" },
+      IDENTITY,
+      "task",
+    );
+    expect(redirect.action).toBe("ask");
+    expect(redirect.facts.tags).toContain("mutating");
+  });
+
   it("prefers exact syscall rules over domain wildcards", () => {
     const policy = parseToolApprovalPolicy(JSON.stringify({
       default: "auto",

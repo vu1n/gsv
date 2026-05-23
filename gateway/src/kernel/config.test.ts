@@ -163,7 +163,7 @@ describe("ConfigStore", () => {
     expect(taskPolicy.rules).not.toContainEqual({ match: "shell.exec", action: "ask" });
     expect(taskPolicy.rules).toContainEqual({
       match: "shell.exec",
-      when: { anyTag: ["destructive", "privileged", "unclassified"] },
+      when: { anyTag: ["destructive", "privileged", "network", "mutating", "unclassified"] },
       action: "ask",
     });
     expect(cronPolicy.rules).toContainEqual({ match: "shell.exec", action: "auto" });
