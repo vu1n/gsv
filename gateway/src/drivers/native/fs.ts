@@ -573,14 +573,19 @@ async function copyGsvToDevice(
       throw new Error(result.error);
     }
   } catch (error) {
-    transport.sendDeviceBinaryFrame(
-      destination.target,
-      streamId,
-      BINARY_FRAME_ERROR | BINARY_FRAME_END,
-      new TextEncoder().encode(error instanceof Error ? error.message : String(error)),
-    );
-    receive.cancel();
+    try {
+      transport.sendDeviceBinaryFrame(
+        destination.target,
+        streamId,
+        BINARY_FRAME_ERROR | BINARY_FRAME_END,
+        new TextEncoder().encode(error instanceof Error ? error.message : String(error)),
+      );
+    } catch {
+      // Preserve the original transfer error; the destination route is cancelled below.
+    }
     throw error;
+  } finally {
+    receive.cancel();
   }
 
   return {

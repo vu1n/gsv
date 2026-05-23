@@ -472,6 +472,56 @@ describe("fs copy", () => {
     expect(frames.at(-1)?.flags).toBe(2);
   });
 
+  it("cleans up device receives when gsv-to-device send fails", async () => {
+    const sourceKey = "home/sam/copy-test/device-send-fail.txt";
+    await env.STORAGE.delete(sourceKey);
+    await env.STORAGE.put(sourceKey, "to failing device", {
+      httpMetadata: { contentType: "text/plain; charset=utf-8" },
+      customMetadata: { uid: "1000", gid: "1000", mode: "644" },
+    });
+    const ctx = makeContext() as KernelContext;
+    ctx.devices = {
+      canAccess: vi.fn(() => true),
+      canHandle: vi.fn(() => true),
+    } as never;
+    const cancelReceive = vi.fn();
+    const sendDeviceBinaryFrame = vi.fn(() => {
+      throw new Error("destination disconnected");
+    });
+
+    const result = await handleFsCopy({
+      source: { target: "gsv", path: "/home/sam/copy-test/device-send-fail.txt" },
+      destination: { target: "rearden", path: "/tmp/device-destination.txt" },
+    }, ctx, {
+      async requestDevice(deviceId, call) {
+        expect(deviceId).toBe("rearden");
+        if (call === "fs.transfer.stat") {
+          return { ok: false, error: "not found" };
+        }
+        throw new Error(`unexpected call ${call}`);
+      },
+      allocateBinaryStreamId() {
+        return 103;
+      },
+      async startDeviceRequest(deviceId, call) {
+        expect(deviceId).toBe("rearden");
+        expect(call).toBe("fs.transfer.receive");
+        return {
+          requestId: "receive-send-fail",
+          promise: new Promise(() => {}),
+          cancel: cancelReceive,
+        };
+      },
+      registerBinaryRelay: vi.fn(),
+      receiveDeviceBinaryStream: vi.fn(),
+      sendDeviceBinaryFrame,
+    });
+
+    expect(result).toMatchObject({ ok: false, error: "destination disconnected" });
+    expect(sendDeviceBinaryFrame).toHaveBeenCalledTimes(2);
+    expect(cancelReceive).toHaveBeenCalledOnce();
+  });
+
   it("streams device files to gsv", async () => {
     const destinationKey = "home/sam/copy-test/from-device.txt";
     await env.STORAGE.delete(destinationKey);
