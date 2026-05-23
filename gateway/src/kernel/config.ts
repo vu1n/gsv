@@ -82,7 +82,7 @@ const INIT_TOOL_APPROVAL_POLICY = JSON.stringify({
 const WORKER_TOOL_APPROVAL_POLICY = JSON.stringify({
   default: "auto",
   rules: [
-    { match: "shell.exec", when: { anyTag: ["destructive", "privileged"] }, action: "ask" },
+    { match: "shell.exec", when: { anyTag: ["destructive", "privileged", "unclassified"] }, action: "ask" },
     { match: "fs.delete", action: "ask" },
     { match: "sys.mcp.call", action: "ask" },
   ],
