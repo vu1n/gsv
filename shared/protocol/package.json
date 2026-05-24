@@ -14,5 +14,8 @@
     "./syscalls/ai": "./src/syscalls/ai.ts",
     "./binary-frame": "./src/binary-frame.ts",
     "./speech-text": "./src/speech-text.ts"
+  },
+  "dependencies": {
+    "marked": "^16.4.2"
   }
 }

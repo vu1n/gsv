@@ -24,6 +24,7 @@ install_workspace() {
 
 echo "==> Installing dependencies"
 install_workspace "assembler"
+install_workspace "shared/protocol"
 install_dir "${ROOT_DIR}/gateway"
 install_dir "${ROOT_DIR}/web"
 install_dir "${ROOT_DIR}/ripgit"
