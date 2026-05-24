@@ -43,6 +43,7 @@ pub fn finalize_artifact(
     let hash_input = serde_json::json!({
         "mainModule": runtime.main_module,
         "modules": sorted_modules,
+        "publicFiles": runtime.public_files,
     });
     let mut hasher = Sha256::new();
     hasher.update(serde_json::to_vec(&hash_input).unwrap());
@@ -52,6 +53,12 @@ pub fn finalize_artifact(
         PackageAssemblyArtifact {
             main_module: runtime.main_module.clone(),
             modules: hash_input["modules"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|value| serde_json::from_value(value.clone()).unwrap())
+                .collect(),
+            public_files: hash_input["publicFiles"]
                 .as_array()
                 .unwrap()
                 .iter()

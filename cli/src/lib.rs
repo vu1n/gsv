@@ -7,4 +7,3 @@ pub mod kernel_client;
 pub mod logger;
 pub mod protocol;
 pub mod tools;
-pub mod transfer;

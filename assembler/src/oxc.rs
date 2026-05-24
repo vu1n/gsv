@@ -4,14 +4,15 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use oxc_allocator::Allocator;
-use oxc_codegen::Codegen;
+use oxc_codegen::{Codegen, CodegenOptions};
+use oxc_minifier::{Minifier, MinifierOptions};
 use oxc_parser::Parser;
 use oxc_resolver::{
     FileMetadata, FileSystem, ModuleType, PackageType, ResolveError, ResolveOptions,
     ResolverGeneric,
 };
 use oxc_semantic::SemanticBuilder;
-use oxc_span::SourceType;
+use oxc_span::{SourceType, Span};
 use oxc_syntax::module_record::ModuleRecord;
 use oxc_transformer::{TransformOptions, Transformer};
 
@@ -64,6 +65,11 @@ pub struct TransformedModuleSource {
     pub has_module_syntax: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TransformModuleOptions {
+    pub minify: bool,
+}
+
 impl OxcVirtualFileSystem {
     pub fn from_virtual_tree(files: VirtualFileTree) -> Self {
         let directories = collect_directories(&files);
@@ -100,8 +106,8 @@ impl OxcVirtualFileSystem {
             .to_repo_path(path)
             .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
         self.files
-            .get(&repo_path)
-            .map(|content| content.as_bytes().to_vec())
+            .get_bytes(&repo_path)
+            .map(|content| content.to_vec())
             .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))
     }
 
@@ -146,7 +152,12 @@ impl OxcResolver {
                 alias_fields: vec![vec!["browser".into()]],
                 condition_names: match mode {
                     ResolverMode::Generic => {
-                        vec!["browser".into(), "import".into(), "require".into(), "default".into()]
+                        vec![
+                            "browser".into(),
+                            "import".into(),
+                            "require".into(),
+                            "default".into(),
+                        ]
                     }
                     ResolverMode::Browser => {
                         vec!["browser".into(), "import".into(), "default".into()]
@@ -226,7 +237,8 @@ impl OxcResolver {
         let package_type = resolution
             .package_json()
             .and_then(|package_json| package_json.r#type());
-        let inferred_module_type = infer_module_type_from_path(&resolution.full_path(), package_type);
+        let inferred_module_type =
+            infer_module_type_from_path(&resolution.full_path(), package_type);
         Ok(ResolvedModule {
             repo_path,
             module_type: match (resolution.module_type(), inferred_module_type) {
@@ -326,6 +338,10 @@ pub fn collect_module_request_spans_with_oxc(
         })
         .collect::<Vec<_>>();
     spans.extend(collect_import_meta_url_request_spans(source_text));
+    spans.extend(collect_dynamic_import_request_spans(
+        &parsed.module_record,
+        source_text,
+    ));
     spans.sort_by_key(|span| (span.start, span.end));
     spans.dedup_by(|left, right| {
         left.start == right.start && left.end == right.end && left.specifier == right.specifier
@@ -376,6 +392,25 @@ pub fn parse_module_dependencies_with_oxc(
 pub fn transform_module_source_with_oxc(
     path: &str,
     source_text: &str,
+) -> Result<TransformedModuleSource, PackageAssemblyDiagnostic> {
+    transform_module_source_with_oxc_options(path, source_text, TransformModuleOptions::default())
+}
+
+pub fn transform_browser_module_source_with_oxc(
+    path: &str,
+    source_text: &str,
+) -> Result<TransformedModuleSource, PackageAssemblyDiagnostic> {
+    transform_module_source_with_oxc_options(
+        path,
+        source_text,
+        TransformModuleOptions { minify: true },
+    )
+}
+
+fn transform_module_source_with_oxc_options(
+    path: &str,
+    source_text: &str,
+    options: TransformModuleOptions,
 ) -> Result<TransformedModuleSource, PackageAssemblyDiagnostic> {
     let source_type = source_type_from_path(path)?;
     let normalized = normalize_repo_path(path);
@@ -440,10 +475,22 @@ pub fn transform_module_source_with_oxc(
         ));
     }
 
-    let content = Codegen::new()
-        .with_scoping(Some(transformed.scoping))
-        .build(&program)
-        .code;
+    let scoping = if options.minify {
+        let minified = Minifier::new(MinifierOptions {
+            mangle: None,
+            compress: None,
+        })
+        .minify(&allocator, &mut program);
+        minified.scoping.or(Some(transformed.scoping))
+    } else {
+        Some(transformed.scoping)
+    };
+
+    let mut codegen = Codegen::new().with_scoping(scoping);
+    if options.minify {
+        codegen = codegen.with_options(CodegenOptions::minify());
+    }
+    let content = codegen.build(&program).code;
     let transformed_dependencies = parse_module_dependencies_with_oxc(path, &content)?;
 
     Ok(TransformedModuleSource {
@@ -473,7 +520,7 @@ fn transform_options_for_path(_path: &str) -> TransformOptions {
 
 fn collect_directories(files: &VirtualFileTree) -> BTreeSet<String> {
     let mut directories = BTreeSet::new();
-    for (path, _) in files.iter() {
+    for path in files.paths() {
         let mut current = dirname(path);
         while !current.is_empty() {
             directories.insert(current.clone());
@@ -491,6 +538,11 @@ fn collect_requested_modules(module_record: &ModuleRecord<'_>, source_text: &str
         .collect::<Vec<_>>();
     requested.extend(
         collect_import_meta_url_request_spans(source_text)
+            .into_iter()
+            .map(|span| span.specifier),
+    );
+    requested.extend(
+        collect_dynamic_import_request_spans(module_record, source_text)
             .into_iter()
             .map(|span| span.specifier),
     );
@@ -512,7 +564,7 @@ fn collect_import_meta_url_request_spans(source: &str) -> Vec<ModuleRequestSpan>
         let Some(quote) = source[index..].chars().next() else {
             break;
         };
-        if quote != '"' && quote != '\'' {
+        if quote != '"' && quote != '\'' && quote != '`' {
             search_from = index.saturating_add(1);
             continue;
         }
@@ -524,6 +576,10 @@ fn collect_import_meta_url_request_spans(source: &str) -> Vec<ModuleRequestSpan>
             continue;
         };
         let specifier = source[index..literal_end].to_string();
+        if quote == '`' && specifier.contains("${") {
+            search_from = literal_end + quote.len_utf8();
+            continue;
+        }
 
         let mut suffix_index = skip_ascii_whitespace(source, literal_end + quote.len_utf8());
         if !source[suffix_index..].starts_with(',') {
@@ -552,6 +608,46 @@ fn collect_import_meta_url_request_spans(source: &str) -> Vec<ModuleRequestSpan>
     }
 
     spans
+}
+
+fn collect_dynamic_import_request_spans(
+    module_record: &ModuleRecord<'_>,
+    source: &str,
+) -> Vec<ModuleRequestSpan> {
+    module_record
+        .dynamic_imports
+        .iter()
+        .filter_map(|dynamic_import| {
+            collect_string_literal_expression_span(source, dynamic_import.module_request)
+        })
+        .collect()
+}
+
+fn collect_string_literal_expression_span(source: &str, span: Span) -> Option<ModuleRequestSpan> {
+    let literal_start = span.start as usize;
+    let literal_end = span.end as usize;
+    let literal = source.get(literal_start..literal_end)?;
+    let quote = literal.chars().next()?;
+    if quote != '"' && quote != '\'' && quote != '`' {
+        return None;
+    }
+
+    let content_start = literal_start + quote.len_utf8();
+    let content_end = find_quoted_literal_end(source, content_start, quote)?;
+    if content_end + quote.len_utf8() != literal_end {
+        return None;
+    }
+
+    let specifier = source.get(content_start..content_end)?.to_string();
+    if quote == '`' && specifier.contains("${") {
+        return None;
+    }
+
+    Some(ModuleRequestSpan {
+        specifier,
+        start: literal_start,
+        end: literal_end,
+    })
 }
 
 fn skip_ascii_whitespace(source: &str, mut index: usize) -> usize {

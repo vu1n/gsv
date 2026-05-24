@@ -68,7 +68,7 @@ this order:
 
 Each section is rendered as `[section.name]` and separated with `---`. System
 and profile context can template values such as `identity.username`, `identity.cwd`,
-`workspace`, `devices`, `mcpServers`, and `known_paths`. Home and workspace context are loaded
+`workspace`, `devices` and `mcpServers`. Home and workspace context are loaded
 lexically and bounded by `config/ai/max_context_bytes`.
 
 Skill sources follow the same layered shape: profile `skills.d`, `~/skills.d`,
@@ -149,7 +149,7 @@ Tool approval is profile-configured with JSON at
 defaults to:
 
 - Auto-allow most tools.
-- Ask before `shell.exec`.
+- Ask before risky `shell.exec` commands tagged as destructive or privileged.
 - Ask before `fs.delete`.
 - Ask before `sys.mcp.call`.
 

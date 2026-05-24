@@ -71,9 +71,17 @@ export type PackageAssemblyArtifactModule = {
   content: string;
 };
 
+export type PackageAssemblyPublicFile = {
+  path: string;
+  content_type: string;
+  encoding: "utf-8" | "base64";
+  content: string;
+};
+
 export type PackageAssemblyArtifact = {
   main_module: string;
   modules: PackageAssemblyArtifactModule[];
+  public_files?: PackageAssemblyPublicFile[];
   hash: string;
 };
 
@@ -81,6 +89,7 @@ export type PackageAssemblyRequest = {
   analysis: PackageAssemblyAnalysis;
   target: PackageAssemblyTarget;
   files: Record<string, string>;
+  binary_files?: Record<string, string>;
 };
 
 export type PackageAssemblyResponse = {

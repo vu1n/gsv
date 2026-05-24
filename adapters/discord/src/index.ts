@@ -24,6 +24,28 @@ export { DiscordGateway } from "./discord-gateway";
 // Re-export interface types for consumers
 export type * from "./types";
 
+type ShellExecArgs = { input: string };
+type ShellExecResult =
+  | {
+      status: "completed";
+      output: string;
+      exitCode: number;
+      ok: true;
+      pid: number;
+      stdout: string;
+      stderr: string;
+    }
+  | {
+      status: "failed";
+      output: string;
+      error: string;
+      exitCode: number;
+      ok: false;
+      pid: number;
+      stdout: string;
+      stderr: string;
+    };
+
 interface Env {
   DISCORD_GATEWAY: DurableObjectNamespace;
   // Secrets
@@ -254,6 +276,83 @@ export class DiscordChannel extends WorkerEntrypoint<Env> implements ChannelWork
     });
   }
 
+  async adapterShellExec(accountId: string, args: ShellExecArgs): Promise<ShellExecResult> {
+    const tokens = parseShellWords(args.input);
+    const command = tokens[0] ?? "help";
+
+    if (isHelpCommand(command)) {
+      return shellOk([
+        "discord adapter commands:",
+        "  help | -h | --help",
+        "  send <channel-id> <text>",
+        "  reply <channel-id> <message-id> <text>",
+        "  react <channel-id> <message-id> <emoji>",
+        "  attach <channel-id> <url> [--filename <name>] [caption]",
+      ].join("\n"));
+    }
+
+    if (command === "send") {
+      const [channelId, ...textParts] = tokens.slice(1);
+      const text = textParts.join(" ").trim();
+      if (!channelId || !text) {
+        return shellFail("usage: send <channel-id> <text>");
+      }
+      const result = await this.adapterSend(accountId, {
+        surface: discordSurface(channelId),
+        text,
+      });
+      return result.ok ? shellOk(`sent ${result.messageId ?? ""}`.trim()) : shellFail(result.error);
+    }
+
+    if (command === "reply") {
+      const [channelId, messageId, ...textParts] = tokens.slice(1);
+      const text = textParts.join(" ").trim();
+      if (!channelId || !messageId || !text) {
+        return shellFail("usage: reply <channel-id> <message-id> <text>");
+      }
+      const result = await this.adapterSend(accountId, {
+        surface: discordSurface(channelId),
+        text,
+        replyToId: messageId,
+      });
+      return result.ok ? shellOk(`sent ${result.messageId ?? ""}`.trim()) : shellFail(result.error);
+    }
+
+    if (command === "react") {
+      const [channelId, messageId, emoji] = tokens.slice(1);
+      if (!channelId || !messageId || !emoji) {
+        return shellFail("usage: react <channel-id> <message-id> <emoji>");
+      }
+      const botToken = await this.resolveBotToken(accountId);
+      if (!botToken) {
+        return shellFail("No bot token configured");
+      }
+      const response = await this.discordFetch(
+        `/channels/${channelId}/messages/${messageId}/reactions/${encodeURIComponent(emoji)}/@me`,
+        { method: "PUT", botToken },
+      );
+      return response.ok
+        ? shellOk("reacted")
+        : shellFail(`Discord API error: ${response.status} ${await response.text()}`);
+    }
+
+    if (command === "attach") {
+      const { channelId, url, filename, caption } = parseAttachArgs(tokens.slice(1));
+      if (!channelId || !url) {
+        return shellFail("usage: attach <channel-id> <url> [--filename <name>] [caption]");
+      }
+      const media = await mediaFromUrl(url, filename);
+      const result = await this.adapterSend(accountId, {
+        surface: discordSurface(channelId),
+        text: caption,
+        media: [media],
+      });
+      return result.ok ? shellOk(`sent ${result.messageId ?? ""}`.trim()) : shellFail(result.error);
+    }
+
+    return shellFail(`unknown command: ${command}`);
+  }
+
   // ─────────────────────────────────────────────────────────
   // Private helpers
   // ─────────────────────────────────────────────────────────
@@ -361,6 +460,118 @@ export class DiscordChannel extends WorkerEntrypoint<Env> implements ChannelWork
     if (fromMime) return fromMime;
     return mediaType === "document" ? "bin" : mediaType;
   }
+}
+
+function parseShellWords(input: string): string[] {
+  const tokens: string[] = [];
+  const pattern = /"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'|(\S+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(input.trim())) !== null) {
+    const token = match[1] ?? match[2] ?? match[3] ?? "";
+    tokens.push(token.replace(/\\(["'\\])/g, "$1"));
+  }
+  return tokens;
+}
+
+function isHelpCommand(command: string): boolean {
+  return command === "help" || command === "-h" || command === "--help";
+}
+
+function parseAttachArgs(tokens: string[]): {
+  channelId?: string;
+  url?: string;
+  filename?: string;
+  caption: string;
+} {
+  const [channelId, url, ...rest] = tokens;
+  if (rest.length === 0) {
+    return { channelId, url, caption: "" };
+  }
+
+  if (rest[0] === "--filename" || rest[0] === "-f") {
+    const [, filename, ...captionParts] = rest;
+    return {
+      channelId,
+      url,
+      filename,
+      caption: captionParts.join(" ").trim(),
+    };
+  }
+
+  const [candidate, ...captionParts] = rest;
+  if (looksLikeFilename(candidate)) {
+    return {
+      channelId,
+      url,
+      filename: candidate,
+      caption: captionParts.join(" ").trim(),
+    };
+  }
+
+  return {
+    channelId,
+    url,
+    caption: rest.join(" ").trim(),
+  };
+}
+
+function looksLikeFilename(value: string | undefined): value is string {
+  if (!value) return false;
+  if (value.includes("/") || value.includes("\\")) return true;
+  return /^[^/?#\s]+\.[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value);
+}
+
+function discordSurface(id: string): ChannelPeer {
+  return { kind: "channel", id: id.trim() };
+}
+
+async function mediaFromUrl(url: string, filename?: string): Promise<ChannelMedia> {
+  let mimeType = "application/octet-stream";
+  try {
+    const response = await fetch(url, { method: "HEAD" });
+    mimeType = response.headers.get("Content-Type")?.split(";")[0].trim() || mimeType;
+  } catch {
+    // The upload path can still fetch the URL later; content type falls back.
+  }
+
+  return {
+    type: mediaTypeFromMime(mimeType),
+    mimeType,
+    url,
+    ...(filename ? { filename } : {}),
+  };
+}
+
+function mediaTypeFromMime(mimeType: string): ChannelMedia["type"] {
+  if (mimeType.startsWith("image/")) return "image";
+  if (mimeType.startsWith("audio/")) return "audio";
+  if (mimeType.startsWith("video/")) return "video";
+  return "document";
+}
+
+function shellOk(output: string): ShellExecResult {
+  return {
+    status: "completed",
+    output,
+    exitCode: 0,
+    ok: true,
+    pid: 0,
+    stdout: output,
+    stderr: "",
+  };
+}
+
+function shellFail(error: string): ShellExecResult {
+  return {
+    status: "failed",
+    output: error,
+    error,
+    exitCode: 1,
+    ok: false,
+    pid: 0,
+    stdout: "",
+    stderr: error,
+  };
 }
 
 // Type for DO stub methods

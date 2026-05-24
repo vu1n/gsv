@@ -48,6 +48,15 @@ function makeFs(identity: ProcessIdentity): GsvFs {
   return new GsvFs(env.STORAGE, identity);
 }
 
+function bytesToStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(bytes);
+      controller.close();
+    },
+  });
+}
+
 function makeConfigBackedFs(
   identity: ProcessIdentity,
   initialEntries: Record<string, string>,
@@ -219,6 +228,57 @@ describe("GsvFs permissions", () => {
     expect(content).toBe("modified");
   });
 
+  it("resolves R2 symbolic links across normal file operations", async () => {
+    await putFile(`${TEST_PREFIX}target.txt`, "linked data", {
+      uid: "1000", gid: "1000", mode: "644",
+    });
+
+    const fs = makeFs(SAM);
+    await fs.symlink(`/${TEST_PREFIX}target.txt`, `/${TEST_PREFIX}link.txt`);
+
+    expect(await fs.readlink(`/${TEST_PREFIX}link.txt`)).toBe(`/${TEST_PREFIX}target.txt`);
+    expect((await fs.lstat(`/${TEST_PREFIX}link.txt`)).isSymbolicLink).toBe(true);
+    expect(await fs.readFile(`/${TEST_PREFIX}link.txt`)).toBe("linked data");
+    expect((await fs.stat(`/${TEST_PREFIX}link.txt`)).isFile).toBe(true);
+  });
+
+  it("stats children through symlinked directories", async () => {
+    const fs = makeFs(SAM);
+    await fs.mkdir(`/${TEST_PREFIX}target-dir`, { recursive: true });
+    await fs.mkdir(`/${TEST_PREFIX}target-dir/nested`, { recursive: true });
+    await fs.writeFile(`/${TEST_PREFIX}target-dir/file.txt`, "linked data");
+    await fs.symlink(`/${TEST_PREFIX}target-dir`, `/${TEST_PREFIX}dir-link`);
+
+    const entries = await fs.readdirWithFileTypes(`/${TEST_PREFIX}dir-link`);
+    const file = entries.find((entry) => entry.name === "file.txt");
+    const nested = entries.find((entry) => entry.name === "nested");
+
+    expect(file).toMatchObject({ isFile: true, isDirectory: false, isSymbolicLink: false });
+    expect(nested).toMatchObject({ isFile: false, isDirectory: true, isSymbolicLink: false });
+  });
+
+  it("preserves virtual root and etc directories in lstat", async () => {
+    const fs = makeConfigBackedFs(SAM, {});
+
+    await expect(fs.lstat("/")).resolves.toMatchObject({
+      isFile: false,
+      isDirectory: true,
+      isSymbolicLink: false,
+    });
+    await expect(fs.lstat("/etc")).resolves.toMatchObject({
+      isFile: false,
+      isDirectory: true,
+      isSymbolicLink: false,
+    });
+
+    const rootEntries = await fs.readdirWithFileTypes("/");
+    expect(rootEntries.find((entry) => entry.name === "etc")).toMatchObject({
+      isFile: false,
+      isDirectory: true,
+      isSymbolicLink: false,
+    });
+  });
+
   it("root can write any file", async () => {
     await putFile(`${TEST_PREFIX}root-edit.txt`, "original", {
       uid: "1000", gid: "1000", mode: "600",
@@ -269,6 +329,102 @@ describe("GsvFs write metadata", () => {
     expect(head?.customMetadata?.uid).toBe("1000");
     expect(head?.customMetadata?.gid).toBe("1000");
     expect(head?.customMetadata?.mode).toBe("644");
+  });
+
+  it("streams writes to R2 with supplied HTTP metadata", async () => {
+    const fs = makeFs(SAM);
+    const bytes = new TextEncoder().encode("streamed data");
+
+    const result = await fs.writeFileStream(`/${TEST_PREFIX}stream.txt`, bytesToStream(bytes), {
+      contentType: "text/plain; charset=utf-8",
+      cacheControl: "public, max-age=60",
+      expectedSize: bytes.byteLength,
+    });
+
+    const head = await env.STORAGE.head(`${TEST_PREFIX}stream.txt`);
+    expect(result).toEqual({ size: bytes.byteLength, streamed: true });
+    expect(head?.customMetadata?.uid).toBe("1000");
+    expect(head?.customMetadata?.gid).toBe("1000");
+    expect(head?.customMetadata?.mode).toBe("644");
+    expect(head?.httpMetadata?.contentType).toBe("text/plain; charset=utf-8");
+    expect(head?.httpMetadata?.cacheControl).toBe("public, max-age=60");
+    expect(await fs.readFile(`/${TEST_PREFIX}stream.txt`)).toBe("streamed data");
+  });
+
+  it("streams writes through symlink targets", async () => {
+    const fs = makeFs(SAM);
+    const bytes = new TextEncoder().encode("updated");
+    await fs.writeFile(`/${TEST_PREFIX}target.txt`, "original");
+    await fs.symlink(`/${TEST_PREFIX}target.txt`, `/${TEST_PREFIX}stream-link.txt`);
+
+    const result = await fs.writeFileStream(
+      `/${TEST_PREFIX}stream-link.txt`,
+      bytesToStream(bytes),
+      { expectedSize: bytes.byteLength },
+    );
+
+    expect(result.streamed).toBe(true);
+    expect(await fs.readFile(`/${TEST_PREFIX}target.txt`)).toBe("updated");
+  });
+
+  it("rejects stream writes without a declared size", async () => {
+    const fs = makeFs(SAM);
+
+    await expect(fs.writeFileStream(
+      `/${TEST_PREFIX}unknown-length.txt`,
+      bytesToStream(new TextEncoder().encode("buffered")),
+      {} as { expectedSize: number },
+    )).rejects.toThrow("expectedSize");
+  });
+
+  it("falls back to exact-size buffering for non-streaming backends", async () => {
+    const fs = new GsvFs(env.STORAGE, SAM, {
+      procs: null as never,
+      devices: null as never,
+      caps: null as never,
+      config: null as never,
+      workspaces: null as never,
+    });
+
+    const result = await fs.writeFileStream(
+      "/dev/null",
+      bytesToStream(new TextEncoder().encode("discarded")),
+      { expectedSize: 9 },
+    );
+
+    expect(result).toEqual({ size: 9, streamed: false });
+  });
+
+  it("rejects stream fallback content larger than the declared size", async () => {
+    const fs = new GsvFs(env.STORAGE, SAM, {
+      procs: null as never,
+      devices: null as never,
+      caps: null as never,
+      config: null as never,
+      workspaces: null as never,
+    });
+
+    await expect(fs.writeFileStream(
+      "/dev/null",
+      bytesToStream(new TextEncoder().encode("too large")),
+      { expectedSize: 3 },
+    )).rejects.toThrow("EFBIG");
+  });
+
+  it("rejects stream fallback content smaller than the declared size", async () => {
+    const fs = new GsvFs(env.STORAGE, SAM, {
+      procs: null as never,
+      devices: null as never,
+      caps: null as never,
+      config: null as never,
+      workspaces: null as never,
+    });
+
+    await expect(fs.writeFileStream(
+      "/dev/null",
+      bytesToStream(new TextEncoder().encode("short")),
+      { expectedSize: 12 },
+    )).rejects.toThrow("did not match expectedSize");
   });
 });
 

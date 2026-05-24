@@ -30,6 +30,82 @@ describe("tool approval policy", () => {
     });
   });
 
+  it("defaults ordinary worker shell commands to auto while guarding risky commands", () => {
+    const ordinary = resolveToolApproval(
+      DEFAULT_TOOL_APPROVAL_POLICY,
+      "shell.exec",
+      { target: "gsv", input: "pwd" },
+      IDENTITY,
+      "task",
+    );
+    expect(ordinary.action).toBe("auto");
+
+    const destructive = resolveToolApproval(
+      DEFAULT_TOOL_APPROVAL_POLICY,
+      "shell.exec",
+      { target: "gsv", input: "rm -rf build" },
+      IDENTITY,
+      "task",
+    );
+    expect(destructive.action).toBe("ask");
+  });
+
+  it("classifies shell commands through the parser instead of substring boundaries", () => {
+    const tabbed = resolveToolApproval(
+      DEFAULT_TOOL_APPROVAL_POLICY,
+      "shell.exec",
+      { target: "gsv", input: "rm\t-rf build" },
+      IDENTITY,
+      "task",
+    );
+    expect(tabbed.action).toBe("ask");
+    expect(tabbed.facts.tags).toContain("destructive");
+
+    const newline = resolveToolApproval(
+      DEFAULT_TOOL_APPROVAL_POLICY,
+      "shell.exec",
+      { target: "gsv", input: "sudo\npwd" },
+      IDENTITY,
+      "task",
+    );
+    expect(newline.action).toBe("ask");
+    expect(newline.facts.tags).toContain("privileged");
+  });
+
+  it("requires approval for unclassified shell commands", () => {
+    const resolution = resolveToolApproval(
+      DEFAULT_TOOL_APPROVAL_POLICY,
+      "shell.exec",
+      { target: "gsv", input: "node -e 'console.log(1)'" },
+      IDENTITY,
+      "task",
+    );
+    expect(resolution.action).toBe("ask");
+    expect(resolution.facts.tags).toContain("unclassified");
+  });
+
+  it("requires approval for network and mutating shell commands", () => {
+    const network = resolveToolApproval(
+      DEFAULT_TOOL_APPROVAL_POLICY,
+      "shell.exec",
+      { target: "gsv", input: "curl https://example.com" },
+      IDENTITY,
+      "task",
+    );
+    expect(network.action).toBe("ask");
+    expect(network.facts.tags).toContain("network");
+
+    const redirect = resolveToolApproval(
+      DEFAULT_TOOL_APPROVAL_POLICY,
+      "shell.exec",
+      { target: "gsv", input: "echo key >> ~/.ssh/authorized_keys" },
+      IDENTITY,
+      "task",
+    );
+    expect(redirect.action).toBe("ask");
+    expect(redirect.facts.tags).toContain("mutating");
+  });
+
   it("prefers exact syscall rules over domain wildcards", () => {
     const policy = parseToolApprovalPolicy(JSON.stringify({
       default: "auto",

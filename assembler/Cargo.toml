@@ -1,6 +1,6 @@
 [package]
 name = "assembler"
-version = "0.1.6"
+version = "0.2.0"
 edition = "2021"
 
 [lib]
@@ -9,10 +9,12 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+base64 = "0.22"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 oxc_allocator = "0.127.0"
 oxc_codegen = "0.127.0"
 oxc_parser = "0.127.0"
+oxc_minifier = "0.127.0"
 oxc_resolver = "11.19.1"
 oxc_semantic = "0.127.0"
 oxc_span = "0.127.0"

@@ -1,4 +1,4 @@
-use crate::{api, diff, git, packages, store, KEYFRAME_INTERVAL};
+use crate::{KEYFRAME_INTERVAL, api, diff, git, packages, store};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use worker::*;
 
@@ -33,6 +33,10 @@ pub enum ApplyOp {
         path: String,
         #[serde(rename = "contentBytes")]
         content_bytes: Vec<u8>,
+    },
+    Symlink {
+        path: String,
+        target: String,
     },
     Delete {
         path: String,
@@ -233,6 +237,14 @@ pub async fn handle_apply(sql: &SqlStorage, req: &mut Request) -> Result<Respons
                 let hash = git_sha1("blob", content_bytes);
                 store::store_blob(sql, &hash, content_bytes, &normalized, KEYFRAME_INTERVAL)?;
                 files.insert(normalized.clone(), (0o100644, hash));
+                changed_paths.push(normalized);
+            }
+            ApplyOp::Symlink { path, target } => {
+                let normalized = normalize_rel_path(path, false)?;
+                let bytes = target.as_bytes();
+                let hash = git_sha1("blob", bytes);
+                store::store_blob(sql, &hash, bytes, &normalized, KEYFRAME_INTERVAL)?;
+                files.insert(normalized.clone(), (0o120000, hash));
                 changed_paths.push(normalized);
             }
             ApplyOp::Delete { path, recursive } => {

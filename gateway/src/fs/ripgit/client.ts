@@ -19,6 +19,11 @@ export type RipgitApplyOp =
       message?: string;
     }
   | {
+      type: "symlink";
+      path: string;
+      target: string;
+    }
+  | {
       type: "delete";
       path: string;
       recursive?: boolean;
@@ -173,6 +178,7 @@ export type RipgitPackageSnapshotResponse = {
   };
   package_root: string;
   files: Record<string, string>;
+  binary_files?: Record<string, string>;
 };
 
 type RipgitApplyResponse = {

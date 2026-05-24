@@ -1,6 +1,6 @@
-# Hardware Tools Reference
+# Target Tools Reference
 
-GSV exposes a single hardware tool interface to AI processes. The same tool names are used for the native cloud target and for connected CLI devices; the `target` argument chooses where the syscall runs.
+GSV exposes one targetable tool interface to AI processes. The same tool names are used for the native cloud target, connected devices, active browser clients, and adapter command targets; the `target` argument chooses where the syscall runs.
 
 This is the important rule for agents: choose `target: "gsv"` for Gateway-native work, and choose a device target only when the file, command, network, or hardware dependency lives on that device.
 
@@ -9,9 +9,11 @@ This is the important rule for agents: choose `target: "gsv"` for Gateway-native
 | Target | Description |
 |---|---|
 | `gsv` | Native Gateway target running in the Cloudflare Worker sandbox. |
-| `<deviceId>` | A connected CLI device, such as `macbook` or `server`. |
+| `<deviceId>` | A connected native device, such as `macbook` or `server`. |
+| `browser:<id>` | An active web shell desktop target. |
+| `adapter:<adapter>:<account>` | An adapter command target, such as WhatsApp or Discord. |
 
-The Gateway includes accessible online devices in `ai.tools` context and in `sys.device.list`. Device notes are included there too, so processes can choose targets using the user's own description of what each machine is for. Devices also appear in the native filesystem under `/sys/devices`.
+The prompt includes a compact sample of accessible online targets. Use `targets list` in the native shell for paginated discovery, or `targets show <target-id>` for details. The lower-level syscall surface is still `sys.device.list`/`sys.device.get`, and device-like entries also appear in the native filesystem under `/sys/devices`.
 
 ## Agent-Visible Tools
 
@@ -59,9 +61,9 @@ When `sessionId` is absent, `input` is a command to start. When
 the wait budget and output caps, so callers should handle both completed and
 running results.
 
-## Hardware Descriptors
+## Target Descriptors
 
-CLI devices register with the Gateway as driver connections. A device descriptor records identity, online state, and implemented syscall patterns.
+Native devices register with the Gateway as driver connections. Browser clients and adapter accounts are normalized into the same target descriptor model. A descriptor records identity, online state, and implemented syscall patterns.
 
 ```json
 {
@@ -78,6 +80,8 @@ The `implements` field is the hardware contract. The Gateway uses it to decide w
 
 Inspect descriptors with:
 
+- `targets list`
+- `targets show <target-id>`
 - `sys.device.list`
 - `sys.device.get`
 - `sys.device.update` to change the owner-managed `description`
@@ -115,6 +119,24 @@ mcp describe Linear list_issues
 mcp codemode
 mcp call Linear list_issues --args-json '{"assignee":"me","limit":5}' --json
 ```
+
+Process and automation control also stay on the native shell surface:
+
+```bash
+proc profiles
+proc spawn --profile task --label "docs audit"
+proc call <pid> --timeout 60s "Summarize the current result."
+sched add --name daily-brief --cron "0 9 * * *" --timezone Europe/Amsterdam --profile cron "Prepare the daily brief."
+```
+
+Use `proc profiles` to discover system, user, and package-backed worker
+profiles. User-defined profiles are directories under `~/profiles.d/{name}`;
+profile prompt files live in `~/profiles.d/{name}/context.d/*.md`. Root-level
+files can be carried by the profile, but are not loaded as prompt context.
+`proc call` is the bounded request/reply path; `proc spawn --prompt` and `proc
+send` are fire-and-forget unless the worker explicitly sends a later message.
+Use `sched add` without `--pid` for scheduled worker processes; with `--pid`, it
+delivers a process event to an existing process conversation.
 
 Scripts use the same CodeMode shape exposed to agents. A script is treated as
 the body of an async function: top-level `await` works, and the final value must

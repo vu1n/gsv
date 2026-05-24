@@ -1,9 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
+
 use crate::diagnostics::{has_errors, PackageAssemblyDiagnostic};
-use crate::graph::{build_module_graph_for_browser_entry, build_module_graph_for_entry, ModuleGraph};
+use crate::graph::{
+    build_module_graph_for_browser_entry, build_module_graph_for_entry, ModuleGraph,
+};
 use crate::model::{
     PackageAssemblyAnalysis, PackageAssemblyArtifactModule, PackageAssemblyArtifactModuleKind,
+    PackageAssemblyPublicFile, PackageAssemblyPublicFileEncoding,
 };
 use crate::npm::InstalledAssembly;
 use crate::oxc::{collect_module_request_spans_with_oxc, OxcResolver};
@@ -15,6 +20,13 @@ pub struct RuntimeAssembly {
     pub main_module: String,
     pub graphs: Vec<ModuleGraph>,
     pub generated_modules: Vec<PackageAssemblyArtifactModule>,
+    pub public_files: Vec<PackageAssemblyPublicFile>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct GeneratedRuntimeModules {
+    modules: Vec<PackageAssemblyArtifactModule>,
+    public_files: Vec<PackageAssemblyPublicFile>,
 }
 
 pub fn build_runtime_assembly(
@@ -108,7 +120,8 @@ pub fn build_runtime_assembly(
         RuntimeAssembly {
             main_module: "__gsv__/main.ts".to_string(),
             graphs,
-            generated_modules,
+            generated_modules: generated_modules.modules,
+            public_files: generated_modules.public_files,
         },
         diagnostics,
     )
@@ -156,8 +169,9 @@ fn generate_runtime_modules(
     installed: &InstalledAssembly,
     definition_repo_path: &str,
     browser_graph: Option<&ModuleGraph>,
-) -> StageOutcome<Vec<PackageAssemblyArtifactModule>> {
+) -> StageOutcome<GeneratedRuntimeModules> {
     let mut modules = Vec::new();
+    let mut public_files = Vec::new();
     let mut emitted_asset_modules = BTreeSet::new();
     let mut asset_imports = Vec::new();
     let mut asset_entries = Vec::new();
@@ -169,13 +183,21 @@ fn generate_runtime_modules(
         let artifact_asset_path = relativize_to_root(asset_path, &analysis.package_root);
         let generated_path = format!("__gsv_assets__/{index}.ts");
         let content = installed.files.get(asset_path).unwrap_or_default();
-        if emitted_asset_modules.insert(artifact_asset_path.clone()) {
+        let bytes = installed.files.get_bytes(asset_path).unwrap_or_default();
+        if emitted_asset_modules.insert(artifact_asset_path.clone())
+            && installed.files.get(asset_path).is_some()
+        {
             modules.push(PackageAssemblyArtifactModule {
                 path: artifact_asset_path.clone(),
                 kind: PackageAssemblyArtifactModuleKind::Text,
                 content: content.to_string(),
             });
         }
+        public_files.push(public_file_from_bytes(
+            format!("gsv/packages/__GSV_ARTIFACT_HASH__/{}", artifact_asset_path),
+            bytes,
+            content_type_for_path(&artifact_asset_path),
+        ));
         modules.push(PackageAssemblyArtifactModule {
             path: generated_path.clone(),
             kind: PackageAssemblyArtifactModuleKind::SourceModule,
@@ -206,27 +228,7 @@ fn generate_runtime_modules(
         None
     };
     let browser_shell_html = if let Some(browser_assets) = browser_assets {
-        for (index, asset) in browser_assets.assets.iter().enumerate() {
-            let generated_path = format!("__gsv_browser_assets__/{index}.ts");
-            modules.push(PackageAssemblyArtifactModule {
-                path: generated_path.clone(),
-                kind: PackageAssemblyArtifactModuleKind::SourceModule,
-                content: format!(
-                    "export default {};\n",
-                    serde_json::to_string(&asset.content).unwrap()
-                ),
-            });
-            asset_imports.push(format!(
-                "import __gsv_browser_asset_{index} from {};",
-                serde_json::to_string(&relative_specifier("__gsv__/main.ts", &generated_path))
-                    .unwrap()
-            ));
-            asset_entries.push(format!(
-                "  [{}, {{ content: __gsv_browser_asset_{index}, contentType: {} }}],",
-                serde_json::to_string(&asset.route_path).unwrap(),
-                serde_json::to_string(asset.content_type).unwrap(),
-            ));
-        }
+        public_files.extend(browser_assets.public_files);
         Some(browser_assets.shell_html)
     } else {
         None
@@ -284,6 +286,7 @@ const STATIC_ASSETS = new Map([
 const COMMAND_MODULES = new Map([
 {command_entries}
 ]);
+const PACKAGE_PUBLIC_BASE_PLACEHOLDER = "/public/gsv/packages/__GSV_ARTIFACT_HASH__";
 
 function mergeMeta(overrides) {{
   if (!overrides) {{
@@ -475,7 +478,17 @@ function getCommandHandler(commandName) {{
   return typeof handler === "function" ? handler : null;
 }}
 
-function serveStaticAsset(request, routeBase) {{
+function resolvePublicBaseText(value, env) {{
+  if (typeof value !== "string") {{
+    return value;
+  }}
+  const publicBase = typeof env.GSV_PACKAGE_PUBLIC_BASE === "string" && env.GSV_PACKAGE_PUBLIC_BASE.length > 0
+    ? env.GSV_PACKAGE_PUBLIC_BASE
+    : PACKAGE_PUBLIC_BASE_PLACEHOLDER;
+  return value.split(PACKAGE_PUBLIC_BASE_PLACEHOLDER).join(publicBase);
+}}
+
+function serveStaticAsset(request, routeBase, env) {{
   if (!BROWSER_ENTRY) {{
     return null;
   }}
@@ -489,7 +502,7 @@ function serveStaticAsset(request, routeBase) {{
     return null;
   }}
   if ((url.pathname === `${{routeBase}}/` || url.pathname === `${{routeBase}}/index.html`) && APP_SHELL_HTML) {{
-    return new Response(request.method === "HEAD" ? null : APP_SHELL_HTML, {{
+    return new Response(request.method === "HEAD" ? null : resolvePublicBaseText(APP_SHELL_HTML, env), {{
       headers: {{
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-store",
@@ -525,7 +538,7 @@ export default class GsvAppEntrypoint extends WorkerEntrypoint {{
       routeBase: props.appFrame?.routeBase ?? props.routeBase ?? this.env.GSV_ROUTE_BASE ?? STATIC_META.routeBase,
     }}, props, this.env);
     const routeBase = ctx.meta.routeBase ?? "/";
-    const assetResponse = serveStaticAsset(request, routeBase);
+    const assetResponse = serveStaticAsset(request, routeBase, this.env);
     if (assetResponse) {{
       return assetResponse;
     }}
@@ -673,7 +686,7 @@ export class GsvAppRpcEntrypoint extends WorkerEntrypoint {{
         package_name = serde_json::to_string(&analysis.package_json.name).unwrap(),
         package_id = serde_json::to_string(&analysis.package_json.name).unwrap(),
         browser_entry = browser_graph
-            .map(|graph| emitted_browser_route_path(&graph.main_module, &analysis.package_root))
+            .map(|graph| browser_public_url_path(&graph.main_module, analysis, installed))
             .map(|path| serde_json::to_string(&path).unwrap())
             .unwrap_or_else(|| "null".to_string()),
         app_shell_html = browser_shell_html
@@ -691,20 +704,19 @@ export class GsvAppRpcEntrypoint extends WorkerEntrypoint {{
     if has_errors(&diagnostics) {
         return StageOutcome::failure(diagnostics);
     }
-    StageOutcome::success(modules, diagnostics)
+    StageOutcome::success(
+        GeneratedRuntimeModules {
+            modules,
+            public_files,
+        },
+        diagnostics,
+    )
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct BrowserRuntimeAssets {
     shell_html: String,
-    assets: Vec<BrowserRuntimeAsset>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct BrowserRuntimeAsset {
-    route_path: String,
-    content_type: &'static str,
-    content: String,
+    public_files: Vec<PackageAssemblyPublicFile>,
 }
 
 fn generate_browser_runtime_assets(
@@ -720,10 +732,11 @@ fn generate_browser_runtime_assets(
     for module in &browser_graph.modules {
         match module.kind {
             PackageAssemblyArtifactModuleKind::SourceModule
-            | PackageAssemblyArtifactModuleKind::Json => {
-                let route_path = emitted_browser_route_path(&module.path, &analysis.package_root);
+            | PackageAssemblyArtifactModuleKind::Json
+            | PackageAssemblyArtifactModuleKind::Data => {
+                let public_path = browser_public_file_path(&module.path, analysis, installed);
                 if let Some(existing) =
-                    emitted_paths.insert(route_path.clone(), module.path.clone())
+                    emitted_paths.insert(public_path.clone(), module.path.clone())
                 {
                     if existing != module.path {
                         diagnostics.push(PackageAssemblyDiagnostic::error(
@@ -736,11 +749,9 @@ fn generate_browser_runtime_assets(
                         ));
                     }
                 }
-                route_map.insert(module.path.clone(), route_path);
+                route_map.insert(module.path.clone(), format!("/public/{public_path}"));
             }
-            PackageAssemblyArtifactModuleKind::Commonjs
-            | PackageAssemblyArtifactModuleKind::Text
-            | PackageAssemblyArtifactModuleKind::Data => {
+            PackageAssemblyArtifactModuleKind::Commonjs => {
                 diagnostics.push(PackageAssemblyDiagnostic::error(
                     "browser.unsupported-module-kind",
                     format!(
@@ -750,6 +761,7 @@ fn generate_browser_runtime_assets(
                     module.path.clone(),
                 ));
             }
+            PackageAssemblyArtifactModuleKind::Text => {}
         }
     }
 
@@ -757,33 +769,56 @@ fn generate_browser_runtime_assets(
         return StageOutcome::failure(diagnostics);
     }
 
-    let mut assets = Vec::new();
+    let mut public_files = Vec::new();
     for module in &browser_graph.modules {
-        let Some(route_path) = route_map.get(&module.path) else {
+        let public_path = browser_public_file_path(&module.path, analysis, installed);
+        let Some(public_url) = route_map.get(&module.path) else {
             continue;
         };
-        let content = match module.kind {
+        match module.kind {
             PackageAssemblyArtifactModuleKind::SourceModule => {
-                match rewrite_browser_module_source(module, route_path, &route_map, &resolver) {
+                let content = match rewrite_browser_module_source(
+                    module, public_url, &route_map, &resolver,
+                ) {
                     Ok(content) => content,
                     Err(error) => {
                         diagnostics.push(error);
                         continue;
                     }
-                }
+                };
+                public_files.push(PackageAssemblyPublicFile {
+                    path: public_path,
+                    content_type: "text/javascript; charset=utf-8".to_string(),
+                    encoding: PackageAssemblyPublicFileEncoding::Utf8,
+                    content,
+                });
             }
             PackageAssemblyArtifactModuleKind::Json => {
-                format!("export default {};\n", module.content)
+                public_files.push(PackageAssemblyPublicFile {
+                    path: public_path,
+                    content_type: "text/javascript; charset=utf-8".to_string(),
+                    encoding: PackageAssemblyPublicFileEncoding::Utf8,
+                    content: format!("export default {};\n", module.content),
+                });
             }
-            PackageAssemblyArtifactModuleKind::Commonjs
-            | PackageAssemblyArtifactModuleKind::Text
-            | PackageAssemblyArtifactModuleKind::Data => continue,
-        };
-        assets.push(BrowserRuntimeAsset {
-            route_path: route_path.clone(),
-            content_type: "text/javascript; charset=utf-8",
-            content,
-        });
+            PackageAssemblyArtifactModuleKind::Text => {
+                public_files.push(PackageAssemblyPublicFile {
+                    path: public_path,
+                    content_type: content_type_for_path(&module.path).to_string(),
+                    encoding: PackageAssemblyPublicFileEncoding::Utf8,
+                    content: module.content.clone(),
+                });
+            }
+            PackageAssemblyArtifactModuleKind::Data => {
+                public_files.push(PackageAssemblyPublicFile {
+                    path: public_path,
+                    content_type: content_type_for_path(&module.path).to_string(),
+                    encoding: PackageAssemblyPublicFileEncoding::Base64,
+                    content: module.content.clone(),
+                });
+            }
+            PackageAssemblyArtifactModuleKind::Commonjs => continue,
+        }
     }
 
     if has_errors(&diagnostics) {
@@ -791,23 +826,34 @@ fn generate_browser_runtime_assets(
     }
 
     let shell_html = build_browser_shell_html(
-        &emitted_browser_route_path(&browser_graph.main_module, &analysis.package_root),
+        route_map
+            .get(&browser_graph.main_module)
+            .map(String::as_str)
+            .unwrap_or_default(),
         &installed
             .asset_paths
             .iter()
             .filter_map(|asset_path| {
-                let route_path = relativize_to_root(asset_path, &analysis.package_root);
-                route_path.ends_with(".css").then_some(route_path)
+                let artifact_path = relativize_to_root(asset_path, &analysis.package_root);
+                artifact_path.ends_with(".css").then_some(format!(
+                    "/public/gsv/packages/__GSV_ARTIFACT_HASH__/{artifact_path}"
+                ))
             })
             .collect::<Vec<_>>(),
     );
 
-    StageOutcome::success(BrowserRuntimeAssets { shell_html, assets }, diagnostics)
+    StageOutcome::success(
+        BrowserRuntimeAssets {
+            shell_html,
+            public_files,
+        },
+        diagnostics,
+    )
 }
 
 fn rewrite_browser_module_source(
     module: &PackageAssemblyArtifactModule,
-    route_path: &str,
+    _route_path: &str,
     route_map: &BTreeMap<String, String>,
     resolver: &OxcResolver,
 ) -> Result<String, PackageAssemblyDiagnostic> {
@@ -829,7 +875,7 @@ fn rewrite_browser_module_source(
             Ok((
                 request.start,
                 request.end,
-                serde_json::to_string(&relative_specifier(route_path, target_route_path)).unwrap(),
+                serde_json::to_string(target_route_path).unwrap(),
             ))
         })
         .collect::<Result<Vec<_>, PackageAssemblyDiagnostic>>()?;
@@ -874,19 +920,63 @@ fn rewrite_runtime_module_source(
     Ok(rewritten)
 }
 
-fn emitted_browser_route_path(module_path: &str, package_root: &str) -> String {
-    let artifact_path = relativize_to_root(module_path, package_root);
+fn browser_public_url_path(
+    module_path: &str,
+    analysis: &PackageAssemblyAnalysis,
+    installed: &InstalledAssembly,
+) -> String {
+    format!(
+        "/public/{}",
+        browser_public_file_path(module_path, analysis, installed)
+    )
+}
+
+fn browser_public_file_path(
+    module_path: &str,
+    analysis: &PackageAssemblyAnalysis,
+    installed: &InstalledAssembly,
+) -> String {
+    if let Some((record, package_relative_path)) = npm_package_public_path(module_path, installed) {
+        return format!(
+            "lib/npm/{}/{}/{}",
+            record.name,
+            record.version,
+            emitted_browser_file_path(&package_relative_path)
+        );
+    }
+    format!(
+        "gsv/packages/__GSV_ARTIFACT_HASH__/browser/{}",
+        emitted_browser_file_path(&relativize_to_root(module_path, &analysis.package_root))
+    )
+}
+
+fn npm_package_public_path<'a>(
+    module_path: &str,
+    installed: &'a InstalledAssembly,
+) -> Option<(&'a crate::npm::InstalledDependencyRecord, String)> {
+    installed.install_records.iter().find_map(|record| {
+        if module_path == record.package_root {
+            return Some((record, String::new()));
+        }
+        let prefix = format!("{}/", record.package_root);
+        module_path
+            .strip_prefix(&prefix)
+            .map(|relative| (record, relative.to_string()))
+    })
+}
+
+fn emitted_browser_file_path(artifact_path: &str) -> String {
     let emitted = match artifact_path.rsplit_once('.') {
         Some((stem, extension)) => match extension.to_ascii_lowercase().as_str() {
             "js" | "jsx" | "ts" | "tsx" | "mjs" | "mts" | "cjs" | "cts" => {
                 format!("{stem}.js")
             }
             "json" => format!("{artifact_path}.js"),
-            _ => artifact_path.clone(),
+            _ => artifact_path.to_string(),
         },
         None => format!("{artifact_path}.js"),
     };
-    format!("__gsv_browser__/{emitted}")
+    emitted
 }
 
 fn artifact_module_path(module_path: &str, package_root: &str) -> String {
@@ -903,13 +993,12 @@ fn build_browser_shell_html(browser_entry: &str, stylesheet_paths: &[String]) ->
         .map(|path| {
             format!(
                 r#"<link rel="stylesheet" href={} />"#,
-                serde_json::to_string(&relative_specifier("index.html", path)).unwrap()
+                serde_json::to_string(path).unwrap()
             )
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let entry_src =
-        serde_json::to_string(&relative_specifier("index.html", browser_entry)).unwrap();
+    let entry_src = serde_json::to_string(browser_entry).unwrap();
     if stylesheet_links.is_empty() {
         format!(
             "<!doctype html>\n<html>\n<head>\n<meta charset=\"utf-8\" />\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n</head>\n<body>\n<div id=\"root\"></div>\n<script type=\"module\" src={entry_src}></script>\n</body>\n</html>\n"
@@ -929,6 +1018,27 @@ fn join_import_block(imports: &[String]) -> String {
     }
 }
 
+fn public_file_from_bytes(
+    path: String,
+    bytes: &[u8],
+    content_type: &'static str,
+) -> PackageAssemblyPublicFile {
+    match String::from_utf8(bytes.to_vec()) {
+        Ok(content) => PackageAssemblyPublicFile {
+            path,
+            content_type: content_type.to_string(),
+            encoding: PackageAssemblyPublicFileEncoding::Utf8,
+            content,
+        },
+        Err(error) => PackageAssemblyPublicFile {
+            path,
+            content_type: content_type.to_string(),
+            encoding: PackageAssemblyPublicFileEncoding::Base64,
+            content: BASE64_STANDARD.encode(error.into_bytes()),
+        },
+    }
+}
+
 fn content_type_for_path(path: &str) -> &'static str {
     match path
         .rsplit('.')
@@ -942,6 +1052,13 @@ fn content_type_for_path(path: &str) -> &'static str {
         "js" | "mjs" | "cjs" => "text/javascript; charset=utf-8",
         "json" => "application/json; charset=utf-8",
         "svg" => "image/svg+xml",
+        "wasm" => "application/wasm",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
         "txt" | "md" => "text/plain; charset=utf-8",
         _ => "text/plain; charset=utf-8",
     }

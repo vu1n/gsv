@@ -202,6 +202,47 @@ describe("Process DO — mechanical", () => {
       });
     });
 
+    it("keeps process events after matching tool results in provider context", async () => {
+      const pid = "mech-system-context-tool-order";
+      const stub = await initProcess(pid, ROOT_IDENTITY);
+
+      await runInDurableObject(stub, async (instance: Process) => {
+        const process = instance as any;
+        process.store.appendMessage("assistant", "Let me check that.", {
+          toolCalls: JSON.stringify({
+            toolCalls: [
+              {
+                type: "toolCall",
+                id: "call_shell",
+                name: "Shell",
+                arguments: { input: "sleep 10 && date", target: "gsv" },
+              },
+            ],
+          }),
+        });
+        process.store.appendMessage(
+          "system",
+          "IPC call `abc` completed from process `worker`.",
+        );
+        process.store.appendToolResult(
+          "call_shell",
+          "shell.exec",
+          JSON.stringify({ ok: true, stdout: "done" }),
+          false,
+        );
+
+        const messages = await process.buildContextMessages("default");
+        expect(messages.map((message: any) => message.role)).toEqual([
+          "assistant",
+          "toolResult",
+          "user",
+        ]);
+        expect((messages[1] as any).toolCallId).toBe("call_shell");
+        expect((messages[2] as any).content).toContain("[Process Event]:");
+        expect((messages[2] as any).content).toContain("IPC call `abc` completed");
+      });
+    });
+
     it("does not drop tool results after 200 stored messages", async () => {
       const pid = "mech-context-tool-result-after-200";
       const stub = await initProcess(pid, ROOT_IDENTITY);
@@ -382,6 +423,103 @@ describe("Process DO — mechanical", () => {
       expect(contextSignals[1].payload.context).toMatchObject({
         inputTokens: 1290,
         source: "provider",
+      });
+    });
+
+    it("includes interaction origin in model context without rewriting stored content", async () => {
+      const pid = "mech-origin-context";
+      const stub = await initProcess(pid, ROOT_IDENTITY);
+
+      await runInDurableObject(stub, async (instance: Process) => {
+        const process = instance as any;
+        process.sendSignal = async () => {};
+        process.generation = {
+          async generate(request: any) {
+            const first = request.context.messages[0];
+            const second = request.context.messages[1];
+            const third = request.context.messages[2];
+            expect(first.role).toBe("user");
+            expect(first.content).toContain("[From: WhatsApp group GSV Dev from @sam]");
+            expect(first.content).toContain("check this from the group");
+            expect(second.role).toBe("user");
+            expect(second.content).toBe("same source follow-up");
+            expect(third.role).toBe("user");
+            expect(third.content).toContain("[From: GSV Web Desktop]");
+            expect(third.content).toContain("now from chat");
+            return {
+              role: "assistant",
+              content: [{ type: "text", text: "noted" }],
+              api: "test",
+              provider: "test",
+              model: "test",
+              stopReason: "stop",
+              timestamp: Date.now(),
+            };
+          },
+          async generateText() {
+            return "noted";
+          },
+        };
+
+        process.store.appendMessage("user", "check this from the group", {
+          origin: JSON.stringify({
+            kind: "adapter",
+            adapter: "whatsapp",
+            accountId: "primary",
+            surface: { kind: "group", id: "group-1", name: "GSV Dev" },
+            actorId: "wa:+123",
+            actorLabel: "@sam",
+            messageId: "wa-msg-1",
+          }),
+        });
+        process.store.appendMessage("user", "same source follow-up", {
+          origin: JSON.stringify({
+            kind: "adapter",
+            adapter: "whatsapp",
+            accountId: "primary",
+            surface: { kind: "group", id: "group-1", name: "GSV Dev" },
+            actorId: "wa:+123",
+            actorLabel: "@sam",
+            messageId: "wa-msg-2",
+          }),
+        });
+        process.store.appendMessage("user", "now from chat", {
+          origin: JSON.stringify({
+            kind: "client",
+            connectionId: "conn-1",
+            clientId: "gsv-ui",
+            platform: "browser",
+          }),
+        });
+        process.currentRun = {
+          runId: "run-origin-context",
+          queued: false,
+          conversationId: "default",
+          config: {
+            profile: "task",
+            provider: "workers-ai",
+            model: "@cf/nvidia/nemotron-3-120b-a12b",
+            apiKey: "",
+            reasoning: "off",
+            maxTokens: 8192,
+            contextWindowTokens: 256000,
+            contextWindowSource: "config",
+            maxContextBytes: 32768,
+          },
+          tools: [],
+          devices: [],
+          systemPrompt: "Test system prompt.",
+          approvalPolicy: { default: "auto", rules: [] },
+        };
+        await process.continueAgentLoop("run-origin-context");
+
+        const messages = process.store.getMessages();
+        expect(messages.map((message: any) => message.content)).toEqual([
+          "check this from the group",
+          "same source follow-up",
+          "now from chat",
+          "noted",
+        ]);
       });
     });
 
@@ -774,6 +912,64 @@ describe("Process DO — mechanical", () => {
           conversationId: "default",
         });
         process.currentRun = null;
+      });
+    });
+
+    it("awaits IPC reply delivery before returning from process signal recvFrame", async () => {
+      const sourcePid = "mech-ipc-await-source";
+      const targetPid = "mech-ipc-await-target";
+      const source = await initProcess(sourcePid, ROOT_IDENTITY);
+      await initProcess(targetPid, ROOT_IDENTITY);
+      await runInDurableObject(source, (instance: Process) => {
+        (instance as any).scheduleTick = () => {};
+      });
+
+      const kernel = await getKernelPtr();
+      const response = await runInDurableObject(kernel, (instance: Kernel) =>
+        instance.recvFrame(
+          sourcePid,
+          makeReq("proc.ipc.call", {
+            pid: targetPid,
+            message: "Return the status.",
+            timeoutMs: 30_000,
+          }),
+        ),
+      ) as ResponseOkFrame;
+
+      const data = response.data as any;
+      expect(data.ok).toBe(true);
+
+      await runInDurableObject(kernel, async (instance: Kernel) => {
+        const k = instance as any;
+        const original = k.deliverIpcCallSignal;
+        k.deliverIpcCallSignal = async (...args: unknown[]) => {
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          return original.apply(k, args);
+        };
+        try {
+          await instance.recvFrame(targetPid, {
+            type: "sig",
+            signal: "chat.complete",
+            payload: {
+              pid: targetPid,
+              runId: data.runId,
+              text: "worker completed",
+            },
+          });
+        } finally {
+          k.deliverIpcCallSignal = original;
+        }
+      });
+
+      await runInDurableObject(source, (instance: Process) => {
+        const messages = (instance as any).store.getMessages();
+        const reply = messages.find((message: any) =>
+          message.role === "system"
+          && message.content.includes(`IPC call \`${data.callId}\` completed`)
+        );
+        expect(reply).toBeTruthy();
+        expect(reply.content).toContain("worker completed");
+        (instance as any).currentRun = null;
       });
     });
 
@@ -1362,13 +1558,35 @@ describe("Process DO — mechanical", () => {
     it("forks a compacted segment into a new conversation", async () => {
       const pid = "mech-conversation-fork-segment";
       const stub = await initProcess(pid, ROOT_IDENTITY);
+      const archivedOrigin = {
+        kind: "adapter",
+        adapter: "whatsapp",
+        accountId: "primary",
+        surface: { kind: "group", id: "group-1", name: "GSV Dev" },
+        actorId: "wa:+123",
+        actorLabel: "@sam",
+      };
+      const liveOrigin = {
+        kind: "client",
+        connectionId: "conn-1",
+        clientId: "gsv-ui",
+        platform: "browser",
+      };
 
       await runInDurableObject(stub, (instance: Process) => {
         const store = (instance as any).store;
         store.openConversation({ conversationId: "thread", title: "Thread" });
-        store.appendMessage("user", "old user", { conversationId: "thread", createdAt: 10 });
+        store.appendMessage("user", "old user", {
+          conversationId: "thread",
+          createdAt: 10,
+          origin: JSON.stringify(archivedOrigin),
+        });
         store.appendMessage("assistant", "old assistant", { conversationId: "thread", createdAt: 20 });
-        store.appendMessage("user", "keep this", { conversationId: "thread", createdAt: 30 });
+        store.appendMessage("user", "keep this", {
+          conversationId: "thread",
+          createdAt: 30,
+          origin: JSON.stringify(liveOrigin),
+        });
       });
 
       const compactRes = (await stub.recvFrame(
@@ -1423,6 +1641,8 @@ describe("Process DO — mechanical", () => {
           ["assistant", "old assistant"],
           ["user", "keep this"],
         ]);
+        expect(JSON.parse(restored[0].origin)).toEqual(archivedOrigin);
+        expect(JSON.parse(restored[2].origin)).toEqual(liveOrigin);
 
         const source = store.getMessages({ conversationId: "thread" });
         expect(source.map((message: any) => message.content)).toEqual([
@@ -1887,6 +2107,36 @@ describe("Process DO — mechanical", () => {
       expect(data.messages[0].content).toBe("What is 2+2?");
       expect(data.messages[1].role).toBe("assistant");
       expect(data.messages[1].content).toBe("4");
+    });
+
+    it("returns persisted interaction origin metadata", async () => {
+      const pid = "mech-history-origin";
+      const stub = await initProcess(pid, ROOT_IDENTITY);
+      const origin = {
+        kind: "client",
+        connectionId: "conn-1",
+        clientId: "browser-shell",
+        platform: "web",
+      };
+
+      await runInDurableObject(stub, (instance: Process) => {
+        const store = (instance as any).store;
+        store.appendMessage("user", "from the browser", {
+          origin: JSON.stringify(origin),
+        });
+      });
+
+      const res = (await stub.recvFrame(
+        makeReq("proc.history", {}),
+      )) as ResponseOkFrame;
+
+      expect(res.ok).toBe(true);
+      const data = res.data as any;
+      expect(data.messages[0]).toMatchObject({
+        role: "user",
+        content: "from the browser",
+        origin,
+      });
     });
 
     it("respects limit and offset", async () => {

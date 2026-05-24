@@ -141,10 +141,10 @@ export function App({ backend }: { backend: ChatBackend }) {
     conversations,
     conversationsLoading,
     conversationError,
+    conversationProfiles,
     draftProfile,
     loadConversations,
     loadThreads,
-    newConversationProfiles,
     setDraftProfileId,
     threads,
     threadsError,
@@ -466,7 +466,7 @@ export function App({ backend }: { backend: ChatBackend }) {
     try {
       const result = await backend.spawnProcess({
         profile: "init",
-        label: "Home",
+        label: "Personal Agent",
         workspace: { mode: "none" },
       });
       const record = asRecord(result);
@@ -809,7 +809,7 @@ export function App({ backend }: { backend: ChatBackend }) {
         threads={threads}
         threadsLoading={threadsLoading}
         threadsError={threadsError}
-        profiles={newConversationProfiles}
+        profiles={conversationProfiles}
         draftProfileId={draftProfile.id}
         onDraftProfileChange={setDraftProfileId}
         onHome={() => void openHome()}
@@ -825,7 +825,7 @@ export function App({ backend }: { backend: ChatBackend }) {
             threads={threads}
             threadsLoading={threadsLoading}
             threadsError={threadsError}
-            profiles={newConversationProfiles}
+            profiles={conversationProfiles}
             draftProfileId={draftProfile.id}
             onDraftProfileChange={setDraftProfileId}
             onHome={() => void openHome()}

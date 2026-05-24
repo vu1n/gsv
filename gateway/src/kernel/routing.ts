@@ -69,7 +69,7 @@ export class RoutingTable {
     );
   }
 
-  consume(id: string): { origin: RouteOrigin; call: SyscallName; deviceId: string; scheduleId: string | null } | null {
+  remove(id: string): { origin: RouteOrigin; call: SyscallName; deviceId: string; scheduleId: string | null } | null {
     const rows = [...this.sql.exec<{
       origin_type: string;
       origin_id: string;
@@ -92,6 +92,10 @@ export class RoutingTable {
       deviceId: row.device_id,
       scheduleId: row.schedule_id,
     };
+  }
+
+  consume(id: string): { origin: RouteOrigin; call: SyscallName; deviceId: string; scheduleId: string | null } | null {
+    return this.remove(id);
   }
 
   get(id: string): RouteEntry | null {

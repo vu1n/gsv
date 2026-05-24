@@ -92,7 +92,9 @@ function normalizeTranscriptEntry(payload: unknown, startedAt: number, target: s
   }
 
   if (explicitOk === false || statusText === "failed" || errorText) {
-    entry.stderr = errorText ?? entry.stderr;
+    if (entry.stderr.trim().length === 0 && errorText) {
+      entry.stderr = errorText;
+    }
     return entry;
   }
 

@@ -9,7 +9,7 @@ description: Guide on how context and skills work in GSV and how to add/edit the
 
 GSV assembles process context from explicit, inspectable sources:
 
-1. Profile context from `config/ai/profile/{profile}/context.d/*.md`.
+1. Profile context from `config/ai/profile/{profile}/context.d/*.md` or a user profile under `~/profiles.d/{profile}/context.d/*.md`.
 2. Home context from `~/context.d/*.md`.
 3. Workspace context from `/workspaces/{workspaceId}/.gsv/context.d/*.md`, when the process has a workspace.
 4. A compact index of available skills from layered `skills.d` directories.
@@ -36,6 +36,7 @@ Read `skills show <skill>` before relying on a workflow. Use `skills files` and 
 ## Where Information Belongs
 
 - `config/ai/profile/{profile}/context.d/*.md`: short operator-managed role and runtime guidance.
+- `~/profiles.d/{profile}/context.d/*.md`: user-authored worker profile specialization, available through spawn and schedules.
 - `~/context.d/*.md`: concise user-global standing context useful to most processes.
 - `/workspaces/{id}/.gsv/context.d/*.md`: task-local continuity, decisions, open loops, and handoff state.
 - `/workspaces/{id}/.gsv/summary.md`: fallback workspace summary when no workspace context files exist.

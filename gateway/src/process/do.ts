@@ -73,12 +73,15 @@ import type {
   ProcKillResult,
   ProcSpawnAssignment,
 } from "../syscalls/proc";
+import type { InteractionOrigin } from "../syscalls/interaction-origin";
+import type { AdapterSurface } from "../adapter-interface";
 import type {
   AssistantMessage,
   TextContent,
   ThinkingContent,
   ToolCall,
   Context,
+  Message,
   Tool,
   UserMessage,
   ImageContent,
@@ -180,6 +183,7 @@ type ArchivedMessageRecord = {
   thinking?: ThinkingContent[];
   toolCallId?: string;
   media?: unknown;
+  origin?: InteractionOrigin;
   createdAt?: number;
 };
 
@@ -793,15 +797,17 @@ export class Process extends Host<Env> {
       args.media,
       { ai: this.env.AI },
     );
+    const origin = serializeInteractionOrigin(args.origin);
 
     if (this.currentRun) {
-      this.store.enqueue(runId, args.message, media ?? undefined, undefined, conversationId);
+      this.store.enqueue(runId, args.message, media ?? undefined, undefined, conversationId, origin ?? undefined);
       return { ok: true, status: "started", runId, queued: true };
     }
 
     this.store.appendMessage("user", args.message, {
       conversationId,
       media: media ?? undefined,
+      origin: origin ?? undefined,
     });
     this.currentRun = { runId, queued: false, conversationId };
     this.scheduleTick(runId);
@@ -852,13 +858,15 @@ export class Process extends Host<Env> {
       conversationId,
       message,
       metadata: args.metadata,
+      origin: args.origin ?? { kind: "process", sourcePid, uid: args.source.uid },
       sentAt: Number.isFinite(args.sentAt) ? args.sentAt : Date.now(),
       ...(args.call ? { call: args.call } : {}),
     };
     const renderedMessage = formatIpcMessage(deliveredArgs);
+    const origin = serializeInteractionOrigin(deliveredArgs.origin);
 
     if (this.currentRun) {
-      this.store.enqueue(runId, renderedMessage, undefined, undefined, conversationId);
+      this.store.enqueue(runId, renderedMessage, undefined, undefined, conversationId, origin ?? undefined);
       return {
         ok: true,
         status: "started",
@@ -870,7 +878,10 @@ export class Process extends Host<Env> {
       };
     }
 
-    this.store.appendMessage("user", renderedMessage, { conversationId });
+    this.store.appendMessage("user", renderedMessage, {
+      conversationId,
+      origin: origin ?? undefined,
+    });
     this.currentRun = { runId, queued: false, conversationId };
     this.scheduleTick(runId);
 
@@ -1128,6 +1139,7 @@ export class Process extends Host<Env> {
       : this.store.hasMessageAfter(conversationId, lastMessageId);
 
     const messages: ProcHistoryMessage[] = records.map((r) => {
+      const origin = parseInteractionOrigin(r.origin);
       if (r.role === "toolResult") {
         let meta: { toolName?: string; isError?: boolean } = {};
         if (r.toolCalls) {
@@ -1148,6 +1160,7 @@ export class Process extends Host<Env> {
             output: r.content,
           },
           timestamp: r.createdAt,
+          ...(origin ? { origin } : {}),
         };
       }
 
@@ -1162,6 +1175,7 @@ export class Process extends Host<Env> {
             toolCalls: meta.toolCalls ?? [],
           },
           timestamp: r.createdAt,
+          ...(origin ? { origin } : {}),
         };
       }
 
@@ -1175,6 +1189,7 @@ export class Process extends Host<Env> {
             media,
           },
           timestamp: r.createdAt,
+          ...(origin ? { origin } : {}),
         };
       }
 
@@ -1183,6 +1198,7 @@ export class Process extends Host<Env> {
         role: r.role,
         content: r.content,
         timestamp: r.createdAt,
+        ...(origin ? { origin } : {}),
       };
     });
 
@@ -1675,6 +1691,7 @@ export class Process extends Host<Env> {
       toolCalls,
       toolCallId: message.toolCallId,
       media: message.media === undefined ? undefined : JSON.stringify(message.media),
+      origin: serializeInteractionOrigin(message.origin) ?? undefined,
       createdAt: message.createdAt,
     });
   }
@@ -1690,6 +1707,7 @@ export class Process extends Host<Env> {
       toolCalls: message.toolCalls ?? undefined,
       toolCallId: message.toolCallId ?? undefined,
       media: message.media ?? undefined,
+      origin: message.origin ?? undefined,
       createdAt: message.createdAt,
     });
   }
@@ -1750,6 +1768,7 @@ export class Process extends Host<Env> {
           output: message.content,
         },
         timestamp: message.createdAt,
+        ...(message.origin ? { origin: message.origin } : {}),
       };
     }
 
@@ -1763,6 +1782,7 @@ export class Process extends Host<Env> {
           toolCalls: message.toolCalls ?? [],
         },
         timestamp: message.createdAt,
+        ...(message.origin ? { origin: message.origin } : {}),
       };
     }
 
@@ -1775,6 +1795,7 @@ export class Process extends Host<Env> {
           media: message.media,
         },
         timestamp: message.createdAt,
+        ...(message.origin ? { origin: message.origin } : {}),
       };
     }
 
@@ -1783,6 +1804,7 @@ export class Process extends Host<Env> {
       role: message.role,
       content: message.content,
       timestamp: message.createdAt,
+      ...(message.origin ? { origin: message.origin } : {}),
     };
   }
 
@@ -2071,6 +2093,7 @@ export class Process extends Host<Env> {
           conversationId: qm.conversationId,
           generation: qm.generation,
           media: qm.media ?? undefined,
+          origin: qm.origin ?? undefined,
         });
       }
       if (queued.length > 0) {
@@ -2759,7 +2782,28 @@ export class Process extends Host<Env> {
       } satisfies UserMessage;
     }
 
-    return messages;
+    let previousSource: string | null | undefined;
+    for (let index = 0; index < records.length; index += 1) {
+      if (records[index].role !== "user") {
+        continue;
+      }
+
+      const source = formatInteractionOriginForContext(parseInteractionOrigin(records[index].origin));
+      const shouldRenderSource = source !== null && source !== previousSource;
+      previousSource = source;
+      if (!shouldRenderSource) {
+        continue;
+      }
+
+      const message = messages[index];
+      if (message?.role !== "user") {
+        continue;
+      }
+
+      messages[index] = prefixUserMessageContent(message, `[From: ${source}]`);
+    }
+
+    return orderMessagesForProvider(messages);
   }
 
   private async hydrateUserContent(
@@ -3489,6 +3533,7 @@ export class Process extends Host<Env> {
       conversationId: next.conversationId,
       generation: next.generation,
       media: next.media ?? undefined,
+      origin: next.origin ?? undefined,
     });
     this.currentRun = {
       runId: next.runId,
@@ -3500,7 +3545,70 @@ export class Process extends Host<Env> {
   }
 }
 
+function orderMessagesForProvider(messages: Message[]): Message[] {
+  const ordered: Message[] = [];
+  type PendingToolBlock = {
+    expected: Set<string>;
+    deferred: Message[];
+  };
+  const state: { pendingToolBlock: PendingToolBlock | null } = {
+    pendingToolBlock: null,
+  };
+
+  const append = (message: Message): void => {
+    const pendingToolBlock = state.pendingToolBlock;
+    if (pendingToolBlock) {
+      // Providers require tool results to immediately follow the assistant tool-call message.
+      if (message.role === "toolResult" && pendingToolBlock.expected.has(message.toolCallId)) {
+        pendingToolBlock.expected.delete(message.toolCallId);
+        ordered.push(message);
+
+        if (pendingToolBlock.expected.size === 0) {
+          const deferred = pendingToolBlock.deferred;
+          state.pendingToolBlock = null;
+          for (const deferredMessage of deferred) {
+            append(deferredMessage);
+          }
+        }
+        return;
+      }
+
+      pendingToolBlock.deferred.push(message);
+      return;
+    }
+
+    ordered.push(message);
+    const toolCallIds = assistantToolCallIds(message);
+    if (toolCallIds.length > 0) {
+      state.pendingToolBlock = {
+        expected: new Set(toolCallIds),
+        deferred: [],
+      };
+    }
+  };
+
+  for (const message of messages) {
+    append(message);
+  }
+
+  if (state.pendingToolBlock) {
+    ordered.push(...state.pendingToolBlock.deferred);
+  }
+
+  return ordered;
+}
+
+function assistantToolCallIds(message: Message): string[] {
+  if (message.role !== "assistant") {
+    return [];
+  }
+  return message.content.flatMap((block) =>
+    block.type === "toolCall" ? [block.id] : [],
+  );
+}
+
 function serializeArchivedMessage(message: MessageRecord): Record<string, unknown> {
+  const origin = parseInteractionOrigin(message.origin);
   if (message.role === "assistant") {
     const meta = parseAssistantMessageMeta(message.toolCalls);
     return {
@@ -3512,6 +3620,7 @@ function serializeArchivedMessage(message: MessageRecord): Record<string, unknow
       tool_calls: meta.toolCalls,
       thinking: meta.thinking,
       tool_call_id: message.toolCallId ?? undefined,
+      origin,
       ts: message.createdAt,
     };
   }
@@ -3525,6 +3634,7 @@ function serializeArchivedMessage(message: MessageRecord): Record<string, unknow
     media: message.media ? parseStoredProcessMedia(message.media) : undefined,
     tool_calls: message.toolCalls ? JSON.parse(message.toolCalls) : undefined,
     tool_call_id: message.toolCallId ?? undefined,
+    origin,
     ts: message.createdAt,
   };
 }
@@ -3545,6 +3655,7 @@ function parseArchivedMessageRecord(value: unknown): ArchivedMessageRecord {
   const id = typeof record.id === "number" && Number.isInteger(record.id) && record.id > 0
     ? record.id
     : undefined;
+  const origin = parseInteractionOriginRecord(record.origin);
 
   return {
     id,
@@ -3558,8 +3669,234 @@ function parseArchivedMessageRecord(value: unknown): ArchivedMessageRecord {
       : undefined,
     toolCallId,
     media: record.media,
+    origin,
     createdAt,
   };
+}
+
+function serializeInteractionOrigin(origin: InteractionOrigin | undefined): string | null {
+  if (!origin) return null;
+  try {
+    return JSON.stringify(origin);
+  } catch {
+    return null;
+  }
+}
+
+function parseInteractionOrigin(value: string | null | undefined): InteractionOrigin | undefined {
+  if (!value) return undefined;
+  try {
+    return parseInteractionOriginRecord(JSON.parse(value));
+  } catch {
+    return undefined;
+  }
+}
+
+function parseInteractionOriginRecord(value: unknown): InteractionOrigin | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  const kind = record.kind;
+
+  if (kind === "client") {
+    const connectionId = parseRequiredString(record.connectionId);
+    if (!connectionId) return undefined;
+    const clientId = parseOptionalString(record.clientId);
+    const platform = parseOptionalString(record.platform);
+    return {
+      kind,
+      connectionId,
+      ...(clientId ? { clientId } : {}),
+      ...(platform ? { platform } : {}),
+    };
+  }
+
+  if (kind === "app") {
+    const packageId = parseRequiredString(record.packageId);
+    const packageName = parseRequiredString(record.packageName);
+    const entrypointName = parseRequiredString(record.entrypointName);
+    const routeBase = parseRequiredString(record.routeBase);
+    if (!packageId || !packageName || !entrypointName || !routeBase) return undefined;
+    return { kind, packageId, packageName, entrypointName, routeBase };
+  }
+
+  if (kind === "adapter") {
+    const adapter = parseRequiredString(record.adapter);
+    const accountId = parseRequiredString(record.accountId);
+    const actorId = parseRequiredString(record.actorId);
+    const surface = parseAdapterSurface(record.surface);
+    if (!adapter || !accountId || !actorId || !surface) return undefined;
+    const actorLabel = parseOptionalString(record.actorLabel);
+    const messageId = parseOptionalString(record.messageId);
+    return {
+      kind,
+      adapter,
+      accountId,
+      surface,
+      actorId,
+      ...(actorLabel ? { actorLabel } : {}),
+      ...(messageId ? { messageId } : {}),
+    };
+  }
+
+  if (kind === "device") {
+    const deviceId = parseRequiredString(record.deviceId);
+    if (!deviceId) return undefined;
+    const cwd = parseOptionalString(record.cwd);
+    return {
+      kind,
+      deviceId,
+      ...(cwd ? { cwd } : {}),
+    };
+  }
+
+  if (kind === "process") {
+    const sourcePid = parseRequiredString(record.sourcePid);
+    if (!sourcePid) return undefined;
+    return {
+      kind,
+      sourcePid,
+      ...(typeof record.uid === "number" && Number.isFinite(record.uid) ? { uid: record.uid } : {}),
+    };
+  }
+
+  if (kind === "scheduler") {
+    const scheduleId = parseRequiredString(record.scheduleId);
+    if (!scheduleId) return undefined;
+    return { kind, scheduleId };
+  }
+
+  return undefined;
+}
+
+function prefixUserMessageContent(message: UserMessage, prefix: string): UserMessage {
+  if (typeof message.content === "string") {
+    return {
+      ...message,
+      content: `${prefix}\n${message.content}`,
+    };
+  }
+
+  const content = Array.isArray(message.content) ? [...message.content] : [];
+  const first = content[0];
+  if (first?.type === "text") {
+    content[0] = {
+      ...first,
+      text: `${prefix}\n${first.text}`,
+    };
+  } else {
+    content.unshift({ type: "text", text: prefix });
+  }
+
+  return {
+    ...message,
+    content,
+  };
+}
+
+function formatInteractionOriginForContext(origin: InteractionOrigin | undefined): string | null {
+  if (!origin) return null;
+
+  if (origin.kind === "app") {
+    if (origin.packageId === "chat" || origin.routeBase === "/apps/chat") {
+      return null;
+    }
+    return `${origin.packageName} app (${origin.entrypointName})`;
+  }
+
+  if (origin.kind === "adapter") {
+    const adapter = titleCase(origin.adapter);
+    const surface = formatAdapterSurfaceForContext(origin.surface);
+    const actor = origin.actorLabel || origin.actorId;
+    return [
+      adapter,
+      surface ? ` ${surface}` : "",
+      actor ? ` from ${actor}` : "",
+    ].join("");
+  }
+
+  if (origin.kind === "client") {
+    return formatClientOriginForContext(origin.platform, origin.clientId);
+  }
+
+  if (origin.kind === "device") {
+    return `device ${origin.deviceId}${origin.cwd ? ` cwd ${origin.cwd}` : ""}`;
+  }
+
+  if (origin.kind === "process") {
+    return `process ${origin.sourcePid}${origin.uid !== undefined ? ` uid ${origin.uid}` : ""}`;
+  }
+
+  if (origin.kind === "scheduler") {
+    return `schedule ${origin.scheduleId}`;
+  }
+
+  return null;
+}
+
+function formatClientOriginForContext(platform: string | undefined, clientId: string | undefined): string {
+  if (clientId === "gsv-ui" || platform === "browser" || platform === "web") {
+    return "GSV Web Desktop";
+  }
+  const label = platform || "client";
+  return clientId ? `${label} ${clientId}` : label;
+}
+
+function formatAdapterSurfaceForContext(surface: AdapterSurface): string {
+  const label = surface.name || surface.handle || surface.id;
+  if (surface.kind === "dm") {
+    return `direct message${label ? ` ${label}` : ""}`;
+  }
+  if (surface.kind === "thread") {
+    const thread = surface.threadId ? ` thread ${surface.threadId}` : "";
+    return `${surface.kind} ${label}${thread}`;
+  }
+  return `${surface.kind} ${label}`;
+}
+
+function titleCase(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return value;
+  const known = new Map([
+    ["whatsapp", "WhatsApp"],
+    ["discord", "Discord"],
+    ["gsv", "GSV"],
+  ]);
+  const mapped = known.get(trimmed.toLowerCase());
+  if (mapped) return mapped;
+  return `${trimmed.slice(0, 1).toUpperCase()}${trimmed.slice(1)}`;
+}
+
+function parseAdapterSurface(value: unknown): AdapterSurface | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  const kind = record.kind;
+  const id = parseRequiredString(record.id);
+  if (
+    !id ||
+    (kind !== "dm" && kind !== "group" && kind !== "channel" && kind !== "thread")
+  ) {
+    return undefined;
+  }
+  const name = parseOptionalString(record.name);
+  const handle = parseOptionalString(record.handle);
+  const threadId = parseOptionalString(record.threadId);
+  return {
+    kind,
+    id,
+    ...(name ? { name } : {}),
+    ...(handle ? { handle } : {}),
+    ...(threadId ? { threadId } : {}),
+  };
+}
+
+function parseRequiredString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function parseOptionalString(value: unknown): string | undefined {
+  return parseRequiredString(value);
 }
 
 function parseArchivedMessageRole(value: unknown): MessageRole {

@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::future::Future;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use gsv::config::CliConfig;
@@ -12,10 +12,12 @@ use gsv::logger::{self, NodeLogger};
 use gsv::protocol::{
     ErrorShape, Frame, NodeExecEventParams, RequestFrame, ResponseFrame, SignalFrame,
 };
-use gsv::tools::{all_tools_with_workspace, subscribe_exec_events, Tool};
+use gsv::tools::{all_tools_with_workspace_for_device, subscribe_exec_events, Tool};
 use serde_json::json;
 
 use crate::cli::DeviceServiceAction;
+
+mod transfer;
 
 const MAX_NODE_EXEC_EVENT_OUTBOX: usize = 2048;
 
@@ -352,6 +354,7 @@ fn syscall_to_tool_name(call: &str) -> Option<&'static str> {
         "fs.read" => Some("Read"),
         "fs.write" => Some("Write"),
         "fs.edit" => Some("Edit"),
+        "fs.copy" => Some("Copy"),
         "fs.search" => Some("Search"),
         "fs.delete" => Some("Delete"),
         "shell.exec" => Some("Shell"),
@@ -362,13 +365,19 @@ fn syscall_to_tool_name(call: &str) -> Option<&'static str> {
 async fn handle_driver_request(
     conn: &Arc<Connection>,
     tools: &[Box<dyn Tool>],
+    workspace: &Path,
     req: &RequestFrame,
     logger: &NodeLogger,
+    binary_inbox: &transfer::BinaryFrameInbox,
 ) {
     let args = req.args.clone().unwrap_or(serde_json::Value::Null);
 
     let call = req.call.as_str();
-    let result = if let Some(tool_name) = syscall_to_tool_name(call) {
+    let result = if let Some(transfer_result) =
+        transfer::handle_transfer_syscall(call, args.clone(), workspace, conn, binary_inbox).await
+    {
+        transfer_result
+    } else if let Some(tool_name) = syscall_to_tool_name(call) {
         execute_tool_by_name(tools, tool_name, args).await
     } else {
         Err(format!("unknown syscall: {}", call))
@@ -577,8 +586,9 @@ pub(crate) async fn run_node(
     loop {
         logger.info("connect.attempt", json!({ "url": url }));
 
-        let tools_for_handler: Arc<Vec<Box<dyn Tool>>> =
-            Arc::new(all_tools_with_workspace(workspace.clone()));
+        let tools_for_handler: Arc<Vec<Box<dyn Tool>>> = Arc::new(
+            all_tools_with_workspace_for_device(workspace.clone(), node_id.clone()),
+        );
 
         let conn = match tokio::time::timeout(
             CONNECT_TIMEOUT,
@@ -641,21 +651,32 @@ pub(crate) async fn run_node(
         );
 
         let conn = Arc::new(conn);
+        let binary_inbox = transfer::BinaryFrameInbox::new();
+        let binary_inbox_for_handler = binary_inbox.clone();
+        conn.set_binary_handler(move |data| {
+            binary_inbox_for_handler.push(data);
+        })
+        .await;
 
         let conn_clone = conn.clone();
         let tools_clone = tools_for_handler.clone();
+        let workspace_clone = workspace.clone();
         let logger_clone = logger.clone();
+        let binary_inbox_clone = binary_inbox.clone();
 
         // In the new OS architecture, the kernel sends req frames directly to
         // the driver. We dispatch based on `call` and respond with a res frame.
         conn.set_frame_handler(move |frame| {
             let conn = conn_clone.clone();
             let tools = tools_clone.clone();
+            let workspace = workspace_clone.clone();
             let logger = logger_clone.clone();
+            let binary_inbox = binary_inbox_clone.clone();
 
             tokio::spawn(async move {
                 if let Frame::Req(req) = frame {
-                    handle_driver_request(&conn, &tools, &req, &logger).await;
+                    handle_driver_request(&conn, &tools, &workspace, &req, &logger, &binary_inbox)
+                        .await;
                 }
             });
         })

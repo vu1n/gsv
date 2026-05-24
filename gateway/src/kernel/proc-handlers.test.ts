@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProcessIdentity } from "@gsv/protocol/syscalls/system";
-import type { ResponseFrame } from "../protocol/frames";
+import type { RequestFrame, ResponseFrame } from "../protocol/frames";
 import type { ProcIpcSendResult } from "../syscalls/proc";
 import type { KernelContext } from "./context";
 
@@ -9,7 +9,7 @@ vi.mock("../shared/utils", () => ({
 }));
 
 import { sendFrameToProcess } from "../shared/utils";
-import { handleProcIpcCall, handleProcSpawn } from "./proc-handlers";
+import { forwardToProcess, handleProcIpcCall, handleProcSpawn } from "./proc-handlers";
 
 const IDENTITY: ProcessIdentity = {
   uid: 1000,
@@ -48,6 +48,69 @@ describe("proc handlers", () => {
     expect(ipcCalls.remove).toHaveBeenCalledWith(callId);
     expect(ipcCalls.attachRun).not.toHaveBeenCalled();
     expect(ctx.scheduleIpcCallTimeout).not.toHaveBeenCalled();
+  });
+
+  it("derives client interaction origin for forwarded proc.send", async () => {
+    sendFrameToProcessMock.mockResolvedValue({
+      type: "res",
+      id: "send-1",
+      ok: true,
+      data: { ok: true, status: "started", runId: "run-1" },
+    } satisfies ResponseFrame);
+
+    const ctx = {
+      identity: {
+        role: "user",
+        process: IDENTITY,
+        capabilities: ["proc.send"],
+      },
+      connection: {
+        id: "conn-1",
+        state: {
+          clientId: "browser-shell",
+          clientPlatform: "web",
+        },
+      },
+      procs: {
+        get: vi.fn(() => ({ uid: IDENTITY.uid, workspaceId: null })),
+      },
+      workspaces: {
+        touch: vi.fn(),
+      },
+    } as unknown as KernelContext;
+    const spoofedOrigin = {
+      kind: "adapter",
+      adapter: "whatsapp",
+      accountId: "primary",
+      surface: { kind: "dm", id: "dm-1" },
+      actorId: "external",
+    };
+
+    await forwardToProcess({
+      type: "req",
+      id: "send-1",
+      call: "proc.send",
+      args: {
+        message: "hello",
+        origin: spoofedOrigin,
+      },
+    } as RequestFrame, ctx);
+
+    expect(sendFrameToProcessMock).toHaveBeenCalledWith(
+      "init:1000",
+      expect.objectContaining({
+        call: "proc.send",
+        args: expect.objectContaining({
+          message: "hello",
+          origin: {
+            kind: "client",
+            connectionId: "conn-1",
+            clientId: "browser-shell",
+            platform: "web",
+          },
+        }),
+      }),
+    );
   });
 
   it("cleans up pending IPC call when delivery reports failure", async () => {
@@ -182,6 +245,37 @@ describe("proc handlers", () => {
           }),
         ],
       }),
+    );
+  });
+
+  it("defaults host spawns to the bounded task worker profile", async () => {
+    const ctx = {
+      env: {},
+      identity: {
+        process: IDENTITY,
+        capabilities: ["*"],
+      },
+      procs: {
+        get: vi.fn(() => null),
+        spawn: vi.fn(),
+      },
+      workspaces: {
+        get: vi.fn(),
+        touch: vi.fn(),
+      },
+      packages: {
+        resolve: vi.fn(() => null),
+        list: vi.fn(() => []),
+      },
+    } as unknown as KernelContext;
+
+    const result = await handleProcSpawn({}, ctx);
+
+    expect(result).toMatchObject({ ok: true, profile: "task" });
+    expect(ctx.procs.spawn).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Object),
+      expect.objectContaining({ profile: "task" }),
     );
   });
 

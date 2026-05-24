@@ -1,13 +1,16 @@
 use assembler::model::{
-    PackageAssemblyAnalysis, PackageAssemblyRequest, PackageAssemblySource,
-    PackageAssemblyTarget, PackageBrowserDefinition, PackageCapabilityDefinition,
-    PackageDefinition, PackageIdentity, PackageJsonDefinition, PackageMetaDefinition,
+    PackageAssemblyAnalysis, PackageAssemblyRequest, PackageAssemblySource, PackageAssemblyTarget,
+    PackageBrowserDefinition, PackageCapabilityDefinition, PackageDefinition, PackageIdentity,
+    PackageJsonDefinition, PackageMetaDefinition,
 };
 use assembler::npm::{
     install_registry_dependencies, NpmDist, NpmPackument, NpmPackumentVersion, NpmRegistryClient,
     NpmRegistryError,
 };
-use assembler::oxc::{parse_source_text_with_oxc, transform_source_text_with_oxc, OxcResolver};
+use assembler::oxc::{
+    collect_module_request_spans_with_oxc, parse_source_text_with_oxc,
+    transform_source_text_with_oxc, OxcResolver,
+};
 use assembler::pipeline::prepare_request;
 use flate2::write::GzEncoder;
 use flate2::Compression;
@@ -104,6 +107,7 @@ fn base_request(entry_source: &str) -> PackageAssemblyRequest {
         ]
         .into_iter()
         .collect(),
+        binary_files: BTreeMap::new(),
     }
 }
 
@@ -274,7 +278,8 @@ export default worker;"#,
 
 #[test]
 fn browser_resolver_prefers_import_export_over_require_export() {
-    let mut request = base_request(r#"import qrcode from "qrcode-generator"; export default qrcode;"#);
+    let mut request =
+        base_request(r#"import qrcode from "qrcode-generator"; export default qrcode;"#);
     request
         .analysis
         .package_json
@@ -311,9 +316,15 @@ fn browser_resolver_prefers_import_export_over_require_export() {
   }
 }"#,
                 ),
-                ("dist/qrcode.js", br#"module.exports = function qrcode() {};"#),
+                (
+                    "dist/qrcode.js",
+                    br#"module.exports = function qrcode() {};"#,
+                ),
                 ("dist/qrcode.mjs", br#"export default function qrcode() {}"#),
-                ("dist/qrcode.d.ts", br#"declare const qrcode: unknown; export default qrcode;"#),
+                (
+                    "dist/qrcode.d.ts",
+                    br#"declare const qrcode: unknown; export default qrcode;"#,
+                ),
             ]),
         );
 
@@ -326,7 +337,10 @@ fn browser_resolver_prefers_import_export_over_require_export() {
         .resolve_specifier("apps/demo/src/main.tsx", "qrcode-generator")
         .expect("resolve qrcode-generator");
 
-    assert_eq!(resolved.repo_path, "node_modules/qrcode-generator/dist/qrcode.mjs");
+    assert_eq!(
+        resolved.repo_path,
+        "node_modules/qrcode-generator/dist/qrcode.mjs"
+    );
 }
 
 #[test]
@@ -412,7 +426,7 @@ fn semver_range_selects_highest_matching_published_version() {
 }
 
 #[test]
-fn installer_rejects_non_utf8_package_files() {
+fn installer_preserves_non_utf8_package_files() {
     let mut request = base_request(r#"import bin from "bad-pkg"; export default bin;"#);
     request
         .analysis
@@ -442,11 +456,12 @@ fn installer_rejects_non_utf8_package_files() {
     let planned = prepare_request(&request).value.expect("planned request");
     let outcome = install_registry_dependencies(&planned, &client);
 
-    assert!(outcome.value.is_none());
-    assert!(outcome
-        .diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.code == "install.unsupported-package"));
+    let installed = outcome.value.expect("installed dependencies");
+    assert_eq!(
+        installed.files.get_bytes("node_modules/bad-pkg/binary.dat"),
+        Some(&[0xff, 0xfe, 0x00, 0x01][..])
+    );
+    assert!(outcome.diagnostics.is_empty());
 }
 
 #[test]
@@ -467,4 +482,26 @@ export default function App({ name }: Props) {
     assert!(!transformed.contains("type Props"));
     assert!(!transformed.contains(": Props"));
     assert!(!transformed.contains("<main>"));
+}
+
+#[test]
+fn collects_dynamic_imports_from_ast_nodes() {
+    let source = r#"
+const ignoredString = "import(\"./ignored-string.ts\")";
+// import("./ignored-comment.ts")
+await import ("./worker.ts");
+await import(`./chunk.js`);
+await import(runtimePath);
+"#;
+
+    let spans = collect_module_request_spans_with_oxc("apps/demo/src/main.ts", source)
+        .expect("collect request spans");
+    let specifiers = spans
+        .iter()
+        .map(|span| span.specifier.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(specifiers, vec!["./worker.ts", "./chunk.js"]);
+    assert_eq!(&source[spans[0].start..spans[0].end], "\"./worker.ts\"");
+    assert_eq!(&source[spans[1].start..spans[1].end], "`./chunk.js`");
 }

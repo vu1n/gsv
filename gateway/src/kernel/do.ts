@@ -12,9 +12,19 @@ import type { Frame, RequestFrame, ResponseFrame, SignalFrame } from "../protoco
 import type {
   ConnectionIdentity,
   ProcessIdentity,
+  SysTargetRegisterResult,
   SysSetupResult,
 } from "@gsv/protocol/syscalls/system";
+import {
+  BINARY_FRAME_DATA,
+  BINARY_FRAME_END,
+  BINARY_FRAME_ERROR,
+  buildBinaryFrame,
+  parseBinaryFrame,
+  type BinaryFrame,
+} from "@gsv/protocol/binary-frame";
 import type { ProcHilRequest } from "../syscalls/proc";
+import type { SyscallName } from "../syscalls";
 import type { PkgPublicListResult } from "@gsv/protocol/syscalls/packages";
 import type {
   AdapterOutboundMessage,
@@ -22,7 +32,7 @@ import type {
 import { AuthStore } from "./auth-store";
 import { CapabilityStore, hasCapability } from "./capabilities";
 import { ConfigStore } from "./config";
-import { DeviceRegistry } from "./devices";
+import { DeviceRegistry, type DeviceLifecycle, type DeviceRecord } from "./devices";
 import { RoutingTable, type RouteOrigin } from "./routing";
 import { ShellSessionStore, type ShellSessionStatus } from "./shell-sessions";
 import { ProcessRegistry } from "./processes";
@@ -92,13 +102,34 @@ import type {
   SchedulerRunResult,
 } from "../syscalls/scheduler";
 
-const SERVER_VERSION = "0.1.6";
+const SERVER_VERSION = "0.2.0";
 const APP_CLIENT_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+const KERNEL_BINARY_DEVICE_ID = "__gsv_kernel__";
 
 type ConnectionState = {
   step: "pending" | "connected";
   identity?: ConnectionIdentity;
   clientId?: string;
+  clientPlatform?: string;
+  providedTargets?: ProvidedTarget[];
+};
+
+type ProvidedTarget = {
+  targetId: string;
+};
+
+type BinaryRoute = {
+  requestId: string;
+  streamId: number;
+  origin: RouteOrigin;
+  deviceId: string;
+  expiresAt: number;
+  kind: "relay" | "native-stream";
+};
+
+type PendingBinaryStream = {
+  controller: ReadableStreamDefaultController<Uint8Array>;
+  timeoutId: ReturnType<typeof setTimeout>;
 };
 
 type ProcSendData = {
@@ -209,6 +240,9 @@ export class Kernel extends Host<Env> {
   private readonly connections = new Map<string, Connection<ConnectionState>>();
   private readonly pendingAppResponses = new Map<string, (frame: ResponseFrame) => void>();
   private readonly pendingProcessSignals = new Map<string, Promise<void>>();
+  private readonly binaryRoutes = new Map<number, BinaryRoute>();
+  private readonly binaryRoutesByRequest = new Map<string, Set<number>>();
+  private readonly pendingBinaryStreams = new Map<number, PendingBinaryStream>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -394,6 +428,10 @@ export class Kernel extends Host<Env> {
       this.failRoutesForDevice(identity.device);
     }
 
+    for (const target of state.providedTargets ?? []) {
+      this.removeProvidedTarget(target.targetId);
+    }
+
     this.failRoutesForConnection(connection.id);
     this.runRoutes.clearForConnection(connection.id);
   }
@@ -401,7 +439,7 @@ export class Kernel extends Host<Env> {
   async onMessage(connection: Connection<ConnectionState>, message: WSMessage): Promise<void> {
     await this.ready;
     if (typeof message !== "string") {
-      // TODO: binary stream frames
+      this.handleBinaryMessage(connection, message);
       return;
     }
 
@@ -450,6 +488,7 @@ export class Kernel extends Host<Env> {
     }
 
     if (frame.type === "sig") {
+      await this.completeIpcCallsForProcessSignal(processId, frame);
       this.enqueueProcessSignal(processId, frame);
       return null;
     }
@@ -796,6 +835,15 @@ export class Kernel extends Host<Env> {
         }
       });
     this.pendingProcessSignals.set(processId, queued);
+  }
+
+  private async completeIpcCallsForProcessSignal(processId: string, frame: SignalFrame): Promise<void> {
+    const identity = this.procs.getIdentity(processId);
+    if (!identity) {
+      return;
+    }
+    const runId = this.extractRunId(frame.payload);
+    await this.completeIpcCallsFromSignal(identity.uid, processId, frame, runId);
   }
 
   private async completeIpcCallsFromSignal(
@@ -1206,18 +1254,434 @@ export class Kernel extends Host<Env> {
 
   private buildDispatchDeps(): DispatchDeps {
     return {
-      routingTable: this.routes,
       shellSessions: this.shellSessions,
       connections: this.connections,
-      scheduleExpiry: async (id: string, ttlMs: number) => {
-        const sched = await this.schedule(
-          ttlMs / 1000,
-          "onRouteExpired",
-          id,
-        );
-        return sched.id;
+      registerRoute: this.registerRouteWithExpiry.bind(this),
+      registerBinaryRoute: this.registerBinaryRoute.bind(this),
+      requestDevice: this.requestDevice.bind(this),
+      allocateBinaryStreamId: this.allocateBinaryStreamId.bind(this),
+      startDeviceRequest: this.startDeviceRequest.bind(this),
+      registerBinaryRelay: this.registerBinaryRelay.bind(this),
+      receiveDeviceBinaryStream: this.receiveDeviceBinaryStream.bind(this),
+      receiveBinaryStream: this.receiveBinaryStream.bind(this),
+      sendDeviceBinaryFrame: this.sendDeviceBinaryFrame.bind(this),
+    };
+  }
+
+  private async registerRouteWithExpiry(route: {
+    id: string;
+    call: SyscallName;
+    origin: RouteOrigin;
+    deviceId: string;
+    ttlMs: number;
+  }): Promise<{ cancel: () => void }> {
+    const scheduleId = await this.scheduleRouteExpiry(route.id, route.ttlMs);
+
+    try {
+      this.routes.register(
+        route.id,
+        route.call,
+        route.origin,
+        route.deviceId,
+        { ttlMs: route.ttlMs, scheduleId },
+      );
+    } catch (error) {
+      this.cancelSchedule(scheduleId).catch(() => {});
+      throw error;
+    }
+
+    return {
+      cancel: () => this.cancelRoute(route.id),
+    };
+  }
+
+  private async scheduleRouteExpiry(routeId: string, ttlMs: number): Promise<string> {
+    const sched = await this.schedule(
+      ttlMs / 1000,
+      "onRouteExpired",
+      routeId,
+    );
+    return sched.id;
+  }
+
+  private cancelRoute(routeId: string): void {
+    const route = this.routes.remove(routeId);
+    if (route?.scheduleId) {
+      this.cancelSchedule(route.scheduleId).catch(() => {});
+    }
+    this.clearBinaryRoutesForRequest(routeId);
+  }
+
+  private registerBinaryRoute(route: {
+    requestId: string;
+    streamId: number;
+    origin: RouteOrigin;
+    deviceId: string;
+    ttlMs: number;
+    kind?: "relay" | "native-stream";
+  }): { cancel: () => void } {
+    if (this.binaryRoutes.has(route.streamId)) {
+      throw new Error(`Binary stream id already active: ${route.streamId}`);
+    }
+    const expiresAt = Date.now() + route.ttlMs;
+    this.binaryRoutes.set(route.streamId, {
+      requestId: route.requestId,
+      streamId: route.streamId,
+      origin: route.origin,
+      deviceId: route.deviceId,
+      expiresAt,
+      kind: route.kind ?? "relay",
+    });
+
+    const streamIds = this.binaryRoutesByRequest.get(route.requestId) ?? new Set<number>();
+    streamIds.add(route.streamId);
+    this.binaryRoutesByRequest.set(route.requestId, streamIds);
+
+    return {
+      cancel: () => this.clearBinaryRoute(route.streamId),
+    };
+  }
+
+  private clearBinaryRoute(streamId: number): void {
+    const route = this.binaryRoutes.get(streamId);
+    if (!route) {
+      return;
+    }
+    this.binaryRoutes.delete(streamId);
+    const streamIds = this.binaryRoutesByRequest.get(route.requestId);
+    if (streamIds) {
+      streamIds.delete(streamId);
+      if (streamIds.size === 0) {
+        this.binaryRoutesByRequest.delete(route.requestId);
+      }
+    }
+    this.rejectPendingBinaryStream(streamId, new Error("Binary transfer route closed"));
+  }
+
+  private clearBinaryRoutesForRequest(requestId: string): void {
+    const streamIds = this.binaryRoutesByRequest.get(requestId);
+    if (!streamIds) {
+      return;
+    }
+    for (const streamId of [...streamIds]) {
+      this.clearBinaryRoute(streamId);
+    }
+  }
+
+  private allocateBinaryStreamId(): number {
+    const values = new Uint32Array(1);
+    for (let attempt = 0; attempt < 16; attempt += 1) {
+      crypto.getRandomValues(values);
+      const streamId = values[0];
+      if (
+        streamId > 0 &&
+        !this.binaryRoutes.has(streamId) &&
+        !this.pendingBinaryStreams.has(streamId)
+      ) {
+        return streamId;
+      }
+    }
+    throw new Error("Unable to allocate binary stream id");
+  }
+
+  private createPendingBinaryStream(streamId: number, ttlMs: number): {
+    stream: ReadableStream<Uint8Array>;
+    cleanup: () => void;
+  } {
+    if (this.pendingBinaryStreams.has(streamId)) {
+      throw new Error(`Binary stream id already waiting: ${streamId}`);
+    }
+
+    let settled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start: (controller) => {
+        const timeoutId = setTimeout(() => {
+          settled = true;
+          this.rejectPendingBinaryStream(
+            streamId,
+            new Error(`Binary transfer timed out: ${streamId}`),
+          );
+          this.clearBinaryRoute(streamId);
+        }, ttlMs);
+        this.pendingBinaryStreams.set(streamId, { controller, timeoutId });
+      },
+      cancel: () => {
+        if (!settled) {
+          this.clearPendingBinaryStream(streamId);
+          this.clearBinaryRoute(streamId);
+        }
+      },
+    });
+
+    return {
+      stream,
+      cleanup: () => {
+        if (!settled) {
+          this.rejectPendingBinaryStream(streamId, new Error("Binary transfer cancelled"));
+          this.clearBinaryRoute(streamId);
+        }
       },
     };
+  }
+
+  private clearPendingBinaryStream(streamId: number): PendingBinaryStream | null {
+    const pending = this.pendingBinaryStreams.get(streamId);
+    if (!pending) {
+      return null;
+    }
+    this.pendingBinaryStreams.delete(streamId);
+    clearTimeout(pending.timeoutId);
+    return pending;
+  }
+
+  private closePendingBinaryStream(streamId: number): void {
+    const pending = this.clearPendingBinaryStream(streamId);
+    if (pending) {
+      pending.controller.close();
+    }
+  }
+
+  private rejectPendingBinaryStream(streamId: number, error: Error): void {
+    const pending = this.clearPendingBinaryStream(streamId);
+    if (pending) {
+      pending.controller.error(error);
+    }
+  }
+
+  private receiveBinaryStream(route: {
+    requestId: string;
+    streamId: number;
+    origin: RouteOrigin;
+    ttlMs: number;
+  }): { stream: ReadableStream<Uint8Array>; cancel: () => void } {
+    if (route.origin.type !== "connection") {
+      throw new Error("Native binary transfer requires an active WebSocket connection");
+    }
+
+    const pending = this.createPendingBinaryStream(route.streamId, route.ttlMs);
+    let binaryRoute: { cancel: () => void };
+    try {
+      binaryRoute = this.registerBinaryRoute({
+        requestId: route.requestId,
+        streamId: route.streamId,
+        origin: route.origin,
+        deviceId: KERNEL_BINARY_DEVICE_ID,
+        ttlMs: route.ttlMs,
+        kind: "native-stream",
+      });
+    } catch (error) {
+      pending.cleanup();
+      throw error;
+    }
+
+    return {
+      stream: pending.stream,
+      cancel: () => {
+        pending.cleanup();
+        binaryRoute.cancel();
+      },
+    };
+  }
+
+  private async requestDevice(
+    deviceId: string,
+    call: string,
+    args: unknown,
+    ttlMs = 60_000,
+  ): Promise<unknown> {
+    const device = this.devices.get(deviceId);
+    if (!device || !device.online) {
+      throw new Error(`Device offline: ${deviceId}`);
+    }
+    if (!this.devices.canHandle(deviceId, call)) {
+      throw new Error(`Device ${deviceId} does not implement ${call}`);
+    }
+
+    const deviceConn = this.findDeviceConnection(deviceId);
+    if (!deviceConn) {
+      throw new Error(`No active connection for device: ${deviceId}`);
+    }
+
+    const id = crypto.randomUUID();
+    const pending = this.createPendingAppResponse(id);
+
+    try {
+      const route = await this.registerRouteWithExpiry({
+        id,
+        call: call as SyscallName,
+        origin: { type: "app", id },
+        deviceId,
+        ttlMs,
+      });
+
+      try {
+        deviceConn.send(JSON.stringify({
+          type: "req",
+          id,
+          call,
+          args,
+        }));
+      } catch (error) {
+        route.cancel();
+        throw error;
+      }
+      const frame = await pending.promise;
+      if (!frame.ok) {
+        throw new Error(frame.error.message);
+      }
+      return frame.data ?? {};
+    } finally {
+      pending.cleanup();
+    }
+  }
+
+  private async startDeviceRequest(
+    deviceId: string,
+    call: string,
+    args: unknown,
+    ttlMs = 60_000,
+  ): Promise<{ requestId: string; promise: Promise<unknown>; cancel: () => void }> {
+    const device = this.devices.get(deviceId);
+    if (!device || !device.online) {
+      throw new Error(`Device offline: ${deviceId}`);
+    }
+    if (!this.devices.canHandle(deviceId, call)) {
+      throw new Error(`Device ${deviceId} does not implement ${call}`);
+    }
+
+    const deviceConn = this.findDeviceConnection(deviceId);
+    if (!deviceConn) {
+      throw new Error(`No active connection for device: ${deviceId}`);
+    }
+
+    const id = crypto.randomUUID();
+    const pending = this.createPendingAppResponse(id);
+    let route: { cancel: () => void } | null = null;
+
+    try {
+      route = await this.registerRouteWithExpiry({
+        id,
+        call: call as SyscallName,
+        origin: { type: "app", id },
+        deviceId,
+        ttlMs,
+      });
+
+      deviceConn.send(JSON.stringify({
+        type: "req",
+        id,
+        call,
+        args,
+      }));
+    } catch (error) {
+      route?.cancel();
+      pending.cleanup();
+      throw error;
+    }
+
+    const promise = pending.promise.then((frame) => {
+      if (!frame.ok) {
+        throw new Error(frame.error.message);
+      }
+      return frame.data ?? {};
+    }).finally(() => {
+      pending.cleanup();
+    });
+
+    return {
+      requestId: id,
+      promise,
+      cancel: () => {
+        route?.cancel();
+        pending.cleanup();
+      },
+    };
+  }
+
+  private registerBinaryRelay(route: {
+    requestId: string;
+    streamId: number;
+    sourceDeviceId: string;
+    destinationDeviceId: string;
+    ttlMs?: number;
+  }): { cancel: () => void } {
+    const destinationConn = this.findDeviceConnection(route.destinationDeviceId);
+    if (!destinationConn) {
+      throw new Error(`No active connection for device: ${route.destinationDeviceId}`);
+    }
+    return this.registerBinaryRoute({
+      requestId: route.requestId,
+      streamId: route.streamId,
+      origin: { type: "connection", id: destinationConn.id },
+      deviceId: route.sourceDeviceId,
+      ttlMs: route.ttlMs ?? 60_000,
+    });
+  }
+
+  private receiveDeviceBinaryStream(route: {
+    requestId: string;
+    streamId: number;
+    sourceDeviceId: string;
+    ttlMs?: number;
+  }): { stream: ReadableStream<Uint8Array>; cancel: () => void } {
+    const ttlMs = route.ttlMs ?? 60_000;
+    const pending = this.createPendingBinaryStream(route.streamId, ttlMs);
+    let binaryRoute: { cancel: () => void };
+    try {
+      binaryRoute = this.registerBinaryRoute({
+        requestId: route.requestId,
+        streamId: route.streamId,
+        origin: { type: "app", id: route.requestId },
+        deviceId: route.sourceDeviceId,
+        ttlMs,
+        kind: "native-stream",
+      });
+    } catch (error) {
+      pending.cleanup();
+      throw error;
+    }
+
+    return {
+      stream: pending.stream,
+      cancel: () => {
+        pending.cleanup();
+        binaryRoute.cancel();
+      },
+    };
+  }
+
+  private sendDeviceBinaryFrame(
+    deviceId: string,
+    streamId: number,
+    flags: number,
+    payload?: Uint8Array,
+  ): void {
+    const deviceConn = this.findDeviceConnection(deviceId);
+    if (!deviceConn) {
+      throw new Error(`No active connection for device: ${deviceId}`);
+    }
+    deviceConn.send(buildBinaryFrame(streamId, flags, payload));
+  }
+
+  private findDeviceConnection(deviceId: string): Connection<ConnectionState> | null {
+    for (const [, conn] of this.connections) {
+      const state = conn.state;
+      if (state?.identity?.role === "driver" && state.identity.device === deviceId) {
+        return conn;
+      }
+      if (state?.providedTargets?.some((target) => target.targetId === deviceId)) {
+        return conn;
+      }
+    }
+    return null;
+  }
+
+  private isConnectionForDevice(connection: Connection<ConnectionState>, deviceId: string): boolean {
+    const state = connection.state;
+    if (state?.identity?.role === "driver" && state.identity.device === deviceId) {
+      return true;
+    }
+    return state?.providedTargets?.some((target) => target.targetId === deviceId) === true;
   }
 
   private async scheduleIpcCallTimeout(callId: string, delayMs: number): Promise<string> {
@@ -1287,6 +1751,11 @@ export class Kernel extends Host<Env> {
 
     if (!hasCapability(state.identity.capabilities, frame.call)) {
       this.sendError(connection, frame.id, 403, `Permission denied: ${frame.call}`);
+      return;
+    }
+
+    if (frame.call === "sys.target.register") {
+      await this.handleSysTargetRegister(connection, frame as RequestFrame<"sys.target.register">);
       return;
     }
 
@@ -1620,6 +2089,7 @@ export class Kernel extends Host<Env> {
     const uid = outcome.identity.process.uid;
     const role = outcome.identity.role;
     const clientId = frame.args?.client?.id?.trim();
+    const clientPlatform = frame.args?.client?.platform?.trim();
     if (clientId) {
       for (const [connId, existing] of this.connections) {
         const existingState = existing.state as ConnectionState | undefined;
@@ -1641,6 +2111,7 @@ export class Kernel extends Host<Env> {
       step: "connected",
       identity: outcome.identity,
       clientId: clientId || undefined,
+      clientPlatform: clientPlatform || undefined,
     };
     connection.setState(newState);
     this.connections.set(ctx.connection.id, connection);
@@ -1656,6 +2127,89 @@ export class Kernel extends Host<Env> {
     }
 
     this.sendOk(connection, frame.id, outcome.result);
+  }
+
+  private async handleSysTargetRegister(
+    connection: Connection<ConnectionState>,
+    frame: RequestFrame<"sys.target.register">,
+  ): Promise<void> {
+    const state = connection.state as ConnectionState | undefined;
+    const identity = state?.identity;
+    if (!identity || identity.role !== "user") {
+      this.sendError(connection, frame.id, 403, "Only user clients can register targets");
+      return;
+    }
+
+    const raw = asRecord(frame.args) ?? {};
+    const implementsList = Array.isArray(raw.implements)
+      ? Array.from(new Set(raw.implements
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter(Boolean)))
+      : [];
+    if (implementsList.length === 0) {
+      this.sendError(connection, frame.id, 400, "sys.target.register requires implements");
+      return;
+    }
+
+    const platform = normalizeTargetText(raw.platform, "browser-shell", 64);
+    const version = normalizeTargetText(raw.version, SERVER_VERSION, 64);
+    const label = normalizeTargetText(raw.label, "Browser Shell", 120);
+    const description = normalizeTargetText(
+      raw.description,
+      `${label} target for ${identity.process.username}`,
+      500,
+    );
+    const lifecycle: DeviceLifecycle = "ephemeral";
+    const targetId = `browser:${connection.id}`;
+    const registered = this.devices.register(
+      targetId,
+      identity.process.uid,
+      identity.process.gid,
+      implementsList,
+      platform,
+      version,
+      { label, description, lifecycle },
+    );
+    if (!registered.ok) {
+      this.sendError(connection, frame.id, 400, registered.error ?? "Failed to register target");
+      return;
+    }
+
+    const nextTargets = [
+      ...(state.providedTargets ?? []).filter((target) => target.targetId !== targetId),
+      { targetId },
+    ];
+    connection.setState({ ...state, providedTargets: nextTargets });
+    this.connections.set(connection.id, connection);
+    this.broadcastDeviceStatus(targetId, "connected");
+
+    const device = this.devices.get(targetId);
+    if (!device) {
+      this.sendError(connection, frame.id, 500, "Registered target was not persisted");
+      return;
+    }
+
+    const result: SysTargetRegisterResult = {
+      targetId,
+      device: {
+        deviceId: device.device_id,
+        ownerUid: device.owner_uid,
+        ownerUsername: this.auth.getPasswdByUid(device.owner_uid)?.username ?? null,
+        label: device.label,
+        description: device.description,
+        platform: device.platform,
+        version: device.version,
+        lifecycle: device.lifecycle,
+        online: device.online,
+        lastSeenAt: device.last_seen_at,
+        implements: device.implements,
+        firstSeenAt: device.first_seen_at,
+        connectedAt: device.connected_at,
+        disconnectedAt: device.disconnected_at,
+      },
+    };
+    this.sendOk(connection, frame.id, result);
   }
 
   private async handleSysSetup(
@@ -1716,7 +2270,11 @@ export class Kernel extends Host<Env> {
 
   private handleRes(_connection: Connection, frame: ResponseFrame): void {
     const consumed = this.routes.consume(frame.id);
-    if (!consumed) return;
+    if (!consumed) {
+      return;
+    }
+
+    this.clearBinaryRoutesForRequest(frame.id);
 
     if (consumed.scheduleId) {
       this.cancelSchedule(consumed.scheduleId).catch(() => {});
@@ -1729,13 +2287,94 @@ export class Kernel extends Host<Env> {
     this.deliverToOrigin(consumed.origin, frame);
   }
 
+  private handleBinaryMessage(connection: Connection<ConnectionState>, message: WSMessage): void {
+    const frame = parseBinaryFrame(message as ArrayBuffer | ArrayBufferView);
+    if (!frame) {
+      return;
+    }
+
+    const route = this.binaryRoutes.get(frame.streamId);
+    if (!route) {
+      return;
+    }
+
+    if (route.kind === "native-stream") {
+      this.deliverBinaryToNativeStream(connection, route, frame);
+      return;
+    }
+
+    if (this.isConnectionForDevice(connection, route.deviceId)) {
+      this.deliverBinaryFromDevice(route, frame);
+      return;
+    }
+
+    if (route.origin.type === "connection" && route.origin.id === connection.id) {
+      const deviceConn = this.findDeviceConnection(route.deviceId);
+      if (deviceConn) {
+        deviceConn.send(buildBinaryFrame(frame.streamId, frame.flags, frame.payload));
+      }
+    }
+  }
+
+  private deliverBinaryToNativeStream(
+    connection: Connection<ConnectionState>,
+    route: BinaryRoute,
+    frame: BinaryFrame,
+  ): void {
+    const fromOriginConnection =
+      route.deviceId === KERNEL_BINARY_DEVICE_ID &&
+      route.origin.type === "connection" &&
+      route.origin.id === connection.id;
+    const fromDeviceConnection =
+      route.deviceId !== KERNEL_BINARY_DEVICE_ID &&
+      this.isConnectionForDevice(connection, route.deviceId);
+
+    if (!fromOriginConnection && !fromDeviceConnection) {
+      return;
+    }
+
+    const pending = this.pendingBinaryStreams.get(frame.streamId);
+    if (!pending) {
+      return;
+    }
+
+    if ((frame.flags & BINARY_FRAME_ERROR) !== 0) {
+      const message = new TextDecoder().decode(frame.payload) || "Binary transfer failed";
+      this.rejectPendingBinaryStream(frame.streamId, new Error(message));
+      this.clearBinaryRoute(frame.streamId);
+      return;
+    }
+
+    if ((frame.flags & BINARY_FRAME_DATA) !== 0 && frame.payload.byteLength > 0) {
+      pending.controller.enqueue(frame.payload);
+    }
+
+    if ((frame.flags & BINARY_FRAME_END) !== 0) {
+      this.closePendingBinaryStream(frame.streamId);
+      this.clearBinaryRoute(frame.streamId);
+    }
+  }
+
+  private deliverBinaryFromDevice(route: BinaryRoute, frame: BinaryFrame): void {
+    if (route.origin.type === "connection") {
+      const conn = this.connections.get(route.origin.id);
+      if (conn) {
+        conn.send(buildBinaryFrame(frame.streamId, frame.flags, frame.payload));
+      }
+      return;
+    }
+  }
+
   private handleSig(connection: Connection<ConnectionState>, frame: SignalFrame): void {
     if (frame.signal !== "exec.status") {
       return;
     }
 
     const state = connection.state as ConnectionState | undefined;
-    if (state?.identity?.role !== "driver" || !state.identity.device) {
+    const targetId = state?.identity?.role === "driver"
+      ? state.identity.device
+      : state?.providedTargets?.[0]?.targetId;
+    if (!targetId) {
       return;
     }
 
@@ -1746,7 +2385,7 @@ export class Kernel extends Host<Env> {
     }
 
     const status = shellStatusFromEvent(typeof payload?.event === "string" ? payload.event : "");
-    this.shellSessions.rememberDeviceSession(sessionId, state.identity.device, status, {
+    this.shellSessions.rememberDeviceSession(sessionId, targetId, status, {
       exitCode: typeof payload?.exitCode === "number" ? payload.exitCode : null,
       error: typeof payload?.signal === "string" ? payload.signal : null,
     });
@@ -1777,6 +2416,7 @@ export class Kernel extends Host<Env> {
     await this.ready;
     const expired = this.routes.expire(routeId);
     if (!expired) return;
+    this.clearBinaryRoutesForRequest(routeId);
 
     const timeoutFrame: ResponseFrame = {
       type: "res",
@@ -2094,6 +2734,7 @@ export class Kernel extends Host<Env> {
     this.shellSessions.failForDevice(deviceId, "Device disconnected");
     const failed = this.routes.failForDevice(deviceId);
     for (const entry of failed) {
+      this.clearBinaryRoutesForRequest(entry.id);
       if (entry.scheduleId) {
         this.cancelSchedule(entry.scheduleId).catch(() => {});
       }
@@ -2108,9 +2749,34 @@ export class Kernel extends Host<Env> {
     }
   }
 
+  private removeProvidedTarget(targetId: string): void {
+    const existing = this.devices.get(targetId);
+    if (!existing) {
+      return;
+    }
+
+    this.devices.setOnline(targetId, false);
+    this.broadcastDeviceStatus(targetId, "disconnected");
+    this.failRoutesForDevice(targetId);
+    this.devices.remove(targetId);
+  }
+
+  private purgeStaleProvidedTargets(liveTargets = new Set<string>()): void {
+    for (const device of this.devices.listForUser(0, [0])) {
+      if (!isEphemeralDevice(device)) {
+        continue;
+      }
+      if (liveTargets.has(device.device_id)) {
+        continue;
+      }
+      this.removeProvidedTarget(device.device_id);
+    }
+  }
+
   private failRoutesForConnection(connectionId: string): void {
     const failed = this.routes.failForConnection(connectionId);
     for (const entry of failed) {
+      this.clearBinaryRoutesForRequest(entry.id);
       if (entry.scheduleId) {
         this.cancelSchedule(entry.scheduleId).catch(() => {});
       }
@@ -2204,8 +2870,11 @@ export class Kernel extends Host<Env> {
         device: {
           deviceId: device.device_id,
           ownerUid: device.owner_uid,
+          label: device.label,
+          description: device.description,
           platform: device.platform,
           version: device.version,
+          lifecycle: device.lifecycle,
           online: device.online,
           firstSeenAt: device.first_seen_at,
           lastSeenAt: device.last_seen_at,
@@ -2244,7 +2913,7 @@ export class Kernel extends Host<Env> {
   private rehydrateConnections(): void {
     const live = this.getConnections<ConnectionState>();
 
-    const onlineDrivers = new Set<string>();
+    const onlineTargets = new Set<string>();
 
     for (const connection of live) {
       const state = connection.state;
@@ -2252,18 +2921,28 @@ export class Kernel extends Host<Env> {
 
       this.connections.set(connection.id, connection);
       if (state.identity.role === "driver") {
-        onlineDrivers.add(state.identity.device);
+        onlineTargets.add(state.identity.device);
         this.devices.setOnline(state.identity.device, true);
+      }
+      for (const target of state.providedTargets ?? []) {
+        onlineTargets.add(target.targetId);
+        this.devices.setOnline(target.targetId, true);
       }
     }
 
-    // Reconcile persistent device online flags with live rehydrated sockets.
+    // Reconcile registered device online flags with live rehydrated sockets.
     for (const device of this.devices.listOnline()) {
-      if (!onlineDrivers.has(device.device_id)) {
-        this.devices.setOnline(device.device_id, false);
-        this.broadcastDeviceStatus(device.device_id, "disconnected");
+      if (!onlineTargets.has(device.device_id)) {
+        if (isEphemeralDevice(device)) {
+          this.removeProvidedTarget(device.device_id);
+        } else {
+          this.devices.setOnline(device.device_id, false);
+          this.broadcastDeviceStatus(device.device_id, "disconnected");
+        }
       }
     }
+
+    this.purgeStaleProvidedTargets(onlineTargets);
   }
 
   private async ensureUserInitProcess(identity: ProcessIdentity): Promise<string> {
@@ -2345,6 +3024,18 @@ function errFrame(id: string, code: number, message: string): ResponseFrame {
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? value as Record<string, unknown> : null;
+}
+
+function normalizeTargetText(value: unknown, fallback: string, maxLength: number): string {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed.slice(0, maxLength) : fallback;
+}
+
+function isEphemeralDevice(device: DeviceRecord): boolean {
+  return device.lifecycle === "ephemeral";
 }
 
 function ceilToSecondMs(value: number): number {

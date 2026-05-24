@@ -60,6 +60,7 @@ export type MessageRecord = {
   toolCalls: string | null;
   toolCallId: string | null;
   media: string | null;
+  origin?: string | null;
   createdAt: number;
 };
 
@@ -76,6 +77,7 @@ export type QueuedMessage = {
   message: string;
   media: string | null;
   overrides: string | null;
+  origin?: string | null;
 };
 
 export type PendingHilRecord = {
@@ -116,6 +118,7 @@ export class ProcessStore {
         tool_calls TEXT,
         tool_call_id TEXT,
         media_json TEXT,
+        origin_json TEXT,
         created_at INTEGER NOT NULL
       )
     `);
@@ -156,6 +159,7 @@ export class ProcessStore {
         message TEXT NOT NULL,
         media_json TEXT,
         overrides_json TEXT,
+        origin_json TEXT,
         created_at INTEGER NOT NULL
       )
     `);
@@ -197,6 +201,11 @@ export class ProcessStore {
     );
     this.ensureColumn(
       "messages",
+      "origin_json",
+      "ALTER TABLE messages ADD COLUMN origin_json TEXT",
+    );
+    this.ensureColumn(
+      "messages",
       "conversation_id",
       "ALTER TABLE messages ADD COLUMN conversation_id TEXT NOT NULL DEFAULT 'default'",
     );
@@ -224,6 +233,11 @@ export class ProcessStore {
       "message_queue",
       "overrides_json",
       "ALTER TABLE message_queue ADD COLUMN overrides_json TEXT",
+    );
+    this.ensureColumn(
+      "message_queue",
+      "origin_json",
+      "ALTER TABLE message_queue ADD COLUMN origin_json TEXT",
     );
     this.ensureColumn(
       "message_queue",
@@ -496,8 +510,8 @@ export class ProcessStore {
     );
     this.sql.exec(
       `INSERT INTO messages (
-        id, conversation_id, generation, role, content, tool_calls, tool_call_id, media_json, created_at
-      ) VALUES (?, ?, ?, 'system', ?, NULL, NULL, NULL, ?)`,
+        id, conversation_id, generation, role, content, tool_calls, tool_call_id, media_json, origin_json, created_at
+      ) VALUES (?, ?, ?, 'system', ?, NULL, NULL, NULL, NULL, ?)`,
       summaryMessageId,
       conversationId,
       opts.generation,
@@ -811,6 +825,7 @@ export class ProcessStore {
       toolCalls?: string;
       toolCallId?: string;
       media?: string;
+      origin?: string;
       createdAt?: number;
     },
   ): number {
@@ -818,8 +833,8 @@ export class ProcessStore {
     const generation = opts?.generation ?? this.getConversationGeneration(conversationId);
     this.sql.exec(
       `INSERT INTO messages (
-        conversation_id, generation, role, content, tool_calls, tool_call_id, media_json, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        conversation_id, generation, role, content, tool_calls, tool_call_id, media_json, origin_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       conversationId,
       generation,
       role,
@@ -827,6 +842,7 @@ export class ProcessStore {
       opts?.toolCalls ?? null,
       opts?.toolCallId ?? null,
       opts?.media ?? null,
+      opts?.origin ?? null,
       opts?.createdAt ?? Date.now(),
     );
 
@@ -875,6 +891,7 @@ export class ProcessStore {
       tool_calls: string | null;
       tool_call_id: string | null;
       media_json: string | null;
+      origin_json: string | null;
       created_at: number;
       }>(
         `SELECT * FROM messages WHERE ${where.join(" AND ")} ORDER BY id ${order} ${pagination.clause}`,
@@ -894,6 +911,7 @@ export class ProcessStore {
       toolCalls: row.tool_calls,
       toolCallId: row.tool_call_id,
       media: row.media_json,
+      origin: row.origin_json,
       createdAt: row.created_at,
     }));
   }
@@ -931,6 +949,7 @@ export class ProcessStore {
       tool_calls: string | null;
       tool_call_id: string | null;
       media_json: string | null;
+      origin_json: string | null;
       created_at: number;
     }>(
       `SELECT * FROM messages
@@ -948,6 +967,7 @@ export class ProcessStore {
       toolCalls: row.tool_calls,
       toolCallId: row.tool_call_id,
       media: row.media_json,
+      origin: row.origin_json,
       createdAt: row.created_at,
     }));
   }
@@ -980,6 +1000,7 @@ export class ProcessStore {
       tool_calls: string | null;
       tool_call_id: string | null;
       media_json: string | null;
+      origin_json: string | null;
       created_at: number;
     }>(
       `SELECT * FROM messages
@@ -998,6 +1019,7 @@ export class ProcessStore {
       toolCalls: row.tool_calls,
       toolCallId: row.tool_call_id,
       media: row.media_json,
+      origin: row.origin_json,
       createdAt: row.created_at,
     }));
   }
@@ -1035,6 +1057,7 @@ export class ProcessStore {
       tool_calls: string | null;
       tool_call_id: string | null;
       media_json: string | null;
+      origin_json: string | null;
       created_at: number;
       }>(
         "SELECT * FROM messages WHERE conversation_id = ? ORDER BY id ASC",
@@ -1048,6 +1071,7 @@ export class ProcessStore {
       toolCalls: row.tool_calls,
       toolCallId: row.tool_call_id,
       media: row.media_json,
+      origin: row.origin_json,
       createdAt: row.created_at,
     }));
   }
@@ -1257,19 +1281,21 @@ export class ProcessStore {
     media?: string,
     overrides?: string,
     conversationId: string = DEFAULT_CONVERSATION_ID,
+    origin?: string,
   ): void {
     const normalizedConversationId = normalizeConversationId(conversationId);
     const generation = this.getConversationGeneration(normalizedConversationId);
     this.sql.exec(
       `INSERT INTO message_queue (
-        run_id, conversation_id, generation, message, media_json, overrides_json, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        run_id, conversation_id, generation, message, media_json, overrides_json, origin_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       runId,
       normalizedConversationId,
       generation,
       message,
       media ?? null,
       overrides ?? null,
+      origin ?? null,
       Date.now(),
     );
   }
@@ -1287,14 +1313,15 @@ export class ProcessStore {
         message: string;
         media_json: string | null;
         overrides_json: string | null;
+        origin_json: string | null;
       }>(
         normalizedConversationId
-          ? `SELECT id, run_id, conversation_id, generation, message, media_json, overrides_json
+          ? `SELECT id, run_id, conversation_id, generation, message, media_json, overrides_json, origin_json
                FROM message_queue
               WHERE conversation_id = ?
               ORDER BY id ASC
               LIMIT 1`
-          : `SELECT id, run_id, conversation_id, generation, message, media_json, overrides_json
+          : `SELECT id, run_id, conversation_id, generation, message, media_json, overrides_json, origin_json
                FROM message_queue
               ORDER BY id ASC
               LIMIT 1`,
@@ -1312,6 +1339,7 @@ export class ProcessStore {
       message: row.message,
       media: row.media_json,
       overrides: row.overrides_json,
+      origin: row.origin_json,
     };
   }
 
@@ -1328,13 +1356,14 @@ export class ProcessStore {
         message: string;
         media_json: string | null;
         overrides_json: string | null;
+        origin_json: string | null;
       }>(
         normalizedConversationId
-          ? `SELECT id, run_id, conversation_id, generation, message, media_json, overrides_json
+          ? `SELECT id, run_id, conversation_id, generation, message, media_json, overrides_json, origin_json
                FROM message_queue
               WHERE conversation_id = ?
               ORDER BY id ASC`
-          : `SELECT id, run_id, conversation_id, generation, message, media_json, overrides_json
+          : `SELECT id, run_id, conversation_id, generation, message, media_json, overrides_json, origin_json
                FROM message_queue
               ORDER BY id ASC`,
         ...(normalizedConversationId ? [normalizedConversationId] : []),
@@ -1354,6 +1383,7 @@ export class ProcessStore {
       message: row.message,
       media: row.media_json,
       overrides: row.overrides_json,
+      origin: row.origin_json,
     }));
   }
 

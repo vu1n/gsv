@@ -16,6 +16,7 @@ import type {
   KernelBindingProps,
 } from "../protocol/app-frame";
 import type { RequestFrame, ResponseFrame } from "../protocol/frames";
+import { decodeBase64Bytes } from "../shared/base64";
 import type { ArgsOf, ResultOf, SyscallName } from "../syscalls";
 
 /**
@@ -91,6 +92,13 @@ export interface PackageModuleDef {
   content: string;
 }
 
+export interface PackagePublicFileDef {
+  path: string;
+  contentType: string;
+  encoding: "utf-8" | "base64";
+  content: string;
+}
+
 export interface PackageArtifact {
   /**
    * Immutable artifact identity for cache keys / loader ids.
@@ -101,6 +109,7 @@ export interface PackageArtifact {
   compatibilityDate?: string;
   compatibilityFlags?: string[];
   modules: PackageModuleDef[];
+  publicFiles?: PackagePublicFileDef[];
 }
 
 export interface PackageArtifactMetadata {
@@ -109,6 +118,7 @@ export interface PackageArtifactMetadata {
   compatibilityDate?: string;
   compatibilityFlags?: string[];
   modulePaths: string[];
+  publicFilePaths?: string[];
 }
 
 export interface PackageEntrypoint {
@@ -385,6 +395,9 @@ export function packageWorkerKey(record: {
 }
 
 const PACKAGE_ARTIFACT_PREFIX = "runtime/package-artifacts";
+const PACKAGE_PUBLIC_HASH_PLACEHOLDER = "__GSV_ARTIFACT_HASH__";
+const PACKAGE_PUBLIC_BASE_PLACEHOLDER = "/public/gsv/packages/__GSV_ARTIFACT_HASH__";
+const PUBLIC_ASSET_CACHE_CONTROL = "public, max-age=31536000, immutable";
 
 export function artifactMetadataFromArtifact(artifact: PackageArtifact): PackageArtifactMetadata {
   return {
@@ -393,6 +406,9 @@ export function artifactMetadataFromArtifact(artifact: PackageArtifact): Package
     compatibilityDate: artifact.compatibilityDate,
     compatibilityFlags: artifact.compatibilityFlags,
     modulePaths: artifact.modules.map((module) => module.path),
+    publicFilePaths: artifact.publicFiles?.map((file) =>
+      resolvePackagePublicFilePath(artifact.hash, file.path)
+    ) ?? [],
   };
 }
 
@@ -400,12 +416,79 @@ export function packageArtifactStorageKey(hash: string): string {
   return `${PACKAGE_ARTIFACT_PREFIX}/${encodeURIComponent(hash)}.json`;
 }
 
+export function packageArtifactPublicSegment(hash: string): string {
+  return hash.replace(/[^A-Za-z0-9._-]/g, "-");
+}
+
+export function packageArtifactPublicBase(hash: string): string {
+  return `/public/gsv/packages/${packageArtifactPublicSegment(hash)}`;
+}
+
 export async function storePackageArtifact(bucket: R2Bucket, artifact: PackageArtifact): Promise<void> {
-  await bucket.put(packageArtifactStorageKey(artifact.hash), JSON.stringify(artifact), {
-    httpMetadata: {
-      contentType: "application/json; charset=utf-8",
+  await storePackagePublicFiles(bucket, artifact);
+  await bucket.put(
+    packageArtifactStorageKey(artifact.hash),
+    JSON.stringify(packageArtifactLoaderRecord(artifact)),
+    {
+      httpMetadata: {
+        contentType: "application/json; charset=utf-8",
+      },
     },
-  });
+  );
+}
+
+function packageArtifactLoaderRecord(artifact: PackageArtifact): PackageArtifact {
+  const { publicFiles: _publicFiles, ...loaderArtifact } = artifact;
+  return loaderArtifact;
+}
+
+async function storePackagePublicFiles(bucket: R2Bucket, artifact: PackageArtifact): Promise<void> {
+  const publicFiles = artifact.publicFiles ?? [];
+  if (publicFiles.length === 0) {
+    return;
+  }
+
+  await Promise.all(publicFiles.map(async (file) => {
+    const resolvedPath = resolvePackagePublicFilePath(artifact.hash, file.path);
+    const key = `public/${resolvedPath}`;
+    const content = resolvePackagePublicFileContent(artifact.hash, file);
+    await bucket.put(key, content, {
+      httpMetadata: {
+        contentType: file.contentType,
+        cacheControl: PUBLIC_ASSET_CACHE_CONTROL,
+      },
+      customMetadata: {
+        uid: "0",
+        gid: "0",
+        mode: "644",
+      },
+    });
+  }));
+}
+
+function resolvePackagePublicFilePath(hash: string, path: string): string {
+  return trimLeadingSlash(path)
+    .replaceAll(PACKAGE_PUBLIC_HASH_PLACEHOLDER, packageArtifactPublicSegment(hash));
+}
+
+function resolvePackagePublicFileContent(
+  hash: string,
+  file: PackagePublicFileDef,
+): string | Uint8Array {
+  const content = file.content.replaceAll(
+    PACKAGE_PUBLIC_BASE_PLACEHOLDER,
+    packageArtifactPublicBase(hash),
+  );
+  switch (file.encoding) {
+    case "utf-8":
+      return content;
+    case "base64":
+      return decodeBase64Bytes(content);
+    default:
+      throw new Error(
+        `Unsupported package public file encoding: ${(file as { encoding: string }).encoding}`,
+      );
+  }
 }
 
 export async function loadPackageArtifact(bucket: R2Bucket, hash: string): Promise<PackageArtifact> {
@@ -960,6 +1043,7 @@ async function resolvePackageFromRipgitNativeBuild(
     analysis: analysis as PackageAssemblyAnalysis,
     target: "dynamic-worker",
     files: snapshot.files,
+    binary_files: snapshot.binary_files ?? {},
   });
 
   assertAssemblySucceeded(build);
@@ -1098,6 +1182,12 @@ function convertAssembledArtifact(
       path: module.path,
       kind: module.kind === "source-module" ? "esm" : module.kind,
       content: module.content,
+    })),
+    publicFiles: (build.artifact.public_files ?? []).map((file) => ({
+      path: file.path,
+      contentType: file.content_type,
+      encoding: file.encoding,
+      content: file.content,
     })),
   };
 }

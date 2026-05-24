@@ -30,6 +30,7 @@ type ChannelMedia = {
   mimeType: string;
   data?: string;
   url?: string;
+  filename?: string;
 };
 
 type ChannelInboundMessage = {
@@ -48,6 +49,7 @@ type ChannelOutboundMessage = {
   peer: ChannelPeer;
   text: string;
   replyToId?: string;
+  media?: ChannelMedia[];
 };
 
 type ChannelAccountStatus = {
@@ -71,6 +73,27 @@ type ChannelCapabilities = {
 type StartResult = { ok: true } | { ok: false; error: string };
 type StopResult = { ok: true } | { ok: false; error: string };
 type SendResult = { ok: true; messageId?: string } | { ok: false; error: string };
+type ShellExecArgs = { input: string };
+type ShellExecResult =
+  | {
+      status: "completed";
+      output: string;
+      exitCode: number;
+      ok: true;
+      pid: number;
+      stdout: string;
+      stderr: string;
+    }
+  | {
+      status: "failed";
+      output: string;
+      error: string;
+      exitCode: number;
+      ok: false;
+      pid: number;
+      stdout: string;
+      stderr: string;
+    };
 
 type GatewayChannelBinding = Fetcher & {
   channelInbound: (
@@ -161,7 +184,7 @@ export class TestChannel extends WorkerEntrypoint<Env> {
   readonly capabilities: ChannelCapabilities = {
     chatTypes: ["dm", "group"],
     media: true,
-    reactions: false,
+    reactions: true,
     threads: false,
     typing: true,
     editing: false,
@@ -229,6 +252,7 @@ export class TestChannel extends WorkerEntrypoint<Env> {
       surface: ChannelPeer;
       text: string;
       replyToId?: string;
+      media?: ChannelMedia[];
     },
   ): Promise<SendResult> {
     const state = this.getStateDO(accountId);
@@ -236,6 +260,7 @@ export class TestChannel extends WorkerEntrypoint<Env> {
       peer: message.surface,
       text: message.text,
       replyToId: message.replyToId,
+      media: message.media,
     };
     await state.recordMessage("out", outbound);
     
@@ -250,6 +275,7 @@ export class TestChannel extends WorkerEntrypoint<Env> {
       surface: message.peer,
       text: message.text,
       replyToId: message.replyToId,
+      media: message.media,
     });
   }
 
@@ -263,6 +289,71 @@ export class TestChannel extends WorkerEntrypoint<Env> {
 
   async setTyping(_accountId: string, _peer: ChannelPeer, _typing: boolean): Promise<void> {
     // No-op
+  }
+
+  async adapterShellExec(accountId: string, args: ShellExecArgs): Promise<ShellExecResult> {
+    const tokens = parseShellWords(args.input);
+    const command = tokens[0] ?? "help";
+    if (isHelpCommand(command)) {
+      return shellOk([
+        "test adapter commands:",
+        "  help | -h | --help",
+        "  send <surface-id> <text>",
+        "  reply <surface-id> <message-id> <text>",
+        "  react <surface-id> <message-id> <emoji>",
+        "  attach <surface-id> <url> [--filename <name>] [caption]",
+      ].join("\n"));
+    }
+
+    if (command === "send") {
+      const [surfaceId, ...textParts] = tokens.slice(1);
+      const text = textParts.join(" ").trim();
+      if (!surfaceId || !text) {
+        return shellFail("usage: send <surface-id> <text>");
+      }
+      const result = await this.adapterSend(accountId, {
+        surface: { kind: "dm", id: surfaceId },
+        text,
+      });
+      return result.ok ? shellOk(`sent ${result.messageId ?? ""}`.trim()) : shellFail(result.error);
+    }
+
+    if (command === "reply") {
+      const [surfaceId, messageId, ...textParts] = tokens.slice(1);
+      const text = textParts.join(" ").trim();
+      if (!surfaceId || !messageId || !text) {
+        return shellFail("usage: reply <surface-id> <message-id> <text>");
+      }
+      const result = await this.adapterSend(accountId, {
+        surface: { kind: "dm", id: surfaceId },
+        text,
+        replyToId: messageId,
+      });
+      return result.ok ? shellOk(`sent ${result.messageId ?? ""}`.trim()) : shellFail(result.error);
+    }
+
+    if (command === "react") {
+      const [surfaceId, messageId, emoji] = tokens.slice(1);
+      if (!surfaceId || !messageId || !emoji) {
+        return shellFail("usage: react <surface-id> <message-id> <emoji>");
+      }
+      return shellOk(`reacted ${emoji} to ${surfaceId}/${messageId}`);
+    }
+
+    if (command === "attach") {
+      const { surfaceId, url, filename, caption } = parseAttachArgs(tokens.slice(1));
+      if (!surfaceId || !url) {
+        return shellFail("usage: attach <surface-id> <url> [--filename <name>] [caption]");
+      }
+      const result = await this.adapterSend(accountId, {
+        surface: { kind: "dm", id: surfaceId },
+        text: caption,
+        media: [await mediaFromUrl(url, filename)],
+      });
+      return result.ok ? shellOk(`sent ${result.messageId ?? ""}`.trim()) : shellFail(result.error);
+    }
+
+    return shellFail(`unknown command: ${command}`);
   }
 
   // =========================================================================
@@ -460,3 +551,111 @@ export default {
     return new Response("Not Found", { status: 404 });
   },
 };
+
+function parseShellWords(input: string): string[] {
+  const tokens: string[] = [];
+  const pattern = /"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'|(\S+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(input.trim())) !== null) {
+    const token = match[1] ?? match[2] ?? match[3] ?? "";
+    tokens.push(token.replace(/\\(["'\\])/g, "$1"));
+  }
+  return tokens;
+}
+
+function isHelpCommand(command: string): boolean {
+  return command === "help" || command === "-h" || command === "--help";
+}
+
+function parseAttachArgs(tokens: string[]): {
+  surfaceId?: string;
+  url?: string;
+  filename?: string;
+  caption: string;
+} {
+  const [surfaceId, url, ...rest] = tokens;
+  if (rest.length === 0) {
+    return { surfaceId, url, caption: "" };
+  }
+
+  if (rest[0] === "--filename" || rest[0] === "-f") {
+    const [, filename, ...captionParts] = rest;
+    return {
+      surfaceId,
+      url,
+      filename,
+      caption: captionParts.join(" ").trim(),
+    };
+  }
+
+  const [candidate, ...captionParts] = rest;
+  if (looksLikeFilename(candidate)) {
+    return {
+      surfaceId,
+      url,
+      filename: candidate,
+      caption: captionParts.join(" ").trim(),
+    };
+  }
+
+  return {
+    surfaceId,
+    url,
+    caption: rest.join(" ").trim(),
+  };
+}
+
+function looksLikeFilename(value: string | undefined): value is string {
+  if (!value) return false;
+  if (value.includes("/") || value.includes("\\")) return true;
+  return /^[^/?#\s]+\.[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value);
+}
+
+async function mediaFromUrl(url: string, filename?: string): Promise<ChannelMedia> {
+  let mimeType = "application/octet-stream";
+  try {
+    const response = await fetch(url, { method: "HEAD" });
+    mimeType = response.headers.get("Content-Type")?.split(";")[0].trim() || mimeType;
+  } catch {
+    // Test adapter does not need to fetch the body; fall back to generic binary.
+  }
+
+  return {
+    type: mediaTypeFromMime(mimeType),
+    mimeType,
+    url,
+    ...(filename ? { filename } : {}),
+  };
+}
+
+function mediaTypeFromMime(mimeType: string): ChannelMedia["type"] {
+  if (mimeType.startsWith("image/")) return "image";
+  if (mimeType.startsWith("audio/")) return "audio";
+  if (mimeType.startsWith("video/")) return "video";
+  return "document";
+}
+
+function shellOk(output: string): ShellExecResult {
+  return {
+    status: "completed",
+    output,
+    exitCode: 0,
+    ok: true,
+    pid: 0,
+    stdout: output,
+    stderr: "",
+  };
+}
+
+function shellFail(error: string): ShellExecResult {
+  return {
+    status: "failed",
+    output: error,
+    error,
+    exitCode: 1,
+    ok: false,
+    pid: 0,
+    stdout: "",
+    stderr: error,
+  };
+}

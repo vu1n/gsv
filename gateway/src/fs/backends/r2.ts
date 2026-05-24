@@ -4,7 +4,16 @@ import type {
   RmOptions,
 } from "just-bash";
 import type { ProcessIdentity } from "@gsv/protocol/syscalls/system";
-import type { MountBackend, ExtendedMountStat, FsSearchBackendResult } from "../mount";
+import type {
+  MountBackend,
+  ExtendedMountStat,
+  FsSearchBackendResult,
+  OpenFileOptions,
+  OpenFileRange,
+  OpenFileResult,
+  WriteFileStreamOptions,
+  WriteFileStreamResult,
+} from "../mount";
 import { inferContentType, isTextContentType, normalizePath } from "../utils";
 
 const READ_BIT = 4;
@@ -28,6 +37,7 @@ export class R2MountBackend implements MountBackend {
     const obj = await this.bucket.get(key);
     if (!obj) throw new Error(`ENOENT: no such file or directory, open '${p}'`);
     if (isDirectoryMarker(obj)) throw new Error(`EISDIR: illegal operation on a directory, read '${p}'`);
+    if (isSymlink(obj)) throw new Error(`EINVAL: invalid argument, read '${p}' is a symbolic link`);
     this.assertMode(obj, READ_BIT, p);
     return obj.text();
   }
@@ -37,9 +47,51 @@ export class R2MountBackend implements MountBackend {
     const key = toKey(p);
     const obj = await this.bucket.get(key);
     if (!obj) throw new Error(`ENOENT: no such file or directory, open '${p}'`);
+    if (isSymlink(obj)) throw new Error(`EINVAL: invalid argument, read '${p}' is a symbolic link`);
     this.assertMode(obj, READ_BIT, p);
     const buf = await obj.arrayBuffer();
     return new Uint8Array(buf);
+  }
+
+  async openFile(path: string, options?: OpenFileOptions): Promise<OpenFileResult> {
+    const p = normalizePath(path);
+    const key = toKey(p);
+    const getOptions = toR2GetOptions(options);
+    const obj: R2ObjectBody | R2Object | null = getOptions?.onlyIf
+      ? await this.bucket.get(key, getOptions as R2GetOptions & { onlyIf: R2Conditional })
+      : getOptions
+        ? await this.bucket.get(key, getOptions)
+        : await this.bucket.get(key);
+    if (!obj) throw new Error(`ENOENT: no such file or directory, open '${p}'`);
+    if (isDirectoryMarker(obj)) throw new Error(`EISDIR: illegal operation on a directory, read '${p}'`);
+    if (isSymlink(obj)) throw new Error(`EINVAL: invalid argument, read '${p}' is a symbolic link`);
+    this.assertMode(obj, READ_BIT, p);
+
+    if (!isR2ObjectBody(obj)) {
+      return {
+        size: obj.size,
+        totalSize: obj.size,
+        mtime: obj.uploaded,
+        status: conditionalMissStatus(options?.conditions),
+        contentType: obj.httpMetadata?.contentType,
+        etag: obj.httpEtag,
+        writeHttpMetadata: (headers) => obj.writeHttpMetadata(headers),
+      };
+    }
+
+    const totalSize = obj.range ? (await this.bucket.head(key))?.size ?? obj.size : obj.size;
+    const range = options?.range && obj.range ? normalizeR2Range(obj.range, totalSize) : undefined;
+    return {
+      body: obj.body as ReadableStream<Uint8Array>,
+      size: range?.length ?? obj.size,
+      totalSize,
+      mtime: obj.uploaded,
+      status: range ? 206 : 200,
+      contentType: obj.httpMetadata?.contentType,
+      etag: obj.httpEtag,
+      range,
+      writeHttpMetadata: (headers) => obj.writeHttpMetadata(headers),
+    };
   }
 
   async writeFile(path: string, content: FileContent): Promise<void> {
@@ -56,6 +108,33 @@ export class R2MountBackend implements MountBackend {
         mode: existing?.customMetadata?.mode ?? "644",
       },
     });
+  }
+
+  async writeFileStream(
+    path: string,
+    content: ReadableStream<Uint8Array>,
+    options: WriteFileStreamOptions,
+  ): Promise<WriteFileStreamResult> {
+    assertExpectedSize(options?.expectedSize);
+    const p = normalizePath(path);
+    const key = toKey(p);
+    const existing = await this.bucket.head(key);
+    if (existing) this.assertMode(existing, WRITE_BIT, p);
+
+    const value = content.pipeThrough(new FixedLengthStream(options.expectedSize));
+    const result = await this.bucket.put(key, value, {
+      httpMetadata: toR2HttpMetadata(p, options),
+      customMetadata: {
+        uid: String(this.identity.uid),
+        gid: String(this.identity.gid),
+        mode: existing?.customMetadata?.mode ?? "644",
+      },
+    });
+
+    return {
+      size: result.size,
+      streamed: true,
+    };
   }
 
   async appendFile(path: string, content: FileContent): Promise<void> {
@@ -89,6 +168,10 @@ export class R2MountBackend implements MountBackend {
   }
 
   async stat(path: string): Promise<ExtendedMountStat> {
+    return this.lstat(path);
+  }
+
+  async lstat(path: string): Promise<ExtendedMountStat> {
     const p = normalizePath(path);
     const key = toKey(p);
     const head = await this.bucket.head(key);
@@ -102,6 +185,18 @@ export class R2MountBackend implements MountBackend {
           isSymbolicLink: false,
           mode: parseOctalMode(head.customMetadata?.mode ?? "755"),
           size: 0,
+          mtime: head.uploaded,
+          uid,
+          gid,
+        };
+      }
+      if (isSymlink(head)) {
+        return {
+          isFile: false,
+          isDirectory: false,
+          isSymbolicLink: true,
+          mode: parseOctalMode(head.customMetadata?.mode ?? "777"),
+          size: head.size,
           mtime: head.uploaded,
           uid,
           gid,
@@ -242,6 +337,33 @@ export class R2MountBackend implements MountBackend {
     if (!options?.force) throw new Error(`ENOENT: no such file or directory, unlink '${p}'`);
   }
 
+  async symlink(target: string, linkPath: string): Promise<void> {
+    const p = normalizePath(linkPath);
+    const key = toKey(p);
+    const existing = await this.bucket.head(key);
+    if (existing) {
+      throw new Error(`EEXIST: file already exists, symlink '${p}'`);
+    }
+
+    await this.bucket.put(key, target, {
+      httpMetadata: { contentType: "text/plain" },
+      customMetadata: {
+        uid: String(this.identity.uid),
+        gid: String(this.identity.gid),
+        mode: "777",
+        symlink: "1",
+      },
+    });
+  }
+
+  async readlink(path: string): Promise<string> {
+    const p = normalizePath(path);
+    const obj = await this.bucket.get(toKey(p));
+    if (!obj) throw new Error(`ENOENT: no such file or directory, readlink '${p}'`);
+    if (!isSymlink(obj)) throw new Error(`EINVAL: invalid argument, readlink '${p}'`);
+    return obj.text();
+  }
+
   async search(path: string, query: string, include?: string): Promise<FsSearchBackendResult> {
     const prefix = normalizePath(path);
     const searchPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
@@ -370,6 +492,80 @@ function toKey(path: string): string {
 
 function isDirectoryMarker(obj: R2Object | R2ObjectBody): boolean {
   return obj.customMetadata?.dirmarker === "1" || obj.key.endsWith("/.dir");
+}
+
+function isSymlink(obj: R2Object | R2ObjectBody): boolean {
+  return obj.customMetadata?.symlink === "1";
+}
+
+function isR2ObjectBody(obj: R2Object | R2ObjectBody): obj is R2ObjectBody {
+  return "body" in obj;
+}
+
+function toR2GetOptions(options: OpenFileOptions | undefined): R2GetOptions | undefined {
+  if (!options?.conditions && !options?.range) {
+    return undefined;
+  }
+
+  const getOptions: R2GetOptions = {};
+  if (options.conditions) {
+    getOptions.onlyIf = {
+      etagMatches: options.conditions.etagMatches,
+      etagDoesNotMatch: options.conditions.etagDoesNotMatch,
+      uploadedBefore: options.conditions.mtimeBefore,
+      uploadedAfter: options.conditions.mtimeAfter,
+      secondsGranularity: Boolean(options.conditions.mtimeBefore || options.conditions.mtimeAfter),
+    };
+  }
+  if (options.range) {
+    getOptions.range = options.range;
+  }
+  return getOptions;
+}
+
+function conditionalMissStatus(conditions: OpenFileOptions["conditions"] | undefined): 304 | 412 {
+  if (conditions?.etagDoesNotMatch || conditions?.mtimeAfter) {
+    return 304;
+  }
+  return 412;
+}
+
+function toR2HttpMetadata(path: string, options: WriteFileStreamOptions): R2HTTPMetadata {
+  return {
+    contentType: options.contentType ?? inferContentType(path),
+    cacheControl: options.cacheControl,
+    contentDisposition: options.contentDisposition,
+  };
+}
+
+function assertExpectedSize(size: unknown): asserts size is number {
+  if (!Number.isSafeInteger(size) || (size as number) < 0) {
+    throw new Error("EINVAL: writeFileStream expectedSize must be a non-negative safe integer");
+  }
+}
+
+function normalizeR2Range(range: R2Range, totalSize: number): OpenFileRange | undefined {
+  if ("offset" in range && typeof range.offset === "number") {
+    const length = typeof range.length === "number"
+      ? range.length
+      : Math.max(0, totalSize - range.offset);
+    return {
+      offset: range.offset,
+      length,
+      total: totalSize,
+    };
+  }
+
+  if ("suffix" in range && typeof range.suffix === "number") {
+    const length = Math.min(range.suffix, totalSize);
+    return {
+      offset: Math.max(0, totalSize - length),
+      length,
+      total: totalSize,
+    };
+  }
+
+  return undefined;
 }
 
 function parseOctalMode(mode: string): number {

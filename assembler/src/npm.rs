@@ -9,7 +9,7 @@ use thiserror::Error;
 
 use crate::diagnostics::{has_errors, PackageAssemblyDiagnostic};
 use crate::pipeline::{PlannedAssembly, StageOutcome};
-use crate::virtual_fs::{join_posix, normalize_repo_path, VirtualFileTree};
+use crate::virtual_fs::{join_posix, normalize_repo_path, VirtualFileContent, VirtualFileTree};
 
 #[cfg(target_arch = "wasm32")]
 use worker::{Fetch, Url};
@@ -405,7 +405,7 @@ pub(crate) fn extract_tarball_into_tree(
 ) -> Result<(), TarballExtractError> {
     let decoder = GzDecoder::new(tarball_bytes);
     let mut archive = Archive::new(decoder);
-    let mut extracted = BTreeMap::<String, String>::new();
+    let mut extracted = BTreeMap::<String, VirtualFileContent>::new();
 
     for entry in archive
         .entries()
@@ -442,11 +442,10 @@ pub(crate) fn extract_tarball_into_tree(
         entry
             .read_to_end(&mut bytes)
             .map_err(|error| TarballExtractError::InvalidTarball(error.to_string()))?;
-        let content = String::from_utf8(bytes).map_err(|_| {
-            TarballExtractError::UnsupportedPackage(format!(
-                "Tarball for {package_name} contains non-UTF-8 file content, which v1 does not support."
-            ))
-        })?;
+        let content = match String::from_utf8(bytes) {
+            Ok(text) => VirtualFileContent::Text(text),
+            Err(error) => VirtualFileContent::Binary(error.into_bytes()),
+        };
         extracted.insert(destination_path, content);
     }
 

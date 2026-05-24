@@ -3,6 +3,8 @@ import type {
   AdapterInboundMessage,
   AdapterAccountStatus,
   AdapterOutboundMessage,
+  AdapterShellExecArgs,
+  AdapterShellExecResult,
   AdapterSurface,
   AdapterWorkerInterface,
 } from "../adapter-interface";
@@ -24,6 +26,8 @@ import type { KernelContext } from "./context";
 import type { ProcessIdentity } from "@gsv/protocol/syscalls/system";
 import type { RequestFrame } from "../protocol/frames";
 import { sendFrameToProcess } from "../shared/utils";
+import type { InteractionOrigin } from "../syscalls/interaction-origin";
+import { isVisibleAdapterTarget } from "./adapter-targets";
 
 type AdapterServiceBinding = Fetcher & Partial<AdapterWorkerInterface>;
 type ProcSendData = {
@@ -183,6 +187,37 @@ export async function handleAdapterSend(
     surfaceId: args.surface.id,
     messageId: result.messageId,
   };
+}
+
+export async function handleAdapterShellExec(
+  adapter: string,
+  accountId: string,
+  args: unknown,
+  ctx: KernelContext,
+): Promise<AdapterShellExecResult> {
+  const normalizedAdapter = adapter.trim().toLowerCase();
+  const normalizedAccountId = accountId.trim();
+  if (!normalizedAdapter) {
+    return failedShellResult("adapter is required");
+  }
+  if (!normalizedAccountId) {
+    return failedShellResult("accountId is required");
+  }
+  if (!isVisibleAdapterTarget(ctx, normalizedAdapter, normalizedAccountId)) {
+    throw new Error(`Access denied to adapter target: ${normalizedAdapter}`);
+  }
+
+  const service = resolveAdapterService(ctx.env, normalizedAdapter);
+  if (!service || typeof service.adapterShellExec !== "function") {
+    return failedShellResult(`Adapter does not expose shell commands: ${normalizedAdapter}`);
+  }
+
+  const execArgs = normalizeAdapterShellArgs(args);
+  if (!execArgs.input.trim()) {
+    return completedShellResult("");
+  }
+
+  return service.adapterShellExec(normalizedAccountId, execArgs);
 }
 
 export async function handleAdapterStatus(
@@ -345,12 +380,18 @@ export async function handleAdapterInbound(
     };
   }
 
-  const incomingText = renderAdapterInboundText(adapter, message, actorId);
+  const incomingText = renderAdapterInboundText(message);
+  const origin = adapterInteractionOrigin(adapter, accountId, message, actorId);
   const response = await sendFrameToProcess(pid, {
     type: "req",
     id: crypto.randomUUID(),
     call: "proc.send",
-    args: { pid, message: incomingText, media: message.media },
+    args: {
+      pid,
+      message: incomingText,
+      media: message.media,
+      origin,
+    },
   } as RequestFrame);
 
   if (!response || response.type !== "res") {
@@ -483,6 +524,43 @@ async function refreshAdapterStatus(
   }
 }
 
+function normalizeAdapterShellArgs(args: unknown): AdapterShellExecArgs {
+  const raw = args && typeof args === "object" ? args as Record<string, unknown> : {};
+  return {
+    input: typeof raw.input === "string" ? raw.input : "",
+    ...(typeof raw.cwd === "string" ? { cwd: raw.cwd } : {}),
+    ...(typeof raw.sessionId === "string" ? { sessionId: raw.sessionId } : {}),
+    ...(typeof raw.timeout === "number" ? { timeout: raw.timeout } : {}),
+    ...(typeof raw.background === "boolean" ? { background: raw.background } : {}),
+    ...(typeof raw.yieldMs === "number" ? { yieldMs: raw.yieldMs } : {}),
+  };
+}
+
+function completedShellResult(output: string): AdapterShellExecResult {
+  return {
+    status: "completed",
+    output,
+    exitCode: 0,
+    ok: true,
+    pid: 0,
+    stdout: output,
+    stderr: "",
+  };
+}
+
+function failedShellResult(error: string): AdapterShellExecResult {
+  return {
+    status: "failed",
+    output: error,
+    error,
+    exitCode: 1,
+    ok: false,
+    pid: 0,
+    stdout: "",
+    stderr: error,
+  };
+}
+
 function identityForUid(uid: number, ctx: KernelContext): ProcessIdentity | null {
   const user = ctx.auth.getPasswdByUid(uid);
   if (!user) return null;
@@ -525,28 +603,26 @@ function resolveActorId(message: AdapterInboundMessage): string | null {
   return null;
 }
 
-function renderAdapterInboundText(
+function adapterInteractionOrigin(
   adapter: string,
+  accountId: string,
   message: AdapterInboundMessage,
   actorId: string,
-): string {
-  const base = message.text?.trim() || "";
-  if (message.surface.kind === "dm") {
-    return base;
-  }
-
-  const surface = describeSurface(message.surface);
-  const actorLabel = message.actor?.handle || message.actor?.name || actorId;
-  return [`[${adapter} ${surface} ${actorLabel}]`, base]
-    .filter(Boolean)
-    .join("\n");
+): InteractionOrigin {
+  const actorLabel = message.actor?.handle?.trim() || message.actor?.name?.trim() || undefined;
+  return {
+    kind: "adapter",
+    adapter,
+    accountId,
+    surface: message.surface,
+    actorId,
+    ...(actorLabel ? { actorLabel } : {}),
+    ...(message.messageId?.trim() ? { messageId: message.messageId.trim() } : {}),
+  };
 }
 
-function describeSurface(surface: AdapterSurface): string {
-  if (surface.kind === "thread" && surface.threadId) {
-    return `${surface.kind}:${surface.id}:${surface.threadId}`;
-  }
-  return `${surface.kind}:${surface.id}`;
+function renderAdapterInboundText(message: AdapterInboundMessage): string {
+  return message.text?.trim() || "";
 }
 
 type PendingHilSummary = {

@@ -1,9 +1,11 @@
 import "./styles.css";
 import { createAppRuntime } from "./apps-runtime";
+import { createBrowserTargetProvider } from "./browser-target";
 import { createGatewayClient } from "./gateway-client";
 import { createLauncher } from "./launcher";
 import { createNotificationsPanel } from "./notifications-panel";
 import { packageToAppManifests } from "./package-apps";
+import { createPresenceControl } from "./presence";
 import { createSessionService } from "./session-service";
 import { createSessionUi } from "./session-ui";
 import { renderDesktopShell } from "./shell-template";
@@ -48,7 +50,17 @@ const windowManager = createWindowManager({
   appRuntime,
 });
 
+createBrowserTargetProvider({
+  gatewayClient,
+  windowManager,
+});
+
 createNotificationsPanel({
+  rootNode: shellEl,
+  gatewayClient,
+});
+
+createPresenceControl({
   rootNode: shellEl,
   gatewayClient,
 });

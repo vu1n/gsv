@@ -522,6 +522,13 @@ function normalizeApplyOps(ops: RepoApplyArgs["ops"]): RipgitApplyOp[] {
         recursive: op.recursive === true,
       };
     }
+    if (op.type === "symlink") {
+      return {
+        type: "symlink",
+        path: normalizeRepoPath(op.path, false),
+        target: String(op.target ?? ""),
+      };
+    }
     if (op.type === "move") {
       return {
         type: "move",

@@ -102,6 +102,7 @@ fn base_request(entry_source: &str) -> PackageAssemblyRequest {
         ]
         .into_iter()
         .collect(),
+        binary_files: BTreeMap::new(),
     }
 }
 
@@ -309,20 +310,38 @@ export default [preact, useThing, jsx];"#,
                     "dist/preact.module.js",
                     br#"export default { h() { return null; } };"#,
                 ),
-                ("dist/preact.mjs", br#"export default { h() { return null; } };"#),
-                ("dist/preact.js", br#"module.exports = { h() { return null; } };"#),
+                (
+                    "dist/preact.mjs",
+                    br#"export default { h() { return null; } };"#,
+                ),
+                (
+                    "dist/preact.js",
+                    br#"module.exports = { h() { return null; } };"#,
+                ),
                 (
                     "hooks/dist/hooks.module.js",
                     br#"export function useThing() { return "ok"; }"#,
                 ),
-                ("hooks/dist/hooks.mjs", br#"export function useThing() { return "ok"; }"#),
-                ("hooks/dist/hooks.js", br#"exports.useThing = function useThing() { return "ok"; };"#),
+                (
+                    "hooks/dist/hooks.mjs",
+                    br#"export function useThing() { return "ok"; }"#,
+                ),
+                (
+                    "hooks/dist/hooks.js",
+                    br#"exports.useThing = function useThing() { return "ok"; };"#,
+                ),
                 (
                     "jsx-runtime/dist/jsxRuntime.module.js",
                     br#"export function jsx() { return null; }"#,
                 ),
-                ("jsx-runtime/dist/jsxRuntime.mjs", br#"export function jsx() { return null; }"#),
-                ("jsx-runtime/dist/jsxRuntime.js", br#"exports.jsx = function jsx() { return null; };"#),
+                (
+                    "jsx-runtime/dist/jsxRuntime.mjs",
+                    br#"export function jsx() { return null; }"#,
+                ),
+                (
+                    "jsx-runtime/dist/jsxRuntime.js",
+                    br#"exports.jsx = function jsx() { return null; };"#,
+                ),
             ]),
         );
 
@@ -449,7 +468,7 @@ export default function App({ name }: Props) {
         .find(|module| module.path == "apps/demo/src/main.tsx")
         .expect("main module");
 
-    assert!(main.content.contains("from \"preact/jsx-runtime\""));
+    assert!(main.content.contains("from\"preact/jsx-runtime\""));
     assert!(!main.content.contains("type Props"));
     assert!(!main.content.contains(": Props"));
     assert!(!main.content.contains("<main>"));

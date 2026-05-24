@@ -14,7 +14,7 @@ import type { Connection } from "agents";
 import type { RequestFrame, ResponseFrame } from "../protocol/frames";
 import type { SyscallName } from "../syscalls";
 import type { KernelContext } from "./context";
-import type { RoutingTable, RouteOrigin } from "./routing";
+import type { RouteOrigin } from "./routing";
 import type { ShellSessionRecord, ShellSessionStore } from "./shell-sessions";
 import {
   handleFsRead,
@@ -22,9 +22,13 @@ import {
   handleFsEdit,
   handleFsDelete,
   handleFsSearch,
+  handleFsCopy,
+  handleFsTransferStat,
+  handleFsTransferSend,
+  handleFsTransferReceive,
 } from "../drivers/native/fs";
 import { handleShellExec } from "../drivers/native/shell";
-import { handleAiTools, handleAiConfig } from "./ai";
+import { handleAiTools, handleAiConfig, handleAiSpeechCreate, handleAiTranscriptionCreate } from "./ai";
 import {
   handleProcList,
   handleProcIpcCall,
@@ -93,6 +97,7 @@ import {
   handleAdapterDisconnect,
   handleAdapterInbound,
   handleAdapterSend,
+  handleAdapterShellExec,
   handleAdapterStateUpdate,
   handleAdapterStatus,
 } from "./adapter-handlers";
@@ -110,12 +115,62 @@ import {
   handleSchedulerRun,
   handleSchedulerUpdate,
 } from "./scheduler";
-
+import {
+  getVisibleTarget,
+  targetCanHandle,
+  type TargetDescriptor,
+} from "./targets";
 export type DispatchDeps = {
-  routingTable: RoutingTable;
   shellSessions: ShellSessionStore;
   connections: Map<string, Connection>;
-  scheduleExpiry: (id: string, ttlMs: number) => Promise<string>;
+  registerRoute: (route: {
+    id: string;
+    call: SyscallName;
+    origin: RouteOrigin;
+    deviceId: string;
+    ttlMs: number;
+  }) => Promise<{ cancel: () => void }>;
+  registerBinaryRoute: (route: {
+    requestId: string;
+    streamId: number;
+    origin: RouteOrigin;
+    deviceId: string;
+    ttlMs: number;
+    kind?: "relay" | "native-stream";
+  }) => { cancel: () => void };
+  requestDevice: (deviceId: string, call: string, args: unknown, ttlMs?: number) => Promise<unknown>;
+  allocateBinaryStreamId: () => number;
+  startDeviceRequest: (
+    deviceId: string,
+    call: string,
+    args: unknown,
+    ttlMs?: number,
+  ) => Promise<{ requestId: string; promise: Promise<unknown>; cancel: () => void }>;
+  registerBinaryRelay: (route: {
+    requestId: string;
+    streamId: number;
+    sourceDeviceId: string;
+    destinationDeviceId: string;
+    ttlMs?: number;
+  }) => { cancel: () => void };
+  receiveDeviceBinaryStream: (route: {
+    requestId: string;
+    streamId: number;
+    sourceDeviceId: string;
+    ttlMs?: number;
+  }) => { stream: ReadableStream<Uint8Array>; cancel: () => void };
+  receiveBinaryStream: (route: {
+    requestId: string;
+    streamId: number;
+    origin: RouteOrigin;
+    ttlMs: number;
+  }) => { stream: ReadableStream<Uint8Array>; cancel: () => void };
+  sendDeviceBinaryFrame: (
+    deviceId: string,
+    streamId: number,
+    flags: number,
+    payload?: Uint8Array,
+  ) => void;
 };
 
 export type DispatchResult =
@@ -163,8 +218,8 @@ export async function dispatch(
       };
     }
     if (session.status === "failed" && session.error) {
-      const identity = ctx.identity!;
-      if (!ctx.devices.canAccess(session.deviceId, identity.process.uid, identity.process.gids)) {
+      const sessionTarget = getVisibleTarget(ctx, session.deviceId, { includeOffline: true });
+      if (!sessionTarget) {
         return {
           handled: true,
           response: errFrame(frame.id, 403, `Access denied to device: ${session.deviceId}`),
@@ -176,19 +231,33 @@ export async function dispatch(
       };
     }
     delete raw.target;
-    return routeToDevice(frame, session.deviceId, origin, ctx, deps);
+    const sessionTarget = getVisibleTarget(ctx, session.deviceId, { includeOffline: true });
+    if (!sessionTarget) {
+      return {
+        handled: true,
+        response: errFrame(frame.id, 403, `Access denied to device: ${session.deviceId}`),
+      };
+    }
+    return routeToTarget(frame, sessionTarget, origin, ctx, deps);
   }
 
   if (target && target !== "gsv" && isRoutable(frame.call)) {
     delete raw.target;
-    return routeToDevice(frame, target, origin, ctx, deps);
+    const routedTarget = getVisibleTarget(ctx, target, { includeOffline: true });
+    if (!routedTarget) {
+      return {
+        handled: true,
+        response: errFrame(frame.id, 403, `Access denied to device: ${target}`),
+      };
+    }
+    return routeToTarget(frame, routedTarget, origin, ctx, deps);
   }
 
   if (target) {
     delete raw.target;
   }
 
-  const result = await dispatchNative(frame, ctx);
+  const result = await dispatchNative(frame, origin, ctx, deps);
   return {
     handled: true,
     response: result,
@@ -197,7 +266,9 @@ export async function dispatch(
 
 async function dispatchNative(
   frame: RequestFrame,
+  origin: RouteOrigin,
   ctx: KernelContext,
+  deps: DispatchDeps,
 ): Promise<ResponseFrame> {
   const frameId = frame.id;
 
@@ -220,9 +291,37 @@ async function dispatchNative(
       case "fs.search":
         data = await handleFsSearch(frame.args, ctx);
         break;
+      case "fs.copy":
+        data = await handleFsCopy(frame.args, ctx, {
+          requestDevice: deps.requestDevice,
+          allocateBinaryStreamId: deps.allocateBinaryStreamId,
+          startDeviceRequest: deps.startDeviceRequest,
+          registerBinaryRelay: deps.registerBinaryRelay,
+          receiveDeviceBinaryStream: deps.receiveDeviceBinaryStream,
+          sendDeviceBinaryFrame: deps.sendDeviceBinaryFrame,
+        });
+        break;
+      case "fs.transfer.stat":
+        data = await handleFsTransferStat(frame.args, ctx);
+        break;
+      case "fs.transfer.send":
+        data = await handleFsTransferSend(frame.args, ctx);
+        break;
+      case "fs.transfer.receive":
+        data = await handleNativeFsTransferReceive(frame, origin, ctx, deps);
+        break;
 
       case "shell.exec":
-        data = await handleShellExec(frame.args, ctx);
+        data = await handleShellExec(frame.args, ctx, {
+          fsCopyTransport: {
+            requestDevice: deps.requestDevice,
+            allocateBinaryStreamId: deps.allocateBinaryStreamId,
+            startDeviceRequest: deps.startDeviceRequest,
+            registerBinaryRelay: deps.registerBinaryRelay,
+            receiveDeviceBinaryStream: deps.receiveDeviceBinaryStream,
+            sendDeviceBinaryFrame: deps.sendDeviceBinaryFrame,
+          },
+        });
         break;
 
       case "codemode.run":
@@ -233,7 +332,7 @@ async function dispatchNative(
         data = handleProcList(frame.args, ctx);
         break;
       case "proc.profile.list":
-        data = handleProcProfileList(frame.args, ctx);
+        data = await handleProcProfileList(frame.args, ctx);
         break;
       case "proc.spawn":
         data = await handleProcSpawn(frame.args, ctx);
@@ -349,6 +448,12 @@ async function dispatchNative(
       case "ai.config":
         data = await handleAiConfig(frame.args, ctx);
         break;
+      case "ai.transcription.create":
+        data = await handleAiTranscriptionCreate(frame.args, ctx);
+        break;
+      case "ai.speech.create":
+        data = await handleAiSpeechCreate(frame.args, ctx);
+        break;
 
       // --- sys.* ---
       case "sys.connect":
@@ -376,6 +481,8 @@ async function dispatchNative(
       case "sys.device.update":
         data = handleSysDeviceUpdate(frame.args, ctx);
         break;
+      case "sys.target.register":
+        return errFrame(frame.id, 400, "sys.target.register is connection-only");
       case "sys.workspace.list":
         data = handleSysWorkspaceList(frame.args, ctx);
         break;
@@ -493,63 +600,154 @@ async function dispatchNative(
   }
 }
 
-async function routeToDevice(
+async function handleNativeFsTransferReceive(
+  frame: RequestFrame<"fs.transfer.receive">,
+  origin: RouteOrigin,
+  ctx: KernelContext,
+  deps: DispatchDeps,
+): Promise<unknown> {
+  const streamId = transferStreamId(frame.call, frame.args);
+  if (streamId === null) {
+    return { ok: false, error: "fs.transfer.receive requires streamId" };
+  }
+
+  let pending: { stream: ReadableStream<Uint8Array>; cancel: () => void };
+  try {
+    pending = deps.receiveBinaryStream({
+      requestId: frame.id,
+      streamId,
+      origin,
+      ttlMs: DEFAULT_DEVICE_TTL_MS,
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  try {
+    return await handleFsTransferReceive(frame.args, ctx, pending.stream);
+  } finally {
+    pending.cancel();
+  }
+}
+
+async function routeToTarget(
   frame: RequestFrame,
-  deviceId: string,
+  target: TargetDescriptor,
   origin: RouteOrigin,
   ctx: KernelContext,
   deps: DispatchDeps,
 ): Promise<DispatchResult> {
-  const identity = ctx.identity!;
-
-  if (!ctx.devices.canAccess(deviceId, identity.process.uid, identity.process.gids)) {
+  if (!target.online) {
     return {
       handled: true,
-      response: errFrame(frame.id, 403, `Access denied to device: ${deviceId}`),
+      response: errFrame(frame.id, 503, `Device offline: ${target.targetId}`),
     };
   }
 
-  const device = ctx.devices.get(deviceId);
-  if (!device || !device.online) {
+  if (!targetCanHandle(target, frame.call)) {
     return {
       handled: true,
-      response: errFrame(frame.id, 503, `Device offline: ${deviceId}`),
+      response: errFrame(frame.id, 400, `Device ${target.targetId} does not implement ${frame.call}`),
     };
   }
 
-  if (!ctx.devices.canHandle(deviceId, frame.call)) {
-    return {
-      handled: true,
-      response: errFrame(frame.id, 400, `Device ${deviceId} does not implement ${frame.call}`),
-    };
+  if (target.route.kind === "adapter-shell") {
+    return routeToAdapterShell(frame, target.route.adapter, target.route.accountId, ctx);
   }
 
-  const deviceConn = findDeviceConnection(deviceId, deps.connections);
+  const deviceConn = findDeviceConnection(target.targetId, deps.connections);
   if (!deviceConn) {
     return {
       handled: true,
-      response: errFrame(frame.id, 503, `No active connection for device: ${deviceId}`),
+      response: errFrame(frame.id, 503, `No active connection for device: ${target.targetId}`),
     };
   }
 
-  const scheduleId = await deps.scheduleExpiry(frame.id, DEFAULT_DEVICE_TTL_MS);
+  let route: { cancel: () => void } | null = null;
+  let binaryRoute: { cancel: () => void } | null = null;
+  try {
+    route = await deps.registerRoute({
+      id: frame.id,
+      call: frame.call,
+      origin,
+      deviceId: target.targetId,
+      ttlMs: DEFAULT_DEVICE_TTL_MS,
+    });
+    const streamId = transferStreamId(frame.call, frame.args);
+    if (streamId !== null) {
+      binaryRoute = deps.registerBinaryRoute({
+        requestId: frame.id,
+        streamId,
+        origin,
+        deviceId: target.targetId,
+        ttlMs: DEFAULT_DEVICE_TTL_MS,
+      });
+    }
+  } catch (error) {
+    route?.cancel();
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      handled: true,
+      response: errFrame(frame.id, 500, `Failed to register route for ${frame.call}: ${message}`),
+    };
+  }
 
-  deps.routingTable.register(
-    frame.id,
-    frame.call,
-    origin,
-    deviceId,
-    { ttlMs: DEFAULT_DEVICE_TTL_MS, scheduleId },
-  );
-
-  deviceConn.send(JSON.stringify({
-    type: "req",
-    id: frame.id,
-    call: frame.call,
-    args: frame.args,
-  }));
+  try {
+    deviceConn.send(JSON.stringify({
+      type: "req",
+      id: frame.id,
+      call: frame.call,
+      args: frame.args,
+    }));
+  } catch (error) {
+    route.cancel();
+    binaryRoute?.cancel();
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      handled: true,
+      response: errFrame(frame.id, 500, `Failed to send ${frame.call} to device ${target.targetId}: ${message}`),
+    };
+  }
 
   return { handled: false };
+}
+
+function transferStreamId(call: string, args: unknown): number | null {
+  if (call !== "fs.transfer.send" && call !== "fs.transfer.receive") {
+    return null;
+  }
+  if (!args || typeof args !== "object") {
+    return null;
+  }
+  const value = (args as { streamId?: unknown }).streamId;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0 || value > 0xffffffff) {
+    return null;
+  }
+  return value;
+}
+
+async function routeToAdapterShell(
+  frame: RequestFrame,
+  adapter: string,
+  accountId: string,
+  ctx: KernelContext,
+): Promise<DispatchResult> {
+  try {
+    const data = await handleAdapterShellExec(adapter, accountId, frame.args, ctx);
+    return {
+      handled: true,
+      response: { type: "res", id: frame.id, ok: true, data },
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      handled: true,
+      response: errFrame(frame.id, message.startsWith("Access denied") ? 403 : 500, message),
+    };
+  }
 }
 
 function findDeviceConnection(
@@ -557,8 +755,14 @@ function findDeviceConnection(
   connections: Map<string, Connection>,
 ): Connection | null {
   for (const [, conn] of connections) {
-    const state = conn.state as { identity?: { role: string; device?: string } } | undefined;
+    const state = conn.state as {
+      identity?: { role: string; device?: string };
+      providedTargets?: Array<{ targetId: string }>;
+    } | undefined;
     if (state?.identity?.role === "driver" && state.identity.device === deviceId) {
+      return conn;
+    }
+    if (state?.providedTargets?.some((target) => target.targetId === deviceId)) {
       return conn;
     }
   }

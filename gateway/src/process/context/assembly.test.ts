@@ -26,7 +26,7 @@ const CONFIG: AiConfigResult = {
   profileContextFiles: [
     {
       name: "00-role.md",
-      text: "Task for {{identity.username}} in {{identity.cwd}}\n\nTargets:\n{{devices}}\n\nMCP:\n{{mcpServers}}\n\nPaths:\n{{known_paths}}",
+      text: "Task for {{identity.username}} in {{identity.cwd}}\n\nTargets:\n{{devices}}\n\nMCP:\n{{mcpServers}}",
     },
   ],
   skillIndex: [
@@ -90,6 +90,7 @@ describe("createProfileInstructionsProvider", () => {
         devices: [
           {
             id: "macbook",
+            label: "Work MacBook",
             platform: "darwin",
             description: "Personal laptop",
             implements: ["shell.exec", "fs.read"],
@@ -105,10 +106,29 @@ describe("createProfileInstructionsProvider", () => {
     ]);
     expect(sections[0]?.text).toContain("Task for root in /workspaces/ws_test");
     expect(sections[0]?.text).toContain("- gsv");
-    expect(sections[0]?.text).toContain("- macbook: Personal laptop (darwin)");
+    expect(sections[0]?.text).toContain("- macbook: Work MacBook - Personal laptop (darwin)");
     expect(sections[0]?.text).toContain("- Cloudflare");
     expect(sections[0]?.text).toContain("- Linear");
-    expect(sections[0]?.text).toContain("- /sys: live kernel configuration and runtime control surfaces");
+  });
+
+  it("bounds rendered target context and points to target discovery", async () => {
+    const provider = createProfileInstructionsProvider();
+    const sections = await provider.collect(
+      makeInput({
+        devices: Array.from({ length: 7 }, (_value, index) => ({
+          id: `node-${index + 1}`,
+          label: `Node ${index + 1}`,
+          platform: "linux",
+          description: `Worker ${index + 1}`,
+          implements: ["shell.exec"],
+        })),
+      }),
+    );
+
+    expect(sections[0]?.text).toContain("- node-1: Node 1 - Worker 1 (linux)");
+    expect(sections[0]?.text).toContain("- node-5: Node 5 - Worker 5 (linux)");
+    expect(sections[0]?.text).not.toContain("node-6");
+    expect(sections[0]?.text).toContain("- ... 2 more targets. Run `targets list` in Shell to discover more.");
   });
 });
 

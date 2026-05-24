@@ -2,10 +2,10 @@ use std::collections::BTreeMap;
 
 use assembler::diagnostics::PackageAssemblyDiagnostic;
 use assembler::model::{
-    PackageAssemblyAnalysis, PackageAssemblyRequest, PackageAssemblySource,
-    PackageAssemblyTarget, PackageBackendDefinition, PackageBrowserDefinition,
-    PackageCapabilityDefinition, PackageCommandDefinition, PackageDefinition, PackageIdentity,
-    PackageJsonDefinition, PackageMetaDefinition,
+    PackageAssemblyAnalysis, PackageAssemblyRequest, PackageAssemblySource, PackageAssemblyTarget,
+    PackageBackendDefinition, PackageBrowserDefinition, PackageCapabilityDefinition,
+    PackageCommandDefinition, PackageDefinition, PackageIdentity, PackageJsonDefinition,
+    PackageMetaDefinition,
 };
 use assembler::pipeline::{
     plan_installs, prepare_request, prepare_sources, validate_request, RegistryDependencyPlanItem,
@@ -68,6 +68,7 @@ fn base_request() -> PackageAssemblyRequest {
 }"#,
             ),
         ]),
+        binary_files: BTreeMap::new(),
     }
 }
 

@@ -3,6 +3,15 @@ import type { FsWriteArgs, FsWriteResult } from "./write";
 import type { FsEditArgs, FsEditResult } from "./edit";
 import type { FsDeleteArgs, FsDeleteResult } from "./delete";
 import type { FsSearchArgs, FsSearchResult } from "./search";
+import type { FsCopyArgs, FsCopyResult } from "./copy";
+import type {
+  FsTransferReceiveArgs,
+  FsTransferReceiveResult,
+  FsTransferSendArgs,
+  FsTransferSendResult,
+  FsTransferStatArgs,
+  FsTransferStatResult,
+} from "./transfer";
 import type {
   ShellExecArgs,
   ShellExecResult,
@@ -134,6 +143,8 @@ import type {
   SysDeviceGetResult,
   SysDeviceUpdateArgs,
   SysDeviceUpdateResult,
+  SysTargetRegisterArgs,
+  SysTargetRegisterResult,
   SysWorkspaceListArgs,
   SysWorkspaceListResult,
   SysOAuthStartArgs,
@@ -184,6 +195,10 @@ import type {
   AiToolsResult,
   AiConfigArgs,
   AiConfigResult,
+  AiSpeechCreateArgs,
+  AiSpeechCreateResult,
+  AiTranscriptionCreateArgs,
+  AiTranscriptionCreateResult,
 } from "./ai";
 import type {
   AdapterConnectArgs,
@@ -228,6 +243,10 @@ export type SyscallDomains = {
   "fs.edit": { args: FsEditArgs; result: FsEditResult };
   "fs.delete": { args: FsDeleteArgs; result: FsDeleteResult };
   "fs.search": { args: FsSearchArgs; result: FsSearchResult };
+  "fs.copy": { args: FsCopyArgs; result: FsCopyResult };
+  "fs.transfer.stat": { args: FsTransferStatArgs; result: FsTransferStatResult };
+  "fs.transfer.send": { args: FsTransferSendArgs; result: FsTransferSendResult };
+  "fs.transfer.receive": { args: FsTransferReceiveArgs; result: FsTransferReceiveResult };
 
   // Shell (device commands)
   "shell.exec": { args: ShellExecArgs; result: ShellExecResult };
@@ -300,6 +319,7 @@ export type SyscallDomains = {
   "sys.device.list": { args: SysDeviceListArgs; result: SysDeviceListResult };
   "sys.device.get": { args: SysDeviceGetArgs; result: SysDeviceGetResult };
   "sys.device.update": { args: SysDeviceUpdateArgs; result: SysDeviceUpdateResult };
+  "sys.target.register": { args: SysTargetRegisterArgs; result: SysTargetRegisterResult };
   "sys.workspace.list": { args: SysWorkspaceListArgs; result: SysWorkspaceListResult };
   "sys.oauth.start": { args: SysOAuthStartArgs; result: SysOAuthStartResult };
   "sys.oauth.list": { args: SysOAuthListArgs; result: SysOAuthListResult };
@@ -327,6 +347,8 @@ export type SyscallDomains = {
   // AI (process bootstrap)
   "ai.tools": { args: AiToolsArgs; result: AiToolsResult };
   "ai.config": { args: AiConfigArgs; result: AiConfigResult };
+  "ai.transcription.create": { args: AiTranscriptionCreateArgs; result: AiTranscriptionCreateResult };
+  "ai.speech.create": { args: AiSpeechCreateArgs; result: AiSpeechCreateResult };
 
   // Adapter transport (external connectors)
   "adapter.connect": { args: AdapterConnectArgs; result: AdapterConnectResult };
@@ -375,6 +397,7 @@ export function domainOf(syscall: SyscallName): SyscallDomain {
  * `proc` is kernel-internal (no device routing).
  */
 const ROUTABLE_DOMAINS: SyscallDomain[] = ["fs", "shell"];
+const TARGET_SCHEMA_INLINE_LIMIT = 10;
 
 /**
  * Inject a `target` property into a tool definition so the LLM can choose
@@ -398,8 +421,6 @@ export function intoSyscallTool(
     );
   }
 
-  const deviceList = devices.length > 0 ? devices.join(", ") : "none";
-
   const targetRequired = tool.name !== "Shell";
 
   return {
@@ -411,12 +432,23 @@ export function intoSyscallTool(
         ...properties,
         target: {
           type: "string",
-          description: `Target device to execute on. Use "gsv" to execute on the cloud or use one of the accessible online devices: ${deviceList}`,
+          description: formatTargetSchemaDescription(devices),
         },
       },
       required: targetRequired ? [...required, "target"] : required,
     },
   };
+}
+
+function formatTargetSchemaDescription(devices: string[]): string {
+  if (devices.length === 0) {
+    return "Target to execute on. Use \"gsv\" for the native cloud target. Run `targets list` in Shell to discover connected targets.";
+  }
+  const listed = devices.slice(0, TARGET_SCHEMA_INLINE_LIMIT);
+  const suffix = devices.length > listed.length
+    ? `, and ${devices.length - listed.length} more`
+    : "";
+  return `Target to execute on. Use "gsv" for the native cloud target, or one of: ${listed.join(", ")}${suffix}. Run \`targets list\` in Shell for details.`;
 }
 
 export function isRoutableSyscall(call: SyscallName): boolean {

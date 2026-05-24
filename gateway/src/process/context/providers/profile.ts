@@ -1,5 +1,7 @@
 import type { PromptContextProvider } from "../types";
 
+const MAX_RENDERED_TARGETS = 5;
+
 export function createSystemContextProvider(): PromptContextProvider {
   return {
     name: "system.context",
@@ -50,7 +52,7 @@ function renderContextTemplate(
       cwd: string;
       workspaceId: string | null;
     };
-    devices: Array<{ id: string; implements: string[]; description?: string; platform?: string }>;
+    devices: Array<{ id: string; label?: string; implements: string[]; description?: string; platform?: string }>;
     mcpServers: string[];
   },
 ): string {
@@ -65,7 +67,6 @@ function renderContextTemplate(
     ["workspace", input.identity.workspaceId ? `/workspaces/${input.identity.workspaceId}` : "(none)"],
     ["devices", formatDevices(input.devices)],
     ["mcpServers", formatMcpServers(input.mcpServers)],
-    ["known_paths", formatKnownPaths(input.identity.home)],
   ]);
 
   return template.replace(/\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g, (_match, key: string) => {
@@ -74,30 +75,44 @@ function renderContextTemplate(
 }
 
 function formatDevices(
-  devices: Array<{ id: string; implements: string[]; description?: string; platform?: string }>,
+  devices: Array<{ id: string; label?: string; implements: string[]; description?: string; platform?: string }>,
 ): string {
   if (devices.length === 0) {
     return "- gsv";
   }
+  const sortedDevices = [...devices].sort((left, right) => left.id.localeCompare(right.id));
+  const renderedDevices = sortedDevices.slice(0, MAX_RENDERED_TARGETS);
+  const remaining = sortedDevices.length - renderedDevices.length;
   const lines = [
     "- gsv",
-    ...[...devices]
-      .sort((left, right) => left.id.localeCompare(right.id))
-      .map((device) => {
-        const description = device.description?.trim();
-        if (description && device.platform) {
-          return `- ${device.id}: ${description} (${device.platform})`;
-        }
-        if (description) {
-          return `- ${device.id}: ${description}`;
-        }
-        if (device.platform) {
-          return `- ${device.id}: ${device.platform}`;
-        }
-        return `- ${device.id}`;
-      }),
+    ...renderedDevices.map(formatDeviceLine),
   ];
+  if (remaining > 0) {
+    lines.push(`- ... ${remaining} more ${remaining === 1 ? "target" : "targets"}. Run \`targets list\` in Shell to discover more.`);
+  }
   return lines.join("\n");
+}
+
+function formatDeviceLine(device: {
+  id: string;
+  label?: string;
+  description?: string;
+  platform?: string;
+}): string {
+  const label = device.label?.trim();
+  const description = device.description?.trim();
+  const platform = device.platform?.trim();
+  const name = label && label !== device.id ? `${device.id}: ${label}` : device.id;
+  if (description && platform) {
+    return `- ${name} - ${description} (${platform})`;
+  }
+  if (description) {
+    return `- ${name} - ${description}`;
+  }
+  if (platform) {
+    return `- ${name} (${platform})`;
+  }
+  return `- ${name}`;
 }
 
 function formatMcpServers(mcpServers: string[]): string {
@@ -108,16 +123,4 @@ function formatMcpServers(mcpServers: string[]): string {
     .sort((left, right) => left.localeCompare(right))
     .map((name) => `- ${name}`)
     .join("\n");
-}
-
-function formatKnownPaths(home: string): string {
-  return [
-    `- ${home}: the user's home, including standing context and durable knowledge`,
-    "- /workspaces: task workspaces and user artifacts",
-    "- /var: runtime-managed state, caches, and generated system data",
-    "- /etc: system manuals and stable operator documentation",
-    "- /sys: live kernel configuration and runtime control surfaces",
-    "- /proc: live process and runtime inspection surfaces",
-    "- /dev: device-like virtual endpoints",
-  ].join("\n");
 }

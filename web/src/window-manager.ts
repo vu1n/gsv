@@ -1,6 +1,7 @@
 import type { AppManifest } from "./apps";
 import { queuePendingAppOpen, type OpenAppRequest } from "./app-link";
 import type { AppInstance, AppRuntimeContext, AppRuntimeRegistry } from "./app-runtime";
+import { mountPreviewWindow, type PreviewWindowContent } from "./preview-window";
 
 type WindowMode = "normal" | "minimized" | "maximized";
 type ResizeDirection = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
@@ -36,6 +37,10 @@ type AppRuntimeState = {
   crashed: boolean;
 };
 
+type PreviewRuntimeState = {
+  dispose: () => void;
+};
+
 type WindowRecord = {
   windowId: string;
   app: AppManifest;
@@ -58,6 +63,8 @@ type WindowRecord = {
   dragHandleNode: HTMLElement;
   contentNode: HTMLElement;
   runtime: AppRuntimeState | null;
+  preview: PreviewRuntimeState | null;
+  persist: boolean;
 };
 
 type DragState = {
@@ -94,8 +101,59 @@ export type WindowSummary = {
   zIndex: number;
 };
 
+export type WindowDomBounds = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+export type WindowDomNodeSnapshot = {
+  tag: string;
+  selector: string;
+  id: string | null;
+  className: string | null;
+  role: string | null;
+  name: string | null;
+  text: string | null;
+  bounds: WindowDomBounds;
+  attributes: Record<string, string>;
+  children: WindowDomNodeSnapshot[];
+};
+
+export type WindowDomSnapshot = {
+  window: WindowSummary;
+  url: string;
+  selector: string;
+  root: WindowDomNodeSnapshot;
+};
+
+export type WindowDomQueryMatch = {
+  index: number;
+  tag: string;
+  selector: string;
+  id: string | null;
+  className: string | null;
+  role: string | null;
+  name: string | null;
+  text: string | null;
+  bounds: WindowDomBounds;
+  attributes: Record<string, string>;
+};
+
+export type WindowDomInputResult = WindowDomQueryMatch & {
+  previousValue: string | null;
+  value: string;
+};
+
+export type WindowJsRunResult = {
+  result: unknown;
+};
+
 export type WindowManager = {
   openApp: (app: AppManifest, route?: string, options?: { pendingAppOpenRequest?: OpenAppRequest | null; forceRestart?: boolean; forceNew?: boolean }) => string;
+  openAppById: (appId: string, route?: string, options?: { forceRestart?: boolean; forceNew?: boolean }) => string | null;
+  openPreview: (preview: PreviewWindowContent) => string;
   focusWindow: (windowId: string) => void;
   restoreWindow: (windowId: string) => void;
   minimizeWindow: (windowId: string) => void;
@@ -105,6 +163,15 @@ export type WindowManager = {
   setWindowTitle: (windowId: string, title: string | null) => void;
   setWindowBadge: (windowId: string, badge: string | null) => void;
   setWindowDirty: (windowId: string, dirty: boolean) => void;
+  listApps: () => AppManifest[];
+  listWindows: () => WindowSummary[];
+  snapshotWindowDom: (windowId: string, selector?: string | null) => WindowDomSnapshot | null;
+  queryWindowDom: (windowId: string, selector: string) => WindowDomQueryMatch[] | null;
+  clickWindowDom: (windowId: string, selector: string, index?: number) => WindowDomQueryMatch | null;
+  clickWindowPoint: (windowId: string, x: number, y: number) => WindowDomQueryMatch | null;
+  focusWindowDom: (windowId: string, selector: string, index?: number) => WindowDomQueryMatch | null;
+  inputWindowDom: (windowId: string, selector: string, value: string, index?: number) => WindowDomInputResult | null;
+  runWindowJavaScript: (windowId: string, source: string) => Promise<WindowJsRunResult | null>;
   subscribe: (listener: (summaries: WindowSummary[]) => void) => () => void;
   destroy: () => void;
 };
@@ -125,6 +192,21 @@ const WINDOW_OFFSET_Y = 22;
 const WINDOW_STAGGER_STEPS = 8;
 const SNAP_THRESHOLD = 30;
 const LAYOUT_STORAGE_KEY = "gsv.desktop.layout.v1";
+const PREVIEW_APP: AppManifest = {
+  id: "preview",
+  name: "Preview",
+  description: "Transient file and blob preview window.",
+  icon: { kind: "fallback", label: "PV" },
+  entrypoint: { kind: "web", route: "/internal/preview" },
+  permissions: [],
+  syscalls: [],
+  windowDefaults: {
+    width: 980,
+    height: 720,
+    minWidth: 360,
+    minHeight: 280,
+  },
+};
 
 const blockSelection = (event: Event): void => {
   event.preventDefault();
@@ -256,6 +338,310 @@ function normalizeChromeText(value: string | null, maxLength = 80): string | nul
   return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 3)}...` : normalized;
 }
 
+function summarizeWindowRecord(record: WindowRecord, activeWindowId: string | null): WindowSummary {
+  return {
+    windowId: record.windowId,
+    appId: record.app.id,
+    title: record.title,
+    appName: record.app.name,
+    route: record.route,
+    mode: record.mode,
+    active: activeWindowId === record.windowId,
+    badge: record.badge,
+    dirty: record.dirty,
+    zIndex: record.zIndex,
+  };
+}
+
+function serializeBounds(rect: DOMRect): WindowDomBounds {
+  return {
+    x: Math.round(rect.x),
+    y: Math.round(rect.y),
+    width: Math.round(rect.width),
+    height: Math.round(rect.height),
+  };
+}
+
+function meaningfulText(element: Element, maxLength = 240): string | null {
+  const text = "innerText" in element
+    ? String((element as HTMLElement).innerText ?? "")
+    : element.textContent ?? "";
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return null;
+  }
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1)}...` : normalized;
+}
+
+function domAttributes(element: Element): Record<string, string> {
+  const allowed = new Set([
+    "aria-label",
+    "aria-labelledby",
+    "aria-describedby",
+    "alt",
+    "class",
+    "data-action",
+    "data-testid",
+    "href",
+    "id",
+    "name",
+    "placeholder",
+    "role",
+    "title",
+    "type",
+    "value",
+  ]);
+  const result: Record<string, string> = {};
+  for (const attr of Array.from(element.attributes)) {
+    if (allowed.has(attr.name) || attr.name.startsWith("data-")) {
+      result[attr.name] = attr.value.slice(0, 300);
+    }
+  }
+  return result;
+}
+
+function cssPath(element: Element): string {
+  const segments: string[] = [];
+  let current: Element | null = element;
+  while (current && current.nodeType === Node.ELEMENT_NODE && segments.length < 6) {
+    const id = current.id ? `#${cssEscape(current.id)}` : "";
+    if (id) {
+      segments.unshift(`${current.tagName.toLowerCase()}${id}`);
+      break;
+    }
+    const currentTag = current.tagName;
+    const parent: Element | null = current.parentElement;
+    const siblings = parent
+      ? Array.from(parent.children).filter((child) => child.tagName === currentTag)
+      : [];
+    const nth = siblings.length > 1 ? `:nth-of-type(${siblings.indexOf(current) + 1})` : "";
+    segments.unshift(`${current.tagName.toLowerCase()}${nth}`);
+    current = parent;
+  }
+  return segments.join(" > ");
+}
+
+function cssEscape(value: string): string {
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
+    return CSS.escape(value);
+  }
+  return value.replace(/[^a-zA-Z0-9_-]/g, (char) => `\\${char}`);
+}
+
+function accessibleName(element: Element): string | null {
+  const labelledBy = element.getAttribute("aria-labelledby");
+  if (labelledBy) {
+    const root = element.getRootNode();
+    const documentRoot = root as { getElementById?: (id: string) => Element | null };
+    const text = labelledBy
+      .split(/\s+/)
+      .map((id) => documentRoot.getElementById?.(id)?.textContent ?? "")
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (text) {
+      return text.slice(0, 240);
+    }
+  }
+  return element.getAttribute("aria-label")
+    ?? element.getAttribute("title")
+    ?? element.getAttribute("alt")
+    ?? null;
+}
+
+function toDomQueryMatch(element: Element, index: number): WindowDomQueryMatch {
+  return {
+    index,
+    tag: element.tagName.toLowerCase(),
+    selector: cssPath(element),
+    id: element.id || null,
+    className: element.getAttribute("class"),
+    role: element.getAttribute("role"),
+    name: accessibleName(element),
+    text: meaningfulText(element),
+    bounds: serializeBounds(element.getBoundingClientRect()),
+    attributes: domAttributes(element),
+  };
+}
+
+function snapshotElement(element: Element, depth = 0): WindowDomNodeSnapshot {
+  const children = depth >= 4
+    ? []
+    : Array.from(element.children)
+      .filter((child) => !["script", "style", "template"].includes(child.tagName.toLowerCase()))
+      .slice(0, 40)
+      .map((child) => snapshotElement(child, depth + 1));
+  return {
+    tag: element.tagName.toLowerCase(),
+    selector: cssPath(element),
+    id: element.id || null,
+    className: element.getAttribute("class"),
+    role: element.getAttribute("role"),
+    name: accessibleName(element),
+    text: meaningfulText(element),
+    bounds: serializeBounds(element.getBoundingClientRect()),
+    attributes: domAttributes(element),
+    children,
+  };
+}
+
+function focusDomElement(element: Element): void {
+  if ("scrollIntoView" in element && typeof element.scrollIntoView === "function") {
+    element.scrollIntoView({ block: "center", inline: "center", behavior: "auto" });
+  }
+  if ("focus" in element && typeof element.focus === "function") {
+    element.focus();
+  }
+}
+
+function setDomElementInputValue(element: Element, value: string): { previousValue: string | null; value: string } | null {
+  const view = element.ownerDocument.defaultView ?? window;
+  const elementWindow = view as Window & {
+    HTMLInputElement?: typeof HTMLInputElement;
+    HTMLTextAreaElement?: typeof HTMLTextAreaElement;
+    HTMLSelectElement?: typeof HTMLSelectElement;
+    HTMLElement?: typeof HTMLElement;
+    InputEvent?: typeof InputEvent;
+    Event?: typeof Event;
+  };
+  const InputCtor = elementWindow.HTMLInputElement ?? HTMLInputElement;
+  const TextareaCtor = elementWindow.HTMLTextAreaElement ?? HTMLTextAreaElement;
+  const SelectCtor = elementWindow.HTMLSelectElement ?? HTMLSelectElement;
+  const HTMLElementCtor = elementWindow.HTMLElement ?? HTMLElement;
+  const InputEventCtor = elementWindow.InputEvent ?? InputEvent;
+  const EventCtor = elementWindow.Event ?? Event;
+
+  if (element instanceof InputCtor || element instanceof TextareaCtor || element instanceof SelectCtor) {
+    const control = element as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+    const previousValue = control.value;
+    setNativeElementValue(control, value);
+    control.dispatchEvent(new InputEventCtor("input", { bubbles: true, inputType: "insertText", data: value }));
+    control.dispatchEvent(new EventCtor("change", { bubbles: true }));
+    return { previousValue, value: control.value };
+  }
+
+  if (element instanceof HTMLElementCtor && element.isContentEditable) {
+    const previousValue = element.textContent ?? "";
+    element.textContent = value;
+    element.dispatchEvent(new InputEventCtor("input", { bubbles: true, inputType: "insertText", data: value }));
+    return { previousValue, value: element.textContent ?? "" };
+  }
+
+  return null;
+}
+
+function setNativeElementValue(
+  element: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement,
+  value: string,
+): void {
+  const prototype = Object.getPrototypeOf(element) as object | null;
+  const descriptor = prototype ? Object.getOwnPropertyDescriptor(prototype, "value") : null;
+  if (descriptor?.set) {
+    descriptor.set.call(element, value);
+    return;
+  }
+  element.value = value;
+}
+
+function dispatchDomClick(target: Element, point?: { x: number; y: number }): void {
+  focusDomElement(target);
+
+  const view = target.ownerDocument.defaultView ?? window;
+  const eventWindow = view as Window & { PointerEvent?: typeof PointerEvent; MouseEvent?: typeof MouseEvent };
+  const eventInit = {
+    bubbles: true,
+    cancelable: true,
+    view,
+    clientX: point?.x ?? 0,
+    clientY: point?.y ?? 0,
+  };
+  const PointerCtor = eventWindow.PointerEvent;
+  if (PointerCtor) {
+    target.dispatchEvent(new PointerCtor("pointerdown", eventInit));
+    target.dispatchEvent(new PointerCtor("pointerup", eventInit));
+  }
+  if ("click" in target && typeof target.click === "function") {
+    target.click();
+  } else {
+    const MouseCtor = eventWindow.MouseEvent ?? MouseEvent;
+    target.dispatchEvent(new MouseCtor("click", eventInit));
+  }
+}
+
+function serializeJsResult(value: unknown): unknown {
+  if (value === null || value === undefined) {
+    return value ?? null;
+  }
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.slice(0, 50).map((item) => serializeJsResult(item));
+  }
+  if (isElementLike(value)) {
+    return toDomQueryMatch(value, 0);
+  }
+  if (isNodeLike(value)) {
+    return {
+      nodeType: value.nodeType,
+      nodeName: value.nodeName,
+      text: value.textContent?.replace(/\s+/g, " ").trim().slice(0, 500) ?? null,
+    };
+  }
+  if (isArrayLikeCollection(value)) {
+    return Array.from(value)
+      .slice(0, 50)
+      .map((item) => serializeJsResult(item));
+  }
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return String(value);
+  }
+}
+
+function isElementLike(value: unknown): value is Element {
+  return typeof value === "object"
+    && value !== null
+    && "nodeType" in value
+    && (value as { nodeType: unknown }).nodeType === Node.ELEMENT_NODE
+    && "tagName" in value;
+}
+
+function isNodeLike(value: unknown): value is Node {
+  return typeof value === "object"
+    && value !== null
+    && "nodeType" in value
+    && typeof (value as { nodeType: unknown }).nodeType === "number"
+    && "nodeName" in value;
+}
+
+function isArrayLikeCollection(value: unknown): value is ArrayLike<unknown> {
+  return typeof value === "object"
+    && value !== null
+    && "length" in value
+    && typeof (value as { length: unknown }).length === "number"
+    && "item" in value
+    && typeof (value as { item: unknown }).item === "function";
+}
+
+function jsExecutionBody(source: string): string {
+  const trimmed = source.trim();
+  if (!trimmed) {
+    return "return null;";
+  }
+
+  if (
+    trimmed.includes(";")
+    || trimmed.includes("\n")
+    || /^(return|throw|let|const|var|if|for|while|switch|try|class|function)\b/.test(trimmed)
+  ) {
+    return trimmed;
+  }
+
+  return `return (${trimmed});`;
+}
+
 export function createWindowManager({ layerNode, appRegistry, appRuntime }: WindowManagerOptions): WindowManager {
   const windows = new Map<string, WindowRecord>();
   let appById = new Map(appRegistry.map((app) => [app.id, app]));
@@ -378,28 +764,19 @@ export function createWindowManager({ layerNode, appRegistry, appRuntime }: Wind
   const buildSummaries = (): WindowSummary[] => {
     return [...windows.values()]
       .sort((left, right) => left.zIndex - right.zIndex)
-      .map((record) => ({
-        windowId: record.windowId,
-        appId: record.app.id,
-        title: record.title,
-        appName: record.app.name,
-        route: record.route,
-        mode: record.mode,
-        active: activeWindowId === record.windowId,
-        badge: record.badge,
-        dirty: record.dirty,
-        zIndex: record.zIndex,
-      }));
+      .map((record) => summarizeWindowRecord(record, activeWindowId));
   };
 
   const persistLayout = (): void => {
     const ordered = [...windows.values()].sort((left, right) => left.zIndex - right.zIndex);
-    const activeAppId = activeWindowId ? windows.get(activeWindowId)?.app.id ?? null : null;
+    const persistent = ordered.filter((record) => record.persist);
+    const activeRecord = activeWindowId ? windows.get(activeWindowId) ?? null : null;
+    const activeAppId = activeRecord?.persist ? activeRecord.app.id : null;
 
     const layout: PersistedLayout = {
       version: 1,
       activeAppId,
-      windows: ordered.map((record) => ({
+      windows: persistent.map((record) => ({
         appId: record.app.id,
         route: record.route,
         title: record.title === record.app.name ? undefined : record.title,
@@ -587,6 +964,16 @@ export function createWindowManager({ layerNode, appRegistry, appRuntime }: Wind
   };
 
   const detachRuntime = (record: WindowRecord): void => {
+    const preview = record.preview;
+    if (preview) {
+      record.preview = null;
+      try {
+        preview.dispose();
+      } catch {
+        // Ignore preview teardown errors during window disposal.
+      }
+    }
+
     const runtime = record.runtime;
     if (!runtime) {
       return;
@@ -1081,6 +1468,8 @@ export function createWindowManager({ layerNode, appRegistry, appRuntime }: Wind
       dragHandleNode,
       contentNode,
       runtime: null,
+      preview: null,
+      persist: true,
     };
 
     if (!persisted) {
@@ -1203,6 +1592,219 @@ export function createWindowManager({ layerNode, appRegistry, appRuntime }: Wind
     emit();
 
     return record.windowId;
+  };
+
+  const openAppById = (
+    appId: string,
+    route?: string,
+    options?: { forceRestart?: boolean; forceNew?: boolean },
+  ): string | null => {
+    const app = appById.get(appId);
+    if (!app) {
+      return null;
+    }
+    return openApp(app, route, options);
+  };
+
+  const openPreview = (preview: PreviewWindowContent): string => {
+    const route = `preview:${preview.sourceLabel}`;
+    const record = createRecord(PREVIEW_APP, undefined, route);
+    record.title = normalizeChromeText(preview.title) ?? PREVIEW_APP.name;
+    record.persist = false;
+    record.preview = {
+      dispose: mountPreviewWindow(record.contentNode, preview),
+    };
+    attachWindowListeners(record);
+    windows.set(record.windowId, record);
+    layerNode.appendChild(record.node);
+
+    activeWindowId = record.windowId;
+    repaintAll();
+    emit();
+
+    return record.windowId;
+  };
+
+  const automationContext = (windowId: string): {
+    record: WindowRecord;
+    root: Element;
+    document: Document;
+    window: Window;
+  } | null => {
+    const record = windows.get(windowId);
+    if (!record) {
+      return null;
+    }
+
+    if (record.mode === "minimized") {
+      restoreWindow(windowId);
+    } else {
+      focusWindow(windowId);
+    }
+
+    const iframe = record.contentNode.querySelector<HTMLIFrameElement>("iframe");
+    if (!iframe) {
+      return {
+        record,
+        root: record.contentNode,
+        document: record.contentNode.ownerDocument,
+        window,
+      };
+    }
+
+    try {
+      const frameDocument = iframe.contentDocument;
+      const frameWindow = iframe.contentWindow;
+      const root = frameDocument?.body ?? frameDocument?.documentElement ?? null;
+      if (!frameDocument || !frameWindow || !root) {
+        return null;
+      }
+      return {
+        record,
+        root,
+        document: frameDocument,
+        window: frameWindow,
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  const queryAutomationElements = (root: Element, selector: string): Element[] => {
+    const trimmed = selector.trim();
+    if (!trimmed) {
+      return [];
+    }
+    const matches = root.matches(trimmed) ? [root] : [];
+    matches.push(...Array.from(root.querySelectorAll(trimmed)));
+    return matches;
+  };
+
+  const snapshotWindowDom = (windowId: string, selector?: string | null): WindowDomSnapshot | null => {
+    const context = automationContext(windowId);
+    if (!context) {
+      return null;
+    }
+
+    const trimmedSelector = selector?.trim() || null;
+    const root = trimmedSelector
+      ? queryAutomationElements(context.root, trimmedSelector)[0] ?? null
+      : context.root;
+    if (!root) {
+      return null;
+    }
+
+    return {
+      window: summarizeWindowRecord(context.record, activeWindowId),
+      url: context.document.location.href,
+      selector: trimmedSelector ?? "root",
+      root: snapshotElement(root),
+    };
+  };
+
+  const queryWindowDom = (windowId: string, selector: string): WindowDomQueryMatch[] | null => {
+    const context = automationContext(windowId);
+    if (!context) {
+      return null;
+    }
+    return queryAutomationElements(context.root, selector)
+      .slice(0, 100)
+      .map((element, index) => toDomQueryMatch(element, index));
+  };
+
+  const clickWindowDom = (windowId: string, selector: string, index = 0): WindowDomQueryMatch | null => {
+    const context = automationContext(windowId);
+    if (!context) {
+      return null;
+    }
+
+    const elements = queryAutomationElements(context.root, selector);
+    const target = elements[Math.max(0, Math.floor(index))] ?? null;
+    if (!target) {
+      return null;
+    }
+
+    dispatchDomClick(target);
+    return toDomQueryMatch(target, elements.indexOf(target));
+  };
+
+  const clickWindowPoint = (windowId: string, x: number, y: number): WindowDomQueryMatch | null => {
+    const context = automationContext(windowId);
+    if (!context) {
+      return null;
+    }
+
+    const target = context.document.elementFromPoint(x, y);
+    if (!target) {
+      return null;
+    }
+    dispatchDomClick(target, { x, y });
+    return toDomQueryMatch(target, 0);
+  };
+
+  const focusWindowDom = (windowId: string, selector: string, index = 0): WindowDomQueryMatch | null => {
+    const context = automationContext(windowId);
+    if (!context) {
+      return null;
+    }
+
+    const elements = queryAutomationElements(context.root, selector);
+    const target = elements[Math.max(0, Math.floor(index))] ?? null;
+    if (!target) {
+      return null;
+    }
+
+    focusDomElement(target);
+    return toDomQueryMatch(target, elements.indexOf(target));
+  };
+
+  const inputWindowDom = (windowId: string, selector: string, value: string, index = 0): WindowDomInputResult | null => {
+    const context = automationContext(windowId);
+    if (!context) {
+      return null;
+    }
+
+    const elements = queryAutomationElements(context.root, selector);
+    const target = elements[Math.max(0, Math.floor(index))] ?? null;
+    if (!target) {
+      return null;
+    }
+
+    focusDomElement(target);
+    const input = setDomElementInputValue(target, value);
+    if (!input) {
+      return null;
+    }
+
+    return {
+      ...toDomQueryMatch(target, elements.indexOf(target)),
+      ...input,
+    };
+  };
+
+  const runWindowJavaScript = async (windowId: string, source: string): Promise<WindowJsRunResult | null> => {
+    const context = automationContext(windowId);
+    if (!context) {
+      return null;
+    }
+
+    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as new (...args: string[]) => (...values: unknown[]) => Promise<unknown>;
+    const fn = new AsyncFunction(
+      "window",
+      "document",
+      "root",
+      `
+        return await (async function () {
+          with (window) {
+            ${jsExecutionBody(source)}
+          }
+        }).call(window);
+      `,
+    );
+    const result = await fn(context.window, context.document, context.root);
+    return {
+      result: serializeJsResult(result),
+    };
   };
 
   const onPointerMove = (event: PointerEvent): void => {
@@ -1408,6 +2010,8 @@ export function createWindowManager({ layerNode, appRegistry, appRuntime }: Wind
 
   return {
     openApp,
+    openAppById,
+    openPreview,
     focusWindow,
     restoreWindow,
     minimizeWindow,
@@ -1417,6 +2021,15 @@ export function createWindowManager({ layerNode, appRegistry, appRuntime }: Wind
     setWindowTitle,
     setWindowBadge,
     setWindowDirty,
+    listApps: () => [...appById.values()],
+    listWindows: buildSummaries,
+    snapshotWindowDom,
+    queryWindowDom,
+    clickWindowDom,
+    clickWindowPoint,
+    focusWindowDom,
+    inputWindowDom,
+    runWindowJavaScript,
     subscribe: (listener) => {
       listeners.add(listener);
       listener(buildSummaries());

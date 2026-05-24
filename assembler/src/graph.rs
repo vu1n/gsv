@@ -1,11 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
 use oxc_resolver::ModuleType;
 
 use crate::diagnostics::{has_errors, PackageAssemblyDiagnostic};
 use crate::model::{PackageAssemblyArtifactModule, PackageAssemblyArtifactModuleKind};
 use crate::npm::InstalledAssembly;
-use crate::oxc::{transform_module_source_with_oxc, OxcResolver};
+use crate::oxc::{
+    transform_browser_module_source_with_oxc, transform_module_source_with_oxc, OxcResolver,
+};
 use crate::pipeline::StageOutcome;
 use crate::virtual_fs::extension;
 
@@ -39,7 +42,12 @@ pub fn build_module_graph_for_entry(
     installed: &InstalledAssembly,
     entry_path: &str,
 ) -> StageOutcome<ModuleGraph> {
-    build_module_graph_for_entry_with_resolver(installed, entry_path, OxcResolver::new(installed.files.clone()))
+    build_module_graph_for_entry_with_resolver(
+        installed,
+        entry_path,
+        OxcResolver::new(installed.files.clone()),
+        false,
+    )
 }
 
 pub fn build_module_graph_for_browser_entry(
@@ -50,6 +58,7 @@ pub fn build_module_graph_for_browser_entry(
         installed,
         entry_path,
         OxcResolver::new_browser(installed.files.clone()),
+        true,
     )
 }
 
@@ -57,6 +66,7 @@ fn build_module_graph_for_entry_with_resolver(
     installed: &InstalledAssembly,
     entry_path: &str,
     resolver: OxcResolver,
+    minify_source_modules: bool,
 ) -> StageOutcome<ModuleGraph> {
     let mut diagnostics = Vec::new();
     let main_module = entry_path.to_string();
@@ -73,19 +83,23 @@ fn build_module_graph_for_entry_with_resolver(
             continue;
         }
 
-        let Some(content) = installed.files.get(&path) else {
-            diagnostics.push(PackageAssemblyDiagnostic::error(
-                "internal.missing-file",
-                format!("Resolved module {path} is missing from the virtual file tree."),
-                path.clone(),
-            ));
-            continue;
-        };
-
         let kind = infer_module_kind(&path, entry.module_type);
         match kind {
             Some(PackageAssemblyArtifactModuleKind::SourceModule) => {
-                match transform_module_source_with_oxc(&path, content) {
+                let Some(content) = installed.files.get(&path) else {
+                    diagnostics.push(PackageAssemblyDiagnostic::error(
+                        "internal.missing-file",
+                        format!("Resolved module {path} is missing from the virtual file tree."),
+                        path.clone(),
+                    ));
+                    continue;
+                };
+                let transformed_result = if minify_source_modules {
+                    transform_browser_module_source_with_oxc(&path, content)
+                } else {
+                    transform_module_source_with_oxc(&path, content)
+                };
+                match transformed_result {
                     Ok(transformed) => {
                         emitted.insert(
                             path.clone(),
@@ -103,16 +117,6 @@ fn build_module_graph_for_entry_with_resolver(
                                         resolved.module_type,
                                     );
                                     match resolved_kind {
-                                        Some(PackageAssemblyArtifactModuleKind::Data) => {
-                                            diagnostics.push(PackageAssemblyDiagnostic::error(
-                                                "emit.unsupported-module-kind",
-                                                format!(
-                                                    "Resolved module {} has unsupported binary module kind.",
-                                                    resolved.repo_path
-                                                ),
-                                                resolved.repo_path,
-                                            ));
-                                        }
                                         Some(_) => {
                                             queue.push_back(QueueEntry {
                                                 path: resolved.repo_path,
@@ -138,7 +142,33 @@ fn build_module_graph_for_entry_with_resolver(
                     Err(error) => diagnostics.push(error),
                 }
             }
+            Some(PackageAssemblyArtifactModuleKind::Data) => {
+                let Some(bytes) = installed.files.get_bytes(&path) else {
+                    diagnostics.push(PackageAssemblyDiagnostic::error(
+                        "internal.missing-file",
+                        format!("Resolved module {path} is missing from the virtual file tree."),
+                        path.clone(),
+                    ));
+                    continue;
+                };
+                emitted.insert(
+                    path.clone(),
+                    PackageAssemblyArtifactModule {
+                        path: path.clone(),
+                        kind: PackageAssemblyArtifactModuleKind::Data,
+                        content: BASE64_STANDARD.encode(bytes),
+                    },
+                );
+            }
             Some(kind) => {
+                let Some(content) = installed.files.get(&path) else {
+                    diagnostics.push(PackageAssemblyDiagnostic::error(
+                        "emit.unsupported-module-kind",
+                        format!("Module {path} is not UTF-8 text."),
+                        path.clone(),
+                    ));
+                    continue;
+                };
                 emitted.insert(
                     path.clone(),
                     PackageAssemblyArtifactModule {
@@ -190,6 +220,7 @@ fn infer_module_kind(
         "cts" | "cjs" => Some(PackageAssemblyArtifactModuleKind::Commonjs),
         "json" => Some(PackageAssemblyArtifactModuleKind::Json),
         "txt" | "md" | "css" | "html" | "svg" => Some(PackageAssemblyArtifactModuleKind::Text),
+        "wasm" => Some(PackageAssemblyArtifactModuleKind::Data),
         _ => None,
     }
 }

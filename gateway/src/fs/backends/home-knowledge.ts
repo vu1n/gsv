@@ -24,6 +24,8 @@ type HomePathKind =
   | "context-path"
   | "skills-root"
   | "skills-path"
+  | "profiles-root"
+  | "profiles-path"
   | "knowledge-root"
   | "knowledge-path"
   | "other";
@@ -69,6 +71,10 @@ class HomeKnowledgeMountBackend implements MountBackend {
 
   private get skillsRoot() {
     return normalizePath(`${this.identity.home}/skills.d`);
+  }
+
+  private get profilesRoot() {
+    return normalizePath(`${this.identity.home}/profiles.d`);
   }
 
   private get knowledgeRoot() {
@@ -117,7 +123,7 @@ class HomeKnowledgeMountBackend implements MountBackend {
       return;
     }
 
-    if (kind === "context-root" || kind === "skills-root" || kind === "knowledge-root") {
+    if (kind === "context-root" || kind === "skills-root" || kind === "profiles-root" || kind === "knowledge-root") {
       throw new Error(`EISDIR: illegal operation on a directory, write '${normalized}'`);
     }
 
@@ -137,7 +143,7 @@ class HomeKnowledgeMountBackend implements MountBackend {
       return;
     }
 
-    if (kind === "context-root" || kind === "skills-root" || kind === "knowledge-root") {
+    if (kind === "context-root" || kind === "skills-root" || kind === "profiles-root" || kind === "knowledge-root") {
       throw new Error(`EISDIR: illegal operation on a directory, append '${normalized}'`);
     }
 
@@ -160,7 +166,7 @@ class HomeKnowledgeMountBackend implements MountBackend {
     if (kind === "other") {
       return this.fallback.exists(normalized);
     }
-    if (kind === "context-root" || kind === "skills-root" || kind === "knowledge-root") {
+    if (kind === "context-root" || kind === "skills-root" || kind === "profiles-root" || kind === "knowledge-root") {
       return true;
     }
 
@@ -177,6 +183,10 @@ class HomeKnowledgeMountBackend implements MountBackend {
   }
 
   async stat(path: string): Promise<ExtendedMountStat> {
+    return this.lstat(path);
+  }
+
+  async lstat(path: string): Promise<ExtendedMountStat> {
     const normalized = normalizePath(path);
     const kind = this.classify(normalized);
 
@@ -186,8 +196,22 @@ class HomeKnowledgeMountBackend implements MountBackend {
     if (kind === "other") {
       return this.fallback.stat(normalized);
     }
-    if (kind === "context-root" || kind === "skills-root" || kind === "knowledge-root") {
+    if (kind === "context-root" || kind === "skills-root" || kind === "profiles-root" || kind === "knowledge-root") {
       return this.makeDirectoryStat();
+    }
+
+    const entry = await this.readOverlayEntry(normalized);
+    if (entry?.type === "symlink") {
+      return {
+        isFile: false,
+        isDirectory: false,
+        isSymbolicLink: true,
+        mode: 0o777,
+        size: 0,
+        mtime: new Date(),
+        uid: this.identity.uid,
+        gid: this.identity.gid,
+      };
     }
 
     const result = await this.readOverlay(normalized);
@@ -218,7 +242,7 @@ class HomeKnowledgeMountBackend implements MountBackend {
     const normalized = normalizePath(path);
     const kind = this.classify(normalized);
 
-    if (kind === "home" || kind === "context-root" || kind === "skills-root" || kind === "knowledge-root") {
+    if (kind === "home" || kind === "context-root" || kind === "skills-root" || kind === "profiles-root" || kind === "knowledge-root") {
       return;
     }
     if (kind === "other") {
@@ -247,6 +271,7 @@ class HomeKnowledgeMountBackend implements MountBackend {
       }
       entries.add("context.d");
       entries.add("skills.d");
+      entries.add("profiles.d");
       entries.add("knowledge");
       if (await this.pathExistsInRepo("CONSTITUTION.md") || await this.fallback.exists(this.constitutionPath).catch(() => false)) {
         entries.add("CONSTITUTION.md");
@@ -273,7 +298,7 @@ class HomeKnowledgeMountBackend implements MountBackend {
     }
 
     if (entries.size === 0) {
-      if (kind === "context-root" || kind === "skills-root" || kind === "knowledge-root") {
+      if (kind === "context-root" || kind === "skills-root" || kind === "profiles-root" || kind === "knowledge-root") {
         return [];
       }
       throw new Error(`ENOENT: no such file or directory, scandir '${normalized}'`);
@@ -293,7 +318,7 @@ class HomeKnowledgeMountBackend implements MountBackend {
       await this.fallback.rm(normalized, options);
       return;
     }
-    if (kind === "context-root" || kind === "skills-root" || kind === "knowledge-root") {
+    if (kind === "context-root" || kind === "skills-root" || kind === "profiles-root" || kind === "knowledge-root") {
       const entries = await this.readdir(normalized);
       if (entries.length > 0 && !options?.recursive) {
         throw new Error(`ENOTEMPTY: directory not empty, rmdir '${normalized}'`);
@@ -375,6 +400,57 @@ class HomeKnowledgeMountBackend implements MountBackend {
     return { matches: [...combined.values()] };
   }
 
+  async symlink(target: string, linkPath: string): Promise<void> {
+    const normalized = normalizePath(linkPath);
+    const kind = this.classify(normalized);
+
+    if (kind === "other" || kind === "home") {
+      await this.fallback.symlink(target, normalized);
+      return;
+    }
+    if (kind === "context-root" || kind === "skills-root" || kind === "profiles-root" || kind === "knowledge-root") {
+      throw new Error(`EISDIR: illegal operation on a directory, symlink '${normalized}'`);
+    }
+
+    const relativePath = this.relativePathForOverlay(normalized);
+    await this.client.apply(
+      this.repo,
+      this.identity.username,
+      `${this.identity.username}@gsv.local`,
+      `gsv: symlink ${relativePath}`,
+      [
+        {
+          type: "symlink",
+          path: relativePath,
+          target,
+        },
+      ],
+    );
+  }
+
+  async readlink(path: string): Promise<string> {
+    const normalized = normalizePath(path);
+    const kind = this.classify(normalized);
+
+    if (kind === "other" || kind === "home") {
+      return this.fallback.readlink(normalized);
+    }
+
+    const entry = await this.readOverlayEntry(normalized);
+    if (entry?.type !== "symlink") {
+      if (this.canFallbackToR2(normalized)) {
+        return this.fallback.readlink(normalized);
+      }
+      throw new Error(`EINVAL: invalid argument, readlink '${normalized}'`);
+    }
+
+    const result = await this.readOverlay(normalized);
+    if (result.kind !== "file") {
+      throw new Error(`EINVAL: invalid argument, readlink '${normalized}'`);
+    }
+    return TEXT_DECODER.decode(result.bytes);
+  }
+
   private classify(path: string): HomePathKind {
     if (path === this.home) {
       return "home";
@@ -393,6 +469,12 @@ class HomeKnowledgeMountBackend implements MountBackend {
     }
     if (path.startsWith(`${this.skillsRoot}/`)) {
       return "skills-path";
+    }
+    if (path === this.profilesRoot) {
+      return "profiles-root";
+    }
+    if (path.startsWith(`${this.profilesRoot}/`)) {
+      return "profiles-path";
     }
     if (path === this.knowledgeRoot) {
       return "knowledge-root";
@@ -418,11 +500,29 @@ class HomeKnowledgeMountBackend implements MountBackend {
       || path === this.contextRoot
       || path.startsWith(`${this.contextRoot}/`)
       || path === this.skillsRoot
-      || path.startsWith(`${this.skillsRoot}/`);
+      || path.startsWith(`${this.skillsRoot}/`)
+      || path === this.profilesRoot
+      || path.startsWith(`${this.profilesRoot}/`);
   }
 
   private async readOverlay(path: string): Promise<RipgitPathResult> {
     return this.client.readPath(this.repo, this.relativePathForOverlay(path));
+  }
+
+  private async readOverlayEntry(path: string): Promise<{ type: string } | null> {
+    const relativePath = this.relativePathForOverlay(path);
+    const parts = relativePath.split("/").filter(Boolean);
+    if (parts.length === 0) {
+      return null;
+    }
+
+    const name = parts[parts.length - 1];
+    const parent = parts.slice(0, -1).join("/");
+    const result = await this.client.readPath(this.repo, parent);
+    if (result.kind !== "tree") {
+      return null;
+    }
+    return result.entries.find((entry) => entry.name === name) ?? null;
   }
 
   private async pathExistsInRepo(relativePath: string): Promise<boolean> {

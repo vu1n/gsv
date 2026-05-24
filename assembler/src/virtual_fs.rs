@@ -1,8 +1,48 @@
 use std::collections::BTreeMap;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum VirtualFileContent {
+    Text(String),
+    Binary(Vec<u8>),
+}
+
+impl VirtualFileContent {
+    pub fn as_text(&self) -> Option<&str> {
+        match self {
+            Self::Text(value) => Some(value.as_str()),
+            Self::Binary(_) => None,
+        }
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        match self {
+            Self::Text(value) => value.as_bytes(),
+            Self::Binary(value) => value.as_slice(),
+        }
+    }
+}
+
+impl From<String> for VirtualFileContent {
+    fn from(value: String) -> Self {
+        Self::Text(value)
+    }
+}
+
+impl From<&str> for VirtualFileContent {
+    fn from(value: &str) -> Self {
+        Self::Text(value.to_string())
+    }
+}
+
+impl From<Vec<u8>> for VirtualFileContent {
+    fn from(value: Vec<u8>) -> Self {
+        Self::Binary(value)
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct VirtualFileTree {
-    files: BTreeMap<String, String>,
+    files: BTreeMap<String, VirtualFileContent>,
 }
 
 impl VirtualFileTree {
@@ -14,12 +54,16 @@ impl VirtualFileTree {
         tree
     }
 
-    pub fn insert(&mut self, path: impl AsRef<str>, content: impl Into<String>) {
+    pub fn insert(&mut self, path: impl AsRef<str>, content: impl Into<VirtualFileContent>) {
         let normalized = normalize_repo_path(path.as_ref());
         self.files.insert(normalized, content.into());
     }
 
-    pub fn insert_if_missing(&mut self, path: impl AsRef<str>, content: impl Into<String>) {
+    pub fn insert_if_missing(
+        &mut self,
+        path: impl AsRef<str>,
+        content: impl Into<VirtualFileContent>,
+    ) {
         let normalized = normalize_repo_path(path.as_ref());
         self.files
             .entry(normalized)
@@ -33,14 +77,33 @@ impl VirtualFileTree {
 
     pub fn get(&self, path: impl AsRef<str>) -> Option<&str> {
         let normalized = normalize_repo_path(path.as_ref());
-        self.files.get(&normalized).map(String::as_str)
+        self.files
+            .get(&normalized)
+            .and_then(VirtualFileContent::as_text)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&String, &String)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &str)> {
+        self.files
+            .iter()
+            .filter_map(|(path, content)| content.as_text().map(|text| (path, text)))
+    }
+
+    pub fn entries(&self) -> impl Iterator<Item = (&String, &VirtualFileContent)> {
         self.files.iter()
     }
 
-    pub fn into_inner(self) -> BTreeMap<String, String> {
+    pub fn get_bytes(&self, path: impl AsRef<str>) -> Option<&[u8]> {
+        let normalized = normalize_repo_path(path.as_ref());
+        self.files
+            .get(&normalized)
+            .map(VirtualFileContent::as_bytes)
+    }
+
+    pub fn paths(&self) -> impl Iterator<Item = &String> {
+        self.files.keys()
+    }
+
+    pub fn into_inner(self) -> BTreeMap<String, VirtualFileContent> {
         self.files
     }
 }

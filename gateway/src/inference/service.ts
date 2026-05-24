@@ -7,6 +7,7 @@ import type {
 import { completeSimple, getModels, getProviders } from "@earendil-works/pi-ai";
 import type { AiConfigResult } from "../syscalls/ai";
 import { completeWithWorkersAi, isWorkersAiProvider } from "./workers-ai";
+import { withTimeout } from "./timeout";
 
 export type GenerationPurpose =
   | "chat.reply"
@@ -36,9 +37,12 @@ type ResolvedGenerationOptions = {
   maxTokens: number;
 };
 
+const DEFAULT_GENERATION_TIMEOUT_MS = 180_000;
+
 export function createGenerationService(): GenerationService {
   const generate = async (request: GenerateRequest): Promise<AssistantMessage> => {
     const options = resolveGenerationOptions(request);
+    const generationTimeoutMs = resolveGenerationTimeoutMs(request.config);
     if (isWorkersAiProvider(options.modelProvider)) {
       return completeWithWorkersAi({
         modelName: options.modelName,
@@ -46,15 +50,30 @@ export function createGenerationService(): GenerationService {
         reasoning: options.reasoning,
         maxTokens: options.maxTokens,
         sessionAffinityKey: request.sessionAffinityKey,
+        timeoutMs: generationTimeoutMs,
       });
     }
 
     const model = resolveModel(options.modelProvider, options.modelName);
-    return completeSimple(model, request.context, {
-      apiKey: options.apiKey,
-      reasoning: options.reasoning,
-      maxTokens: options.maxTokens,
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => {
+      controller.abort(new Error(generationTimeoutMessage(generationTimeoutMs)));
+    }, generationTimeoutMs);
+    try {
+      return await withTimeout(
+        completeSimple(model, request.context, {
+          apiKey: options.apiKey,
+          reasoning: options.reasoning,
+          maxTokens: options.maxTokens,
+          signal: controller.signal,
+          timeoutMs: generationTimeoutMs,
+        }),
+        generationTimeoutMs,
+        generationTimeoutMessage(generationTimeoutMs),
+      );
+    } finally {
+      clearTimeout(timeout);
+    }
   };
 
   return {
@@ -129,6 +148,13 @@ export function resolveGenerationOptions(
   }
 }
 
+export function resolveGenerationTimeoutMs(config: AiConfigResult): number {
+  const timeoutMs = (config as Partial<AiConfigResult>).generationTimeoutMs;
+  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? timeoutMs
+    : DEFAULT_GENERATION_TIMEOUT_MS;
+}
+
 function resolveModel(provider: string, modelName: string) {
   if (!isKnownProvider(provider)) {
     throw new Error(`Unknown model provider: ${provider}`);
@@ -138,6 +164,10 @@ function resolveModel(provider: string, modelName: string) {
     throw new Error(`Model not found: ${provider}/${modelName}`);
   }
   return model;
+}
+
+function generationTimeoutMessage(timeoutMs: number): string {
+  return `Model generation timed out after ${timeoutMs}ms`;
 }
 
 function isKnownProvider(provider: string): provider is KnownProvider {

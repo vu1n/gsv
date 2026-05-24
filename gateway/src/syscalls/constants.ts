@@ -4,6 +4,7 @@ export const FS_WRITE = "fs.write";
 export const FS_EDIT = "fs.edit";
 export const FS_DELETE = "fs.delete";
 export const FS_SEARCH = "fs.search";
+export const FS_COPY = "fs.copy";
 
 // Shell (device commands)
 export const SHELL_EXEC = "shell.exec";
@@ -59,6 +60,7 @@ export const SYS_CONFIG_SET = "sys.config.set";
 export const SYS_DEVICE_LIST = "sys.device.list";
 export const SYS_DEVICE_GET = "sys.device.get";
 export const SYS_DEVICE_UPDATE = "sys.device.update";
+export const SYS_TARGET_REGISTER = "sys.target.register";
 export const SYS_OAUTH_START = "sys.oauth.start";
 export const SYS_OAUTH_LIST = "sys.oauth.list";
 export const SYS_OAUTH_FORGET = "sys.oauth.forget";
@@ -85,6 +87,8 @@ export const SCHED_RUN = "sched.run";
 // AI (process bootstrap)
 export const AI_TOOLS = "ai.tools";
 export const AI_CONFIG = "ai.config";
+export const AI_TRANSCRIPTION_CREATE = "ai.transcription.create";
+export const AI_SPEECH_CREATE = "ai.speech.create";
 
 // Adapter transport (external connectors)
 export const ADAPTER_INBOUND = "adapter.inbound";

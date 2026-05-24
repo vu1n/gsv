@@ -19,6 +19,8 @@ import {
   type WASocket,
   type BaileysEventMap,
   type WAMessage,
+  type AnyMessageContent,
+  type WAMessageKey,
 } from "@whiskeysockets/baileys";
 import {
   getMediaKeys,
@@ -145,6 +147,29 @@ function normalizeWhatsAppJid(jid: string | null | undefined): string | null {
   return normalized;
 }
 
+function normalizeOutboundWhatsAppJid(jid: string | null | undefined): string {
+  let normalized = (jid ?? "").trim();
+  if (!normalized) {
+    throw new Error("WhatsApp JID is required");
+  }
+  if (normalized.startsWith("wa:jid:")) {
+    normalized = normalized.slice("wa:jid:".length);
+  }
+  if (normalized.startsWith("+") && !normalized.includes("@")) {
+    const digits = normalized.slice(1).replace(/\D/g, "");
+    if (digits) return `${digits}@s.whatsapp.net`;
+  }
+  if (/^\d+$/.test(normalized)) {
+    return `${normalized}@s.whatsapp.net`;
+  }
+  return normalizeWhatsAppJid(normalized) ?? normalized;
+}
+
+function base64Payload(data: string): string {
+  const dataUrl = /^data:[^;,]+;base64,(.*)$/is.exec(data.trim());
+  return dataUrl ? dataUrl[1] : data;
+}
+
 function phoneDigitsFromSenderPn(senderPn?: string): string | null {
   const match = typeof senderPn === "string" ? senderPn.trim().match(/^(\d+)(?::\d+)?@/) : null;
   return match?.[1] ?? null;
@@ -218,6 +243,8 @@ export class WhatsAppAccount extends DurableObject<Env> {
           return await this.handleWake();
         case "/send":
           return await this.handleSend(request);
+        case "/react":
+          return await this.handleReact(request);
         case "/typing":
           return await this.handleTyping(request);
         default:
@@ -381,19 +408,61 @@ export class WhatsAppAccount extends DurableObject<Env> {
     }
 
     const message = await request.json() as ChannelOutboundMessage;
-    
-    // Convert peer ID to WhatsApp JID format
-    let jid = message.peer.id;
-    if (jid.startsWith("+") && !jid.includes("@")) {
-      jid = `${jid.slice(1)}@s.whatsapp.net`;
-    }
+    const jid = normalizeOutboundWhatsAppJid(message.peer.id);
 
     try {
-      const sent = await this.sock.sendMessage(jid, { text: message.text });
+      const content = this.buildOutboundContent(message);
+      const sent = await this.sock.sendMessage(jid, content);
       console.log(`[WA] Sent to ${jid}: "${message.text.substring(0, 50)}..."`);
       return Response.json({ success: true, messageId: sent?.key?.id });
     } catch (e) {
       console.error(`[WA] Send failed:`, e);
+      return Response.json({ success: false, error: String(e) }, { status: 500 });
+    }
+  }
+
+  /**
+   * Handle explicit reaction from adapter shell.
+   */
+  private async handleReact(request: Request): Promise<Response> {
+    if (!this.sock || !this.state.connected) {
+      return Response.json({ error: "Not connected" }, { status: 503 });
+    }
+
+    const body = await request.json() as {
+      peer: ChannelPeer;
+      messageId: string;
+      emoji: string;
+      participant?: string;
+    };
+
+    if (!body.peer?.id || !body.messageId || typeof body.emoji !== "string") {
+      return Response.json(
+        { success: false, error: "peer.id, messageId, and emoji are required" },
+        { status: 400 },
+      );
+    }
+
+    const jid = normalizeOutboundWhatsAppJid(body.peer.id);
+    const key: WAMessageKey = {
+      remoteJid: jid,
+      id: body.messageId,
+      fromMe: false,
+    };
+    if (body.participant) {
+      key.participant = normalizeOutboundWhatsAppJid(body.participant);
+    }
+
+    try {
+      await this.sock.sendMessage(jid, {
+        react: {
+          text: body.emoji,
+          key,
+        },
+      });
+      return Response.json({ success: true });
+    } catch (e) {
+      console.error(`[WA] React failed:`, e);
       return Response.json({ success: false, error: String(e) }, { status: 500 });
     }
   }
@@ -407,11 +476,7 @@ export class WhatsAppAccount extends DurableObject<Env> {
     }
 
     const { peer, typing } = await request.json() as { peer: ChannelPeer; typing: boolean };
-    
-    let jid = peer.id;
-    if (jid.startsWith("+") && !jid.includes("@")) {
-      jid = `${jid.slice(1)}@s.whatsapp.net`;
-    }
+    const jid = normalizeOutboundWhatsAppJid(peer.id);
 
     try {
       const presence = typing ? "composing" : "paused";
@@ -421,6 +486,62 @@ export class WhatsAppAccount extends DurableObject<Env> {
       // Typing is best-effort
       return Response.json({ ok: true });
     }
+  }
+
+  private buildOutboundContent(message: ChannelOutboundMessage): AnyMessageContent {
+    const media = message.media?.[0];
+    if (media) {
+      return this.buildMediaContent(media, message.text);
+    }
+
+    const text = message.text.trim();
+    if (!text) {
+      throw new Error("WhatsApp messages require text or media");
+    }
+    return { text };
+  }
+
+  private buildMediaContent(media: ChannelMedia, captionText: string): AnyMessageContent {
+    const upload = this.buildMediaUpload(media);
+    const caption = captionText.trim() || undefined;
+
+    switch (media.type) {
+      case "image":
+        return {
+          image: upload,
+          mimetype: media.mimeType,
+          ...(caption ? { caption } : {}),
+        };
+      case "video":
+        return {
+          video: upload,
+          mimetype: media.mimeType,
+          ...(caption ? { caption } : {}),
+        };
+      case "audio":
+        return {
+          audio: upload,
+          mimetype: media.mimeType,
+        };
+      case "document":
+      default:
+        return {
+          document: upload,
+          mimetype: media.mimeType || "application/octet-stream",
+          fileName: media.filename || "attachment",
+          ...(caption ? { caption } : {}),
+        };
+    }
+  }
+
+  private buildMediaUpload(media: ChannelMedia): Buffer | { url: string } {
+    if (media.url) {
+      return { url: media.url };
+    }
+    if (media.data) {
+      return Buffer.from(base64Payload(media.data), "base64");
+    }
+    throw new Error("Media attachment must include base64 data or url");
   }
 
   private async startSocket(): Promise<void> {

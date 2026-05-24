@@ -1,5 +1,5 @@
 import { getBackend } from "@gsv/package/browser";
-import { FitAddon, init, Terminal } from "./vendor/ghostty-web.js";
+import { FitAddon, init, Terminal } from "ghostty-web";
 import { mountShellLayout, setBootState, setStatus, showBootError, type ShellElements } from "./layout";
 import { readActiveThreadContext, readRouteParams, readWindowId } from "./route-context";
 import { createShellTerminalController } from "./terminal-controller";

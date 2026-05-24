@@ -483,13 +483,13 @@ Runtime behavior:
 | `proc.list` | `handleProcList` | Reads the kernel process registry. Root defaults to all processes; non-root defaults to own uid, though an explicit `uid` is currently honored by the handler. |
 | `proc.profile.list` | `handleProcProfileList` | Returns system AI profiles plus enabled package-backed profiles visible to the caller. Package entries are sorted by package name and display name. |
 | `proc.spawn` | `handleProcSpawn` | Validates the AI profile, resolves package profiles, materializes workspace and mounts, registers the process, sends kernel-only `proc.setidentity`, and optionally sends the initial prompt. `init` is singleton; other profiles get UUID pids. |
-| `proc.send` | Process DO `handleProcSend` | Defaults `pid` to `init:<uid>` when forwarded and `conversationId` to `default`. Stores media, appends a user message, starts a run if idle, or queues the message if a run is active. Touches workspace activity before forwarding. |
+| `proc.send` | Process DO `handleProcSend` | Defaults `pid` to `init:<uid>` when forwarded and `conversationId` to `default`. Stores media and trusted `InteractionOrigin` metadata, appends a user message, starts a run if idle, or queues the message if a run is active. The process runtime renders `[From: ...]` origin markers into model context only at source boundaries, without rewriting stored message content. Touches workspace activity before forwarding. Public callers do not supply trusted origin; the Kernel derives it. |
 | `proc.ipc.send` | `handleProcIpcSend` | Process-callable same-owner IPC. Validates that the caller is a registered process, the target exists, and source/target uids match, then sends kernel-only `proc.ipc.deliver` to the target Process DO. The target receives a visible user message envelope and starts or queues a run. |
 | `proc.ipc.call` | `handleProcIpcCall` | Process-callable bounded same-owner IPC. Creates a call id and deadline, delivers the request to the target process, and later sends either `ipc.reply` or `ipc.timeout` to the source process. The syscall returns after acceptance, not after the target replies. |
 | `proc.abort` | Process DO | Logical cancellation of the active run. Clears pending HIL and current run, emits `chat.complete` with `aborted: true`, and may promote the next queued run. In-flight external work can still resolve later but stale handling guards state. |
 | `proc.hil` | Process DO | Resolves a pending human-in-the-loop request. `approve` dispatches the original syscall; `deny` appends a synthetic error tool result. `remember: true` with `approve` stores a process-local allow override for the syscall and target class. |
 | `proc.kill` | Process DO | Checkpoints workspace, optionally archives every non-empty conversation under one archive directory, clears active run, tool state, HIL, queue, media, and all conversation messages, then increments conversation generations. Does not remove the kernel process registry entry in normal syscall use. |
-| `proc.history` | Process DO | Returns paged stored messages for `conversationId` or `default`, plus message ids, message count, cursor flags, truncation status, timestamps, pending HIL, and the latest context-pressure state when available. Offset paging reads from the beginning. `tail: true` reads the latest page, `beforeMessageId` reads older messages, and `afterMessageId` reads newer messages. Tool results and assistant metadata are expanded into structured content. |
+| `proc.history` | Process DO | Returns paged stored messages for `conversationId` or `default`, plus message ids, message count, cursor flags, truncation status, timestamps, origin metadata, pending HIL, and the latest context-pressure state when available. Offset paging reads from the beginning. `tail: true` reads the latest page, `beforeMessageId` reads older messages, and `afterMessageId` reads newer messages. Tool results and assistant metadata are expanded into structured content. |
 | `proc.conversation.open` | Process DO | Creates or reopens a process-local conversation. If `conversationId` is omitted, the Process DO generates one. Optional `title` is trimmed and stored. |
 | `proc.conversation.list` | Process DO | Lists open conversations by default. `includeClosed: true` includes closed conversations. Each record includes generation, status, title, message count, and timestamps. |
 | `proc.conversation.get` | Process DO | Returns one conversation record for `conversationId` or `default`; unknown conversations return `conversation: null`. |
@@ -558,6 +558,14 @@ type ProcConversationSegment = {
   createdAt: number;
 };
 
+type InteractionOrigin =
+  | { kind: "client"; connectionId: string; clientId?: string; platform?: string }
+  | { kind: "app"; packageId: string; packageName: string; entrypointName: string; routeBase: string }
+  | { kind: "adapter"; adapter: string; accountId: string; surface: AdapterSurface; actorId: string; actorLabel?: string; messageId?: string }
+  | { kind: "device"; deviceId: string; cwd?: string }
+  | { kind: "process"; sourcePid: string; uid?: number }
+  | { kind: "scheduler"; scheduleId: string };
+
 type ProcIpcSendArgs = {
   pid: string;
   conversationId?: string;
@@ -571,6 +579,7 @@ type ProcIpcDeliverArgs = {
   conversationId?: string;
   message: string;
   metadata?: Record<string, unknown>;
+  origin?: InteractionOrigin;
   sentAt: number;
   call?: {
     callId: string;
@@ -608,7 +617,7 @@ type ProcessSyscalls = {
   };
 
   "proc.send": {
-    args: { pid?: string; conversationId?: string; message: string; media?: MediaInput[] };
+    args: { pid?: string; conversationId?: string; message: string; media?: MediaInput[]; origin?: InteractionOrigin };
     result: { ok: true; status: "started"; runId: string; queued?: boolean } | OperationError;
   };
 
@@ -644,7 +653,7 @@ type ProcessSyscalls = {
 
   "proc.history": {
     args: { pid?: string; conversationId?: string; limit?: number; offset?: number; beforeMessageId?: number; afterMessageId?: number; tail?: boolean };
-    result: { ok: true; pid: string; conversationId?: string; messages: Array<{ id?: number; role: "user" | "assistant" | "system" | "toolResult"; content: unknown; timestamp?: number }>; messageCount: number; truncated?: boolean; hasMoreBefore?: boolean; hasMoreAfter?: boolean; pendingHil?: ProcHilRequest | null; context?: ProcContextState | null } | OperationError;
+    result: { ok: true; pid: string; conversationId?: string; messages: Array<{ id?: number; role: "user" | "assistant" | "system" | "toolResult"; content: unknown; timestamp?: number; origin?: InteractionOrigin }>; messageCount: number; truncated?: boolean; hasMoreBefore?: boolean; hasMoreAfter?: boolean; pendingHil?: ProcHilRequest | null; context?: ProcContextState | null } | OperationError;
   };
 
   "proc.conversation.open": {
@@ -1069,9 +1078,10 @@ type SystemSyscalls = {
 };
 ```
 
-## AI Bootstrap: `ai.*`
+## AI: `ai.*`
 
-`ai.*` is used by Process Durable Objects to prepare agent runs.
+Most `ai.*` syscalls are used by Process Durable Objects to prepare agent runs.
+`ai.transcription.create` and `ai.speech.create` are user-callable when the caller has those capabilities.
 
 Runtime behavior:
 
@@ -1079,8 +1089,10 @@ Runtime behavior:
 |---|---|---|
 | `ai.tools` | `handleAiTools` | Process-internal. Lists online accessible devices and filters built-in tool definitions by caller capabilities. Routable filesystem and shell tools are wrapped with required `target`; CodeMode is exposed as a process-local programmable tool. MCP tools are used through CodeMode or shell, not expanded into this direct tool list. |
 | `ai.config` | `handleAiConfig` | Process-internal. Resolves user override then system AI config. Defaults profile to `task`, provider to `workers-ai`, model to `@cf/nvidia/nemotron-3-120b-a12b`, max tokens to 8192, context window to provider/model metadata or configured fallback, and context budget to 32768 bytes. Package profiles load manifest context files and approval policy. |
+| `ai.transcription.create` | `handleAiTranscriptionCreate` | User-callable. Accepts base64 audio data plus MIME type, transcribes or translates it through the configured transcription model, and returns normalized text plus optional language, duration, and segments. |
+| `ai.speech.create` | `handleAiSpeechCreate` | User-callable. Accepts text, normalizes Markdown to speech-friendly text by default, synthesizes speech through the configured Workers AI text-to-speech model, and returns a browser-playable audio data URL plus MIME type and size. |
 
-External callers cannot normally invoke `ai.*`; these syscalls are exposed to process-originated calls.
+External callers cannot invoke `ai.tools` or `ai.config`; those syscalls are exposed to process-originated calls. User surfaces such as the web shell can invoke `ai.transcription.create` and `ai.speech.create`.
 
 ```ts
 type AiSyscalls = {
@@ -1091,7 +1103,17 @@ type AiSyscalls = {
 
   "ai.config": {
     args: { profile?: AiContextProfile };
-    result: { profile?: AiContextProfile; provider: string; model: string; apiKey: string; reasoning?: string; maxTokens: number; contextWindowTokens: number | null; contextWindowSource: "model" | "config" | "unknown"; systemContextFiles?: Array<{ name: string; text: string }>; profileContextFiles?: Array<{ name: string; text: string }>; skillIndex?: Array<{ id: string; name: string; description: string; source: { kind: "profile" | "home" | "workspace" | "package"; label: string; writable: boolean } }>; profileApprovalPolicy?: string | null; maxContextBytes: number };
+    result: { profile?: AiContextProfile; provider: string; model: string; apiKey: string; reasoning?: string; maxTokens: number; contextWindowTokens: number | null; contextWindowSource: "model" | "config" | "unknown"; systemContextFiles?: Array<{ name: string; text: string }>; profileContextFiles?: Array<{ name: string; text: string }>; skillIndex?: Array<{ id: string; name: string; description: string; source: { kind: "profile" | "home" | "workspace" | "package"; label: string; writable: boolean } }>; profileApprovalPolicy?: string | null; maxContextBytes: number; generationTimeoutMs: number };
+  };
+
+  "ai.transcription.create": {
+    args: { audio: { data: string; mimeType: string; filename?: string; size?: number }; language?: string; prompt?: string; mode?: "transcribe" | "translate" };
+    result: { text: string; language?: string; duration?: number; segments?: unknown[]; provider: string; model: string };
+  };
+
+  "ai.speech.create": {
+    args: { text: string; textFormat?: "markdown" | "plain"; model?: string; voice?: string; language?: string; encoding?: string; container?: string; sampleRate?: number; bitRate?: number };
+    result: { audio: { data: string; mimeType: string; size: number }; provider: string; model: string; voice?: string; encoding?: string; container?: string; skipped?: boolean };
   };
 };
 ```

@@ -1,0 +1,79 @@
+import { describe, expect, it } from "vitest";
+import {
+  packageArtifactPublicBase,
+  storePackageArtifact,
+  type PackageArtifact,
+} from "./packages";
+
+type PutRecord = {
+  key: string;
+  value: unknown;
+  options?: R2PutOptions;
+};
+
+function makeBucket(): R2Bucket & { puts: PutRecord[] } {
+  const puts: PutRecord[] = [];
+  return {
+    puts,
+    async put(key: string, value: unknown, options?: R2PutOptions) {
+      puts.push({ key, value, options });
+      return {} as R2Object;
+    },
+  } as R2Bucket & { puts: PutRecord[] };
+}
+
+describe("package artifacts", () => {
+  it("stores public package files under the public fs root", async () => {
+    const bucket = makeBucket();
+    const artifact: PackageArtifact = {
+      hash: "sha256:abc123",
+      mainModule: "__gsv__/main.ts",
+      modules: [
+        {
+          path: "__gsv__/main.ts",
+          kind: "esm",
+          content: "export default {};",
+        },
+      ],
+      publicFiles: [
+        {
+          path: "gsv/packages/__GSV_ARTIFACT_HASH__/browser/src/main.js",
+          contentType: "text/javascript; charset=utf-8",
+          encoding: "utf-8",
+          content: "import \"/public/gsv/packages/__GSV_ARTIFACT_HASH__/browser/src/app.js\";",
+        },
+        {
+          path: "lib/npm/wasm-lib/1.0.0/module.wasm",
+          contentType: "application/wasm",
+          encoding: "base64",
+          content: "AGFzbQ==",
+        },
+      ],
+    };
+
+    await storePackageArtifact(bucket, artifact);
+
+    const main = bucket.puts.find((record) =>
+      record.key === "public/gsv/packages/sha256-abc123/browser/src/main.js"
+    );
+    expect(main?.value).toBe("import \"/public/gsv/packages/sha256-abc123/browser/src/app.js\";");
+    expect(main?.options?.httpMetadata?.contentType).toBe("text/javascript; charset=utf-8");
+    expect(main?.options?.httpMetadata?.cacheControl).toBe("public, max-age=31536000, immutable");
+    expect(main?.options?.customMetadata?.mode).toBe("644");
+
+    const wasm = bucket.puts.find((record) =>
+      record.key === "public/lib/npm/wasm-lib/1.0.0/module.wasm"
+    );
+    expect(Array.from(wasm?.value as Uint8Array)).toEqual([0x00, 0x61, 0x73, 0x6d]);
+    expect(wasm?.options?.httpMetadata?.contentType).toBe("application/wasm");
+
+    const loaderArtifact = bucket.puts.find((record) =>
+      record.key === "runtime/package-artifacts/sha256%3Aabc123.json"
+    );
+    expect(JSON.parse(loaderArtifact?.value as string)).not.toHaveProperty("publicFiles");
+  });
+
+  it("derives a stable public base from an artifact hash", () => {
+    expect(packageArtifactPublicBase("sha256:abc123")).toBe("/public/gsv/packages/sha256-abc123");
+  });
+});

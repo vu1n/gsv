@@ -49,6 +49,9 @@ function makeContext(
         resolvePid: vi.fn(() => "pid-1"),
       },
     },
+    runRoutes: {
+      setAdapterRoute: vi.fn(),
+    },
     identity: {
       role: "service",
       service: "test",
@@ -233,6 +236,81 @@ describe("adapter lifecycle handlers", () => {
     });
     expect(result.reply?.text).toContain('Reply "approve" or "deny"');
     expect(sendFrameToProcessMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes adapter interaction origin to proc.send", async () => {
+    sendFrameToProcessMock
+      .mockResolvedValueOnce({
+        type: "res",
+        id: "history-1",
+        ok: true,
+        data: { pendingHil: null },
+      } as any)
+      .mockResolvedValueOnce({
+        type: "res",
+        id: "send-1",
+        ok: true,
+        data: {
+          ok: true,
+          status: "started",
+          runId: "run-1",
+          queued: false,
+        },
+      } as any);
+
+    const service = {
+      adapterSetActivity: vi.fn(async () => ({ ok: true as const })),
+    };
+    const status = { upsert: vi.fn() };
+    const ctx = makeContext(
+      {
+        CHANNEL_WHATSAPP: service,
+      },
+      status,
+    );
+
+    const result = await handleAdapterInbound(
+      {
+        adapter: "whatsapp",
+        accountId: "primary",
+        message: {
+          messageId: "msg-3",
+          surface: { kind: "dm", id: "dm-1", name: "Sam" },
+          actor: { id: "wa:+123", handle: "@sam" },
+          text: "hello",
+        },
+      },
+      ctx,
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      delivered: {
+        uid: 1000,
+        pid: "pid-1",
+        runId: "run-1",
+        queued: false,
+      },
+    });
+    expect(sendFrameToProcessMock).toHaveBeenNthCalledWith(
+      2,
+      "pid-1",
+      expect.objectContaining({
+        call: "proc.send",
+        args: expect.objectContaining({
+          message: "hello",
+          origin: {
+            kind: "adapter",
+            adapter: "whatsapp",
+            accountId: "primary",
+            surface: { kind: "dm", id: "dm-1", name: "Sam" },
+            actorId: "wa:+123",
+            actorLabel: "@sam",
+            messageId: "msg-3",
+          },
+        }),
+      }),
+    );
   });
 
   it("adapter.inbound accepts approve in dm while a confirmation is pending", async () => {
