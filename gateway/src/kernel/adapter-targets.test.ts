@@ -110,6 +110,37 @@ describe("adapter target helpers", () => {
     expect(listVisibleAdapterTargets(ctx)).toEqual([]);
   });
 
+  it("lists offline authenticated adapter command targets when requested", () => {
+    const ctx = makeContext({
+      env: {
+        CHANNEL_WHATSAPP: { adapterShellExec: vi.fn() },
+      },
+      links: [{ adapter: "whatsapp", accountId: "primary", uid: 1000 }],
+      statuses: [
+        { adapter: "whatsapp", accountId: "primary", connected: false, authenticated: true },
+      ],
+    });
+
+    expect(listVisibleAdapterTargets(ctx)).toEqual([]);
+    expect(listVisibleAdapterTargets(ctx, { includeOffline: true }).map((target) => target.targetId)).toEqual([
+      "adapter:whatsapp:primary",
+    ]);
+  });
+
+  it("does not list unauthenticated adapter targets in offline mode", () => {
+    const ctx = makeContext({
+      env: {
+        CHANNEL_WHATSAPP: { adapterShellExec: vi.fn() },
+      },
+      links: [{ adapter: "whatsapp", accountId: "primary", uid: 1000 }],
+      statuses: [
+        { adapter: "whatsapp", accountId: "primary", connected: false, authenticated: false },
+      ],
+    });
+
+    expect(listVisibleAdapterTargets(ctx, { includeOffline: true })).toEqual([]);
+  });
+
   it("lets root see all connected authenticated adapter command targets", () => {
     const ctx = makeContext({
       uid: 0,

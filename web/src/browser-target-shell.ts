@@ -115,6 +115,10 @@ type ParsedOpenCommandArgs =
 
 type JustBashModule = typeof import("just-bash/browser");
 type BrowserBash = InstanceType<JustBashModule["Bash"]>;
+type ChunkCapableFileSystem = IFileSystem & {
+  readFileChunk?: (path: string, offset: number, length: number) => Promise<Uint8Array>;
+  writeFileChunk?: (path: string, offset: number, content: Uint8Array) => Promise<void>;
+};
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_SEARCH_MATCHES = 200;
@@ -124,6 +128,8 @@ const MAX_PREVIEW_BYTES = 64 * 1024 * 1024;
 
 export class BrowserTargetShell {
   private fs: IFileSystem | null = null;
+  private baseFs: BrowserTargetFileSystem | null = null;
+  private mountPoints: ReadonlyArray<{ mountPoint: string; filesystem: IFileSystem }> = [];
   private bash: BrowserBash | null = null;
   private ready: Promise<void> | null = null;
   private targetId: string | null = null;
@@ -515,10 +521,12 @@ export class BrowserTargetShell {
   private async initialize(): Promise<void> {
     const justBash = await import("just-bash/browser");
     const persistentFs = await BrowserTargetFileSystem.create();
+    this.baseFs = persistentFs;
     this.storageInfo = persistentFs.info;
     const fs = new justBash.MountableFs({ base: persistentFs });
     fs.mount("/tmp", new justBash.InMemoryFs());
     fs.mount("/run/gsv", new BrowserRuntimeFileSystem(this.windowManager));
+    this.mountPoints = fs.getMounts();
     this.fs = fs;
     await this.ensureBaseFiles();
     this.bash = new justBash.Bash({
@@ -656,33 +664,29 @@ export class BrowserTargetShell {
   }
 
   private async writeLocalChunk(path: string, offset: number, bytes: Uint8Array): Promise<void> {
-    const fs = this.getFs();
+    const { fs, path: routedPath } = this.routeChunkPath(path);
     if (offset === 0) {
-      if (fs instanceof BrowserTargetFileSystem) {
-        await fs.writeFileChunk(path, offset, bytes);
+      if (fs.writeFileChunk) {
+        await fs.writeFileChunk(routedPath, offset, bytes);
       } else {
-        await fs.writeFile(path, bytes);
+        await fs.writeFile(routedPath, bytes);
       }
       return;
     }
 
-    const stat = await fs.stat(path);
+    const stat = await fs.stat(routedPath);
     if (!stat.isFile) {
       throw new Error(`Not a file: ${path}`);
     }
     if (stat.size !== offset) {
       throw new Error(`Unexpected write offset for ${path}: expected ${stat.size}, got ${offset}`);
     }
-    if (fs instanceof BrowserTargetFileSystem) {
-      await fs.writeFileChunk(path, offset, bytes);
+    if (fs.writeFileChunk) {
+      await fs.writeFileChunk(routedPath, offset, bytes);
       return;
     }
 
-    const current = await fs.readFileBuffer(path);
-    const next = new Uint8Array(stat.size + bytes.byteLength);
-    next.set(current, 0);
-    next.set(bytes, stat.size);
-    await fs.writeFile(path, next);
+    await fs.appendFile(routedPath, bytes);
   }
 
   private async writeLocalStream(path: string, stream: ReadableStream<Uint8Array>, expectedSize: number): Promise<number> {
@@ -696,6 +700,7 @@ export class BrowserTargetShell {
 
     const tempPath = temporaryTransferPath(path);
     try {
+      await this.writeLocalChunk(tempPath, 0, new Uint8Array());
       const bytesWritten = await this.writeLocalStreamToPath(tempPath, stream, expectedSize, path);
       await fs.mv(tempPath, path);
       return bytesWritten;
@@ -740,11 +745,11 @@ export class BrowserTargetShell {
   }
 
   private async readLocalChunk(path: string, offset: number, length: number): Promise<Uint8Array> {
-    const fs = this.getFs();
-    if (fs instanceof BrowserTargetFileSystem) {
-      return fs.readFileChunk(path, offset, length);
+    const { fs, path: routedPath } = this.routeChunkPath(path);
+    if (fs.readFileChunk) {
+      return fs.readFileChunk(routedPath, offset, length);
     }
-    const bytes = await fs.readFileBuffer(path);
+    const bytes = await fs.readFileBuffer(routedPath);
     const end = Math.min(offset + length, bytes.byteLength);
     return offset >= bytes.byteLength ? new Uint8Array() : bytes.subarray(offset, end);
   }
@@ -1100,6 +1105,40 @@ export class BrowserTargetShell {
       }
     }
     return out.sort();
+  }
+
+  private routeChunkPath(path: string): { fs: ChunkCapableFileSystem; path: string } {
+    const normalized = normalizePath(path);
+    let selected: { mountPoint: string; filesystem: IFileSystem } | null = null;
+
+    for (const mount of this.mountPoints) {
+      if (normalized === mount.mountPoint) {
+        selected = mount;
+        break;
+      }
+      if (normalized.startsWith(`${mount.mountPoint}/`) &&
+        (!selected || mount.mountPoint.length > selected.mountPoint.length)) {
+        selected = mount;
+      }
+    }
+
+    if (selected) {
+      const relativePath = normalized === selected.mountPoint
+        ? "/"
+        : normalized.slice(selected.mountPoint.length);
+      return {
+        fs: selected.filesystem as ChunkCapableFileSystem,
+        path: relativePath || "/",
+      };
+    }
+
+    if (!this.baseFs) {
+      throw new Error("Browser shell filesystem is not ready");
+    }
+    return {
+      fs: this.baseFs,
+      path: normalized,
+    };
   }
 
   private getFs(): IFileSystem {

@@ -10,6 +10,10 @@ export type AdapterTarget = {
   status: AdapterStatusRecord;
 };
 
+export type AdapterTargetListOptions = {
+  includeOffline?: boolean;
+};
+
 const ADAPTER_TARGET_PREFIX = "adapter:";
 
 export function adapterTargetId(adapter: string, accountId: string): string {
@@ -39,7 +43,10 @@ export function parseAdapterTargetId(targetId: string | undefined): { adapter: s
   }
 }
 
-export function listVisibleAdapterTargets(ctx: KernelContext): AdapterTarget[] {
+export function listVisibleAdapterTargets(
+  ctx: KernelContext,
+  options: AdapterTargetListOptions = {},
+): AdapterTarget[] {
   const identity = ctx.identity;
   if (!identity || identity.role !== "user") {
     return [];
@@ -55,7 +62,8 @@ export function listVisibleAdapterTargets(ctx: KernelContext): AdapterTarget[] {
 
   for (const status of statuses) {
     const adapter = normalizeAdapter(status.adapter);
-    if (!status.connected || !status.authenticated) continue;
+    const online = status.connected && status.authenticated;
+    if (!status.authenticated || (!options.includeOffline && !online)) continue;
     if (!adapterShellExecServiceAvailable(ctx, adapter)) continue;
 
     const targetId = adapterTargetId(adapter, status.accountId);
@@ -75,13 +83,17 @@ export function listVisibleAdapterTargets(ctx: KernelContext): AdapterTarget[] {
   return Array.from(targets.values()).sort((left, right) => left.targetId.localeCompare(right.targetId));
 }
 
-export function getVisibleAdapterTarget(ctx: KernelContext, targetId: string): AdapterTarget | null {
+export function getVisibleAdapterTarget(
+  ctx: KernelContext,
+  targetId: string,
+  options: AdapterTargetListOptions = {},
+): AdapterTarget | null {
   const parsed = parseAdapterTargetId(targetId);
   if (!parsed) {
     return null;
   }
 
-  return listVisibleAdapterTargets(ctx).find((target) =>
+  return listVisibleAdapterTargets(ctx, options).find((target) =>
     target.adapter === parsed.adapter && target.accountId === parsed.accountId
   ) ?? null;
 }

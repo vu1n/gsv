@@ -90,12 +90,12 @@ const DEVICE_PROVIDER: TargetProvider = {
 const ADAPTER_PROVIDER: TargetProvider = {
   id: "adapter",
   list(ctx, options) {
-    return listVisibleAdapterTargets(ctx)
+    return listVisibleAdapterTargets(ctx, options)
       .map((target) => adapterTargetToDescriptor(ctx, target))
       .filter((target) => options.includeOffline || target.online);
   },
   get(ctx, targetId, options) {
-    const target = getVisibleAdapterTarget(ctx, targetId);
+    const target = getVisibleAdapterTarget(ctx, targetId, options);
     if (!target) {
       return null;
     }
