@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
+use semver::{Version, VersionReq};
 use serde::Deserialize;
 
 use crate::diagnostics::{has_errors, PackageAssemblyDiagnostic};
@@ -456,6 +457,19 @@ pub fn plan_installs(prepared: &PreparedSources) -> StageOutcome<InstallPlan> {
             match planned.get_mut(dependency_name) {
                 Some(existing) => {
                     if existing.install_spec != install_spec {
+                        if let Some(merged_spec) =
+                            merge_compatible_install_specs(&existing.install_spec, &install_spec)
+                        {
+                            existing.install_spec = merged_spec;
+                            if !existing.requested_by.contains(&package.manifest.name) {
+                                existing.requested_by.push(package.manifest.name.clone());
+                            }
+                            if !existing.manifest_paths.contains(&package.manifest_path) {
+                                existing.manifest_paths.push(package.manifest_path.clone());
+                            }
+                            continue;
+                        }
+
                         diagnostics.push(PackageAssemblyDiagnostic::error(
                             "install.version-conflict",
                             format!(
@@ -693,6 +707,26 @@ fn is_local_dependency_spec(
         || spec.starts_with("file:")
         || spec.starts_with("link:")
         || spec.starts_with("workspace:")
+}
+
+fn merge_compatible_install_specs(existing: &str, incoming: &str) -> Option<String> {
+    if exact_version_satisfies_requirement(existing, incoming) {
+        return Some(existing.to_string());
+    }
+    if exact_version_satisfies_requirement(incoming, existing) {
+        return Some(incoming.to_string());
+    }
+    None
+}
+
+fn exact_version_satisfies_requirement(version_spec: &str, requirement_spec: &str) -> bool {
+    let Ok(version) = Version::parse(version_spec.trim()) else {
+        return false;
+    };
+    let Ok(requirement) = VersionReq::parse(requirement_spec.trim()) else {
+        return false;
+    };
+    requirement.matches(&version)
 }
 
 fn manifest_path(root: &str) -> String {

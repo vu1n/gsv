@@ -473,6 +473,44 @@ fn install_plan_merges_matching_dependency_requests() {
 }
 
 #[test]
+fn install_plan_merges_lockfile_version_with_compatible_workspace_range() {
+    let mut request = base_request();
+    request
+        .analysis
+        .package_json
+        .dependencies
+        .insert("marked".to_string(), "^16.4.2".to_string());
+    request.files.insert(
+        "apps/demo/package-lock.json".to_string(),
+        r#"{
+  "packages": {
+    "node_modules/marked": { "version": "16.4.2" }
+  }
+}"#
+        .to_string(),
+    );
+    request.files.extend(files([
+        (
+            "packages/protocol/package.json",
+            r#"{
+  "name": "@gsv/protocol",
+  "version": "1.0.0",
+  "dependencies": {
+    "marked": "^16.4.2"
+  }
+}"#,
+        ),
+        ("packages/protocol/src/index.ts", "export {};"),
+    ]));
+
+    let planned = prepare_request(&request).value.expect("planned");
+    let marked = find_plan_item(&planned.install_plan.registry_dependencies, "marked");
+
+    assert_eq!(marked.install_spec, "16.4.2");
+    assert_eq!(marked.requested_by, vec!["@demo/app", "@gsv/protocol"]);
+}
+
+#[test]
 fn install_plan_reports_conflicting_dependency_specs() {
     let mut request = base_request();
     request
